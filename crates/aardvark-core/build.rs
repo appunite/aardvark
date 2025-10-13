@@ -1,0 +1,282 @@
+use std::env;
+use std::fs;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use bzip2::read::BzDecoder;
+use hex::ToHex;
+use sha2::{Digest, Sha256};
+use tar::Archive;
+use ureq::Agent;
+
+const PYODIDE_VERSION: &str = "0.28.2";
+const PYODIDE_ARCHIVE_URL: &str =
+    "https://github.com/pyodide/pyodide/releases/download/0.28.2/pyodide-core-0.28.2.tar.bz2";
+const PYODIDE_ARCHIVE_SHA256: &str =
+    "c9f6dd067d119e50850849f7428e3c636ecbc2684a0d2ff992f3bd48a1062b6c";
+
+fn main() -> Result<()> {
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src/js/pyodide_builtin_wrappers.js");
+    println!("cargo:rerun-if-changed=src/js/pyodide_bootstrap.js");
+    println!("cargo:rerun-if-changed=src/js/pyodide_emscripten_setup.js");
+    println!("cargo:rerun-if-env-changed=AARDVARK_PYODIDE_ARCHIVE");
+    println!("cargo:rerun-if-env-changed=AARDVARK_PYODIDE_DIR");
+
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR not set"));
+    let pyodide_out_dir = out_dir.join("pyodide");
+    if pyodide_out_dir.exists() {
+        fs::remove_dir_all(&pyodide_out_dir)
+            .with_context(|| format!("remove existing {}", pyodide_out_dir.display()))?;
+    }
+    fs::create_dir_all(&pyodide_out_dir)
+        .with_context(|| format!("create {}", pyodide_out_dir.display()))?;
+
+    let overwrite_sources = env::var_os("AARDVARK_PYODIDE_DIR");
+    if let Some(dir) = overwrite_sources {
+        let dir = PathBuf::from(dir);
+        copy_dir_recursive(&dir, &pyodide_out_dir)
+            .with_context(|| format!("copying Pyodide assets from {}", dir.to_string_lossy()))?;
+    } else {
+        let archive_path = match env::var_os("AARDVARK_PYODIDE_ARCHIVE") {
+            Some(path) => PathBuf::from(path),
+            None => download_pyodide_archive()?,
+        };
+        unpack_archive(&archive_path, &pyodide_out_dir)?;
+    }
+
+    copy_builtin_wrappers(&pyodide_out_dir)?;
+    copy_bootstrap_script(&pyodide_out_dir)?;
+    copy_emscripten_setup(&pyodide_out_dir)?;
+    generate_patched_pyodide(&pyodide_out_dir)?;
+
+    println!("cargo:rustc-env=AARDVARK_PYODIDE_VERSION={PYODIDE_VERSION}");
+    println!(
+        "cargo:rustc-env=AARDVARK_PYODIDE_DIR={}",
+        pyodide_out_dir.display()
+    );
+    Ok(())
+}
+
+fn download_pyodide_archive() -> Result<PathBuf> {
+    let tmp_dir = env::var_os("OUT_DIR")
+        .map(PathBuf::from)
+        .expect("OUT_DIR not set")
+        .join("pyodide-download");
+    if tmp_dir.exists() {
+        fs::remove_dir_all(&tmp_dir)?;
+    }
+    fs::create_dir_all(&tmp_dir)?;
+    let archive_path = tmp_dir.join("pyodide.tar.bz2");
+
+    let agent: Agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(120))
+        .timeout_read(Duration::from_secs(120))
+        .timeout_write(Duration::from_secs(120))
+        .build();
+    let mut response = agent
+        .get(PYODIDE_ARCHIVE_URL)
+        .call()
+        .with_context(|| format!("downloading {}", PYODIDE_ARCHIVE_URL))?
+        .into_reader();
+    let mut file = fs::File::create(&archive_path)?;
+    io::copy(&mut response, &mut file)?;
+
+    verify_sha256(&archive_path)?;
+    Ok(archive_path)
+}
+
+fn verify_sha256(path: &Path) -> Result<()> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 16 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let digest = hasher.finalize();
+    let digest_hex = digest.encode_hex::<String>();
+    if digest_hex != PYODIDE_ARCHIVE_SHA256 {
+        anyhow::bail!(
+            "Pyodide archive checksum mismatch: expected {}, got {}",
+            PYODIDE_ARCHIVE_SHA256,
+            digest_hex
+        );
+    }
+    Ok(())
+}
+
+fn unpack_archive(archive_path: &Path, out_dir: &Path) -> Result<()> {
+    let file =
+        fs::File::open(archive_path).with_context(|| format!("open {}", archive_path.display()))?;
+    let decoder = BzDecoder::new(file);
+    let mut archive = Archive::new(decoder);
+
+    let tmp_root = out_dir.join("tmp");
+    if tmp_root.exists() {
+        fs::remove_dir_all(&tmp_root)?;
+    }
+    fs::create_dir_all(&tmp_root)?;
+
+    archive.unpack(&tmp_root)?;
+
+    let pyodide_dir =
+        find_pyodide_dir(&tmp_root).context("could not find `pyodide` directory inside archive")?;
+    copy_dir_recursive(&pyodide_dir, out_dir)?;
+    fs::remove_dir_all(&tmp_root)?;
+    Ok(())
+}
+
+fn find_pyodide_dir(base: &Path) -> Option<PathBuf> {
+    let mut stack = vec![base.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        if path.is_dir() {
+            if path.file_name().map(|n| n == "pyodide").unwrap_or(false) {
+                return Some(path);
+            }
+            if let Ok(entries) = fs::read_dir(&path) {
+                for entry in entries.flatten() {
+                    stack.push(entry.path());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&src_path, &dst_path).with_context(|| {
+                format!("copy {} -> {}", src_path.display(), dst_path.display())
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_builtin_wrappers(out_dir: &Path) -> Result<()> {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    let src = manifest_dir.join("src/js/pyodide_builtin_wrappers.js");
+    let dst = out_dir.join("pyodide_builtin_wrappers.js");
+    fs::copy(&src, &dst).with_context(|| format!("copy {} -> {}", src.display(), dst.display()))?;
+    Ok(())
+}
+
+fn copy_bootstrap_script(out_dir: &Path) -> Result<()> {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    let src = manifest_dir.join("src/js/pyodide_bootstrap.js");
+    let dst = out_dir.join("pyodide_bootstrap.js");
+    fs::copy(&src, &dst).with_context(|| format!("copy {} -> {}", src.display(), dst.display()))?;
+    Ok(())
+}
+
+fn copy_emscripten_setup(out_dir: &Path) -> Result<()> {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    let src = manifest_dir.join("src/js/pyodide_emscripten_setup.js");
+    let dst = out_dir.join("pyodide_emscripten_setup.js");
+    fs::copy(&src, &dst).with_context(|| format!("copy {} -> {}", src.display(), dst.display()))?;
+    Ok(())
+}
+
+fn generate_patched_pyodide(out_dir: &Path) -> Result<()> {
+    let original_path = out_dir.join("pyodide.asm.js");
+    let target_path = out_dir.join("pyodide.asm.patched.js");
+    let source = fs::read_to_string(&original_path)
+        .with_context(|| format!("read {}", original_path.display()))?;
+    let patched = apply_pyodide_replacements(&source)?;
+    fs::write(&target_path, patched).with_context(|| format!("write {}", target_path.display()))?;
+    Ok(())
+}
+
+fn apply_pyodide_replacements(source: &str) -> Result<String> {
+    const PRELUDE: &str = r#"import {
+    addEventListener,
+    getRandomValues,
+    location,
+    monotonicDateNow,
+    newWasmModule,
+    patchedApplyFunc,
+    patchDynlibLookup,
+    reportUndefinedSymbolsPatched,
+    wasmInstantiate,
+    patched_PyEM_CountFuncParams,
+} from "./pyodide_builtin_wrappers.js";
+"#;
+
+    let replacements: [(&str, String); 11] = [
+        (
+            "var _createPyodideModule",
+            format!("{PRELUDE}export const _createPyodideModule"),
+        ),
+        (
+            "globalThis._createPyodideModule = _createPyodideModule;",
+            String::new(),
+        ),
+        ("new WebAssembly.Module", "newWasmModule".into()),
+        ("WebAssembly.instantiate", "wasmInstantiate".into()),
+        ("Date.now", "monotonicDateNow".into()),
+        (
+            "reportUndefinedSymbols()",
+            "reportUndefinedSymbolsPatched(Module)".into(),
+        ),
+        (
+            "crypto.getRandomValues(",
+            "getRandomValues(Module, ".into(),
+        ),
+        (
+            "eval(func)",
+            r#"(() => {throw new Error('Internal Emscripten code tried to eval, this should not happen, please file a bug report with your requirements.txt file\'s contents')})()"#
+                .into(),
+        ),
+        (
+            "eval(data)",
+            r#"(() => {throw new Error('Internal Emscripten code tried to eval, this should not happen, please file a bug report with your requirements.txt file\'s contents')})()"#
+                .into(),
+        ),
+        (
+            "eval(UTF8ToString(ptr))",
+            r#"(() => {throw new Error('Internal Emscripten code tried to eval, this should not happen, please file a bug report with your requirements.txt file\'s contents')})()"#
+                .into(),
+        ),
+        (
+            "const API=Module.API;",
+            "const API=Module.API||(Module.API={});".into(),
+        ),
+    ];
+
+    let mut result = source.to_owned();
+    for (needle, replacement) in replacements {
+        if result.contains(needle) {
+            result = result.replace(needle, &replacement);
+        } else {
+            println!("cargo:warning=pyodide patch skipped missing pattern: {needle}");
+        }
+    }
+
+    let table_needle = "var tableBase=metadata.tableSize?wasmTable.length:0;";
+    if result.contains(table_needle) {
+        result = result.replace(
+            table_needle,
+            &format!(
+                "{table_needle}\nModule.snapshotDebug && console.log('loadWebAssemblyModule', libName, memoryBase, tableBase);"
+            ),
+        );
+    } else {
+        println!("cargo:warning=pyodide patch skipped missing tableBase pattern");
+    }
+
+    Ok(result)
+}

@@ -1,0 +1,15 @@
+target/
+**/*.pyc
+.DS_Store
+.tmp/
+/tmp/
+
+# PyRunner downloads
+pyodide-core-*.tar.bz2
+pyodide-*.tar.bz2
+tmp/
+example/pyodide-0.28.2/
+example/*rd/
+
+runner-feature-requests/
+internal_docs/

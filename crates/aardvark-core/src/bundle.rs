@@ -1,0 +1,156 @@
+//! Utilities for handling user-provided Python bundles.
+
+use std::fmt;
+use std::io::{Cursor, Read, Seek};
+use std::path::{Component, Path};
+
+use crate::bundle_manifest::{BundleManifest, MANIFEST_BASENAME};
+use crate::error::{PyRunnerError, Result};
+use zip::read::ZipFile;
+use zip::ZipArchive;
+
+/// Representation of a file contained in a bundle.
+#[derive(Clone)]
+pub struct BundleEntry {
+    path: String,
+    data: Vec<u8>,
+}
+
+impl BundleEntry {
+    /// Returns the normalized relative path for this entry.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Returns the raw contents for this entry.
+    pub fn contents(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+impl fmt::Debug for BundleEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BundleEntry")
+            .field("path", &self.path)
+            .field("len", &self.data.len())
+            .finish()
+    }
+}
+
+/// An in-memory bundle extracted from a ZIP archive.
+#[derive(Debug, Default, Clone)]
+pub struct Bundle {
+    entries: Vec<BundleEntry>,
+}
+
+impl Bundle {
+    /// Constructs a bundle from a ZIP archive held entirely in memory.
+    pub fn from_zip_bytes(bytes: impl AsRef<[u8]>) -> Result<Self> {
+        let cursor = Cursor::new(bytes.as_ref().to_vec());
+        Self::from_reader(cursor)
+    }
+
+    /// Constructs a bundle from any `Read + Seek` ZIP archive.
+    pub fn from_reader<R: Read + Seek>(reader: R) -> Result<Self> {
+        let mut archive = ZipArchive::new(reader)
+            .map_err(|err| PyRunnerError::Bundle(format!("invalid zip archive: {err}")))?;
+        let mut entries = Vec::with_capacity(archive.len());
+        for i in 0..archive.len() {
+            let file = archive
+                .by_index(i)
+                .map_err(|err| PyRunnerError::Bundle(format!("zip access error: {err}")))?;
+            if file.is_dir() {
+                continue;
+            }
+            let normalized = normalize_entry_path(file.name()).map_err(|err| {
+                PyRunnerError::Bundle(format!("invalid entry '{}': {err}", file.name()))
+            })?;
+            let data = read_zip_file(file)?;
+            entries.push(BundleEntry {
+                path: normalized,
+                data,
+            });
+        }
+        if entries.is_empty() {
+            return Err(PyRunnerError::Bundle(
+                "bundle did not contain any files".to_owned(),
+            ));
+        }
+        Ok(Self { entries })
+    }
+
+    /// Returns all entries in this bundle.
+    pub fn entries(&self) -> &[BundleEntry] {
+        &self.entries
+    }
+
+    /// Parses and returns the embedded bundle manifest, if present.
+    pub fn manifest(&self) -> Result<Option<BundleManifest>> {
+        let entry = self
+            .entries
+            .iter()
+            .find(|entry| entry.path == MANIFEST_BASENAME);
+        match entry {
+            Some(manifest_entry) => {
+                let manifest = BundleManifest::from_bytes(manifest_entry.contents())?;
+                Ok(Some(manifest))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Consumes the bundle and returns its entries.
+    pub fn into_entries(self) -> Vec<BundleEntry> {
+        self.entries
+    }
+}
+
+fn read_zip_file(mut file: ZipFile<'_>) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)
+        .map_err(|err| PyRunnerError::Bundle(format!("failed to read '{}': {err}", file.name())))?;
+    Ok(buf)
+}
+
+fn normalize_entry_path(raw: &str) -> Result<String> {
+    if raw.is_empty() {
+        return Err(PyRunnerError::Bundle("entry has empty name".into()));
+    }
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        return Err(PyRunnerError::Bundle(
+            "absolute paths are not allowed".into(),
+        ));
+    }
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                return Err(PyRunnerError::Bundle("unsupported path prefix".into()))
+            }
+            Component::CurDir => continue,
+            Component::ParentDir => {
+                if parts.pop().is_none() {
+                    return Err(PyRunnerError::Bundle(
+                        "path traversal outside bundle root is not allowed".into(),
+                    ));
+                }
+            }
+            Component::Normal(token) => {
+                let segment = token.to_str().ok_or_else(|| {
+                    PyRunnerError::Bundle("non-utf8 path segments not supported".into())
+                })?;
+                if segment.is_empty() {
+                    return Err(PyRunnerError::Bundle(
+                        "empty path segment encountered".into(),
+                    ));
+                }
+                parts.push(segment.to_owned());
+            }
+        }
+    }
+    if parts.is_empty() {
+        return Err(PyRunnerError::Bundle("entry resolves to empty path".into()));
+    }
+    Ok(parts.join("/"))
+}

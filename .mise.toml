@@ -1,0 +1,8 @@
+[tools]
+elixir = "1.18"
+erlang = "28"
+rust = "1.90"
+zig = "0.15"
+node = "22"
+wasmtime = "37"
+#tinygo = "0.39"
