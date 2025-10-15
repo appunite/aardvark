@@ -73,7 +73,8 @@ pub use runtime::PyRuntime;
 pub use runtime_language::RuntimeLanguage;
 pub use session::PySession;
 pub use strategy::{
-    DefaultInvocationStrategy, JsonInvocationStrategy, PyInvocationStrategy, RawCtxBindingBuilder,
-    RawCtxInput, RawCtxInvocationStrategy, RawCtxMetadata, RawCtxPublishBuilder,
-    RawCtxTableColumnBuilder, RawCtxTableSpec, RawCtxTableSpecBuilder,
+    DefaultInvocationStrategy, JavaScriptInvocationStrategy, JsonInvocationStrategy,
+    PyInvocationStrategy, RawCtxBindingBuilder, RawCtxInput, RawCtxInvocationStrategy,
+    RawCtxMetadata, RawCtxPublishBuilder, RawCtxTableColumnBuilder, RawCtxTableSpec,
+    RawCtxTableSpecBuilder,
 };

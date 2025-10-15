@@ -23,6 +23,7 @@ fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_python_exception_outcome()?;
     verify_timeout_failure()?;
     verify_shared_buffer_payload()?;
+    verify_javascript_default_entrypoint()?;
     verify_rawctx_adapter_roundtrip()?;
     verify_prepare_session_with_manifest_defaults()?;
     verify_rawctx_auto_wrapper()?;
@@ -132,6 +133,39 @@ def main():
         other => panic!("unexpected payload variant: {:?}", other),
     }
 
+    Ok(())
+}
+
+fn verify_javascript_default_entrypoint() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export default function main() {
+    return { greeting: "hello" };
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, manifest_opt) = runtime.prepare_session_with_manifest(bundle)?;
+    assert!(manifest_opt.is_some(), "manifest should be detected");
+    assert_eq!(
+        session.descriptor().language,
+        Some(aardvark_core::RuntimeLanguage::JavaScript)
+    );
+    let outcome = runtime.run_session(&session)?;
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => {
+            assert_eq!(value, &json!({ "greeting": "hello" }));
+        }
+        other => panic!("expected json payload, got {:?}", other),
+    }
     Ok(())
 }
 
@@ -1726,6 +1760,35 @@ fn bundle_with_main_and_manifest(code: &str, manifest: &str) -> Bundle {
     writer
         .write_all(code.as_bytes())
         .expect("failed to write main entry");
+
+    writer
+        .start_file(
+            "aardvark.manifest.json",
+            FileOptions::default().compression_method(CompressionMethod::Stored),
+        )
+        .expect("failed to start manifest entry");
+    writer
+        .write_all(manifest.as_bytes())
+        .expect("failed to write manifest");
+
+    let cursor = writer.finish().expect("failed to finish bundle");
+    Bundle::from_zip_bytes(cursor.into_inner()).expect("failed to parse bundle")
+}
+
+fn bundle_with_js_main_and_manifest(code: &str, manifest: &str) -> Bundle {
+    use std::io::Cursor;
+
+    let cursor = Cursor::new(Vec::new());
+    let mut writer = zip::ZipWriter::new(cursor);
+    writer
+        .start_file(
+            "main.js",
+            FileOptions::default().compression_method(CompressionMethod::Stored),
+        )
+        .expect("failed to start main.js entry");
+    writer
+        .write_all(code.as_bytes())
+        .expect("failed to write main.js");
 
     writer
         .start_file(

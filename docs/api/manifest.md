@@ -24,8 +24,8 @@
 - `language` – Optional runtime override. Accepts `"python"` (default) or `"javascript"`.
 - `pyodide.version` is optional. When present it must match the version bundled with the runtime.
 
-> JavaScript runtime support is under active development. Until the engine lands, selecting
-> `"javascript"` will return a descriptive error at runtime.
+> JavaScript runtime support is available but currently limited: bundles run with a read-only
+> filesystem and manifest packages are ignored.
 
 ### `resources`
 

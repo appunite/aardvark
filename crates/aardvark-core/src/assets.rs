@@ -51,6 +51,11 @@ pub fn bootstrap_js() -> &'static str {
     include_str!(concat!(env!("OUT_DIR"), "/pyodide/pyodide_bootstrap.js"))
 }
 
+/// Returns the bootstrap helpers for the standalone JavaScript engine.
+pub fn js_runtime_bootstrap_js() -> &'static str {
+    include_str!("js/js_runtime_bootstrap.js")
+}
+
 /// Returns the trimmed Emscripten setup helper.
 pub fn emscripten_setup_js() -> &'static str {
     include_str!(concat!(

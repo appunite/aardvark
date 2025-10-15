@@ -1,6 +1,7 @@
 //! Python-specific engine backed by the embedded Pyodide runtime.
 
 use crate::assets;
+use crate::bundle::Bundle;
 use crate::bundle_manifest::BundleManifest;
 use crate::config::PyRuntimeConfig;
 use crate::engine::{JsRuntime, PyodideLoadOptions};
@@ -107,6 +108,10 @@ impl LanguageEngine for PythonEngine {
         self.js.load_packages(manifest.packages())?;
         self.js.prepare_dynlibs()?;
         Ok(())
+    }
+
+    fn mount_bundle(&mut self, bundle: &Bundle) -> Result<()> {
+        self.js.mount_bundle(bundle, "/app")
     }
 }
 

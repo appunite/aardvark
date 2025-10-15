@@ -16,7 +16,8 @@ use crate::outcome::{
 use crate::runtime_language::RuntimeLanguage;
 use crate::session::PySession;
 use crate::strategy::{
-    DefaultInvocationStrategy, InvocationContext, PyInvocationStrategy, StrategyResult,
+    DefaultInvocationStrategy, InvocationContext, JavaScriptInvocationStrategy,
+    PyInvocationStrategy, StrategyResult,
 };
 use std::collections::HashSet;
 use std::env;
@@ -35,7 +36,7 @@ pub type PyRuntime = AardvarkRuntime;
 
 pub struct AardvarkRuntime {
     config: PyRuntimeConfig,
-    engine: Box<dyn LanguageEngine>,
+    engine: Option<Box<dyn LanguageEngine>>,
     runtime_id: Option<String>,
 }
 
@@ -44,6 +45,7 @@ trait LanguageEngine {
     fn js_mut(&mut self) -> &mut JsRuntime;
     fn prepare_environment(&mut self, config: &PyRuntimeConfig) -> Result<()>;
     fn load_manifest_packages(&mut self, manifest: &BundleManifest) -> Result<()>;
+    fn mount_bundle(&mut self, bundle: &Bundle) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]
@@ -101,7 +103,7 @@ impl AardvarkRuntime {
         let engine = create_engine(config.default_language, &config)?;
         Ok(Self {
             config,
-            engine,
+            engine: Some(engine),
             runtime_id: None,
         })
     }
@@ -152,10 +154,7 @@ impl AardvarkRuntime {
         self.publish_manifest(&bundle)?;
         let session = PySession::new(bundle, descriptor);
         self.publish_descriptor(session.descriptor())?;
-        {
-            let js = self.engine_mut().js_mut();
-            js.mount_bundle(session.bundle(), "/app")?;
-        }
+        self.engine_mut().mount_bundle(session.bundle())?;
         Ok(session)
     }
 
@@ -225,8 +224,20 @@ impl AardvarkRuntime {
     }
 
     pub fn run_session(&mut self, session: &PySession) -> Result<ExecutionOutcome> {
-        let mut strategy = DefaultInvocationStrategy;
-        self.run_session_with_strategy(session, &mut strategy)
+        let language = session
+            .descriptor()
+            .language
+            .unwrap_or(self.config.default_language);
+        match language {
+            RuntimeLanguage::Python => {
+                let mut strategy = DefaultInvocationStrategy;
+                self.run_session_with_strategy(session, &mut strategy)
+            }
+            RuntimeLanguage::JavaScript => {
+                let mut strategy = JavaScriptInvocationStrategy::default();
+                self.run_session_with_strategy(session, &mut strategy)
+            }
+        }
     }
 
     pub fn run_session_with_strategy<S: PyInvocationStrategy>(
@@ -507,21 +518,34 @@ impl AardvarkRuntime {
                 "forced reset failure{label}"
             )));
         }
-        let language = self.engine.language();
-        self.engine = create_engine(language, &self.config)?;
+        let language = self
+            .engine
+            .as_ref()
+            .map(|engine| engine.language())
+            .unwrap_or(self.config.default_language);
+        if let Some(old) = self.engine.take() {
+            drop(old);
+        }
+        self.engine = Some(create_engine(language, &self.config)?);
         Ok(())
     }
 
     fn ensure_engine(&mut self, language: RuntimeLanguage) -> Result<()> {
-        if self.engine.language() == language {
+        if self.engine.as_ref().map(|engine| engine.language()) == Some(language) {
             return Ok(());
         }
-        self.engine = create_engine(language, &self.config)?;
+        if let Some(old) = self.engine.take() {
+            drop(old);
+        }
+        self.engine = Some(create_engine(language, &self.config)?);
         Ok(())
     }
 
     fn engine_mut(&mut self) -> &mut dyn LanguageEngine {
-        &mut *self.engine
+        self.engine
+            .as_mut()
+            .map(|engine| &mut **engine)
+            .expect("language engine must be initialized")
     }
 
     fn runtime_id_str(&self) -> &str {
@@ -797,9 +821,7 @@ fn create_engine(
 ) -> Result<Box<dyn LanguageEngine>> {
     match language {
         RuntimeLanguage::Python => Ok(Box::new(PythonEngine::new(config)?)),
-        RuntimeLanguage::JavaScript => Err(PyRunnerError::Descriptor(
-            "javascript runtime is not supported yet".into(),
-        )),
+        RuntimeLanguage::JavaScript => Ok(Box::new(JavaScriptEngine::new(config)?)),
     }
 }
 

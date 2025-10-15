@@ -6,7 +6,7 @@
 >
 > -- [Wikipedia](https://en.wikipedia.org/wiki/Aardvark)
 
-Embedded Pyodide runtime for executing Python bundles inside V8, with hardened resource controls and structured diagnostics. Inspired by Cloudflare Python Workers, implemented in Rust for host applications that need tight integration and predictable performance.
+Embedded Pyodide runtime for executing Python bundles inside V8, with hardened resource controls and structured diagnostics. Inspired by Cloudflare Python Workers, implemented in Rust for host applications that need tight integration and predictable performance. A lightweight JavaScript engine path is also available for preview without filesystem or package provisioning.
 
 ## Why Aardvark?
 
@@ -15,6 +15,7 @@ Embedded Pyodide runtime for executing Python bundles inside V8, with hardened r
 - **Self-describing bundles** – Ship code, manifest, and dependency hints together as a ZIP; hosts can honour or override the manifest contract at runtime.
 - **First-class telemetry** – Every invocation emits structured diagnostics (stdout/stderr, exceptions, resource usage, policy violations) that hosts can feed into their own observability stack.
 - **Runtime pooling** – Amortise Pyodide startup cost by recycling isolates with predictable reset semantics.
+- **Dual-language engine (preview)** – Run JavaScript bundles alongside Python handlers using the same network/filesystem sandboxing. JavaScript support is currently read-only and does not provide package preloads yet.
 
 ## Quick Start (CLI)
 

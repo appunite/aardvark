@@ -113,6 +113,29 @@ pub struct JsonInvocationStrategy {
     input: Option<JsonValue>,
 }
 
+/// Strategy that executes JavaScript module exports.
+#[derive(Default)]
+pub struct JavaScriptInvocationStrategy;
+
+impl PyInvocationStrategy for JavaScriptInvocationStrategy {
+    fn name(&self) -> &str {
+        "javascript"
+    }
+
+    fn invoke(&mut self, ctx: &mut InvocationContext<'_>) -> Result<StrategyResult> {
+        let entrypoint = ctx.session().entrypoint().to_owned();
+        let execution = ctx.runtime().run_js_entrypoint(&entrypoint)?;
+        let payload = if let Some(json) = execution.json.clone() {
+            ResultPayload::Json(json)
+        } else if let Some(text) = execution.result.clone() {
+            ResultPayload::Text(text)
+        } else {
+            ResultPayload::None
+        };
+        Ok(StrategyResult { execution, payload })
+    }
+}
+
 impl JsonInvocationStrategy {
     /// Constructs a JSON strategy with optional input payload.
     pub fn new(input: Option<JsonValue>) -> Self {

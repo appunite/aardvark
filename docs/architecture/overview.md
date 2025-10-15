@@ -13,9 +13,9 @@ This document introduces Aardvark’s execution model from the host’s point of
 
 1. **Host integration (`aardvark-core`)** – public Rust API that owns runtime pools, forwards bundles, and consumes structured outcomes.
 2. **Runtime coordinator (`runtime.rs`)** – orchestrates session preparation, policy wiring, invocation strategies, and telemetry collection.
-3. **JavaScript engine (`engine.rs`)** – embeds V8, loads Pyodide, manages network/filesystem shims, and emits low-level traces.
+3. **JavaScript engine (`engine.rs`)** – embeds V8, loads Pyodide for Python workloads, configures the JavaScript bootstrap, manages network/filesystem shims, and emits low-level traces.
 4. **Pyodide environment (`pyodide_bootstrap.js`)** – configures the Python interpreter, installs packages, and enforces sandbox rules inside the WASM VM.
-5. **Python code** – user-provided bundle that exposes the requested entrypoint.
+5. **User code** – Python bundles (Pyodide) or JavaScript modules executed under the same sandbox contract.
 
 The layers are intentionally narrow: the host only talks to the coordinator, which in turn controls the JS engine. Python never reaches directly into host resources.
 

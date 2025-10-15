@@ -420,6 +420,268 @@ impl JsRuntime {
         })
     }
 
+    /// Executes a JavaScript module export and returns the normalized output.
+    pub fn run_js_entrypoint(&mut self, entrypoint: &str) -> Result<ExecutionOutput> {
+        let entry_trimmed = entrypoint.trim();
+        let (module_part, export_part) = entry_trimmed
+            .split_once(':')
+            .map(|(module, export)| (module.trim(), export.trim()))
+            .unwrap_or((entry_trimmed, "default"));
+
+        if module_part.is_empty() {
+            return Err(PyRunnerError::Execution(
+                "entrypoint must include a module name".into(),
+            ));
+        }
+
+        let export_name = if export_part.is_empty() {
+            "default"
+        } else {
+            export_part
+        };
+
+        let mut specifier = module_part.replace('.', "/");
+        if !specifier.ends_with(".js") {
+            specifier.push_str(".js");
+        }
+        let specifier = normalize_specifier(&specifier);
+        self.ensure_module(&specifier)?;
+
+        enum InvocationResult {
+            Immediate(v8::Global<v8::Value>),
+            Promise(v8::Global<Promise>),
+            Exception {
+                typ: String,
+                value: String,
+                stack: Option<String>,
+            },
+        }
+
+        let ctx_state = self.context_state.clone();
+        let mut invocation: Option<InvocationResult> = None;
+
+        self.with_context(|scope, _| {
+            v8::tc_scope!(let try_catch, scope);
+            let Some(namespace) = ctx_state.module_namespace(try_catch, &specifier) else {
+                return Err(PyRunnerError::Execution(format!(
+                    "module '{specifier}' not loaded"
+                )));
+            };
+
+            let export_key = v8::String::new(try_catch, export_name)
+                .ok_or_else(|| PyRunnerError::Execution("failed to allocate export name".into()))?;
+            let export_value = namespace.get(try_catch, export_key.into()).ok_or_else(|| {
+                PyRunnerError::Execution(format!(
+                    "module '{specifier}' missing export '{export_name}'"
+                ))
+            })?;
+
+            let Ok(function) = v8::Local::<Function>::try_from(export_value) else {
+                return Err(PyRunnerError::Execution(format!(
+                    "export '{export_name}' is not callable"
+                )));
+            };
+
+            let call_result = function.call(try_catch, namespace.into(), &[]);
+            let Some(value) = call_result else {
+                let exception = try_catch.exception();
+                let mut typ = "JavaScriptError".to_string();
+                let mut message = "javascript execution failed".to_string();
+                let mut stack: Option<String> = None;
+
+                if let Some(object) = exception.and_then(|value| value.to_object(try_catch)) {
+                    if let Some(name_value) = object.get(
+                        try_catch,
+                        v8::String::new(try_catch, "name")
+                            .ok_or_else(|| {
+                                PyRunnerError::Execution(
+                                    "failed to allocate error name string".into(),
+                                )
+                            })?
+                            .into(),
+                    ) {
+                        if let Some(name_str) = name_value.to_string(try_catch) {
+                            typ = name_str.to_rust_string_lossy(try_catch);
+                        }
+                    }
+                    if let Some(message_value) = object.get(
+                        try_catch,
+                        v8::String::new(try_catch, "message")
+                            .ok_or_else(|| {
+                                PyRunnerError::Execution(
+                                    "failed to allocate error message string".into(),
+                                )
+                            })?
+                            .into(),
+                    ) {
+                        if let Some(msg_str) = message_value.to_string(try_catch) {
+                            message = msg_str.to_rust_string_lossy(try_catch);
+                        }
+                    }
+                } else if let Some(value) = exception {
+                    if let Some(msg) = value.to_string(try_catch) {
+                        message = msg.to_rust_string_lossy(try_catch);
+                    }
+                }
+
+                if let Some(stack_value) = try_catch.stack_trace() {
+                    if let Some(stack_str) = stack_value.to_string(try_catch) {
+                        stack = Some(stack_str.to_rust_string_lossy(try_catch));
+                    }
+                }
+
+                invocation = Some(InvocationResult::Exception {
+                    typ,
+                    value: message,
+                    stack,
+                });
+                return Ok(());
+            };
+
+            if let Ok(promise) = v8::Local::<Promise>::try_from(value) {
+                invocation = Some(InvocationResult::Promise(v8::Global::new(
+                    try_catch, promise,
+                )));
+            } else {
+                invocation = Some(InvocationResult::Immediate(v8::Global::new(
+                    try_catch, value,
+                )));
+            }
+            Ok(())
+        })?;
+
+        let invocation = invocation.unwrap_or_else(|| InvocationResult::Exception {
+            typ: "JavaScriptError".to_string(),
+            value: "javascript execution failed".to_string(),
+            stack: None,
+        });
+
+        let mut execution = ExecutionOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            result: None,
+            exception_type: None,
+            exception_value: None,
+            traceback: None,
+            json: None,
+            shared_buffers: Vec::new(),
+        };
+
+        match invocation {
+            InvocationResult::Exception { typ, value, stack } => {
+                execution.exception_type = Some(typ);
+                execution.exception_value = Some(value);
+                execution.traceback = stack;
+                return Ok(execution);
+            }
+            InvocationResult::Immediate(value_global) => {
+                populate_execution_output(self, value_global, &mut execution)?;
+                return Ok(execution);
+            }
+            InvocationResult::Promise(promise_global) => {
+                enum PromiseOutcome {
+                    Pending,
+                    Fulfilled(v8::Global<v8::Value>),
+                    Rejected {
+                        typ: String,
+                        value: String,
+                        stack: Option<String>,
+                    },
+                }
+
+                let resolved = loop {
+                    let outcome = self.with_context(|scope, _| -> Result<PromiseOutcome> {
+                        let promise = v8::Local::new(scope, &promise_global);
+                        match promise.state() {
+                            PromiseState::Pending => Ok(PromiseOutcome::Pending),
+                            PromiseState::Fulfilled => {
+                                let value = promise.result(scope);
+                                Ok(PromiseOutcome::Fulfilled(v8::Global::new(scope, value)))
+                            }
+                            PromiseState::Rejected => {
+                                let reason = promise.result(scope);
+                                let mut typ = "JavaScriptError".to_string();
+                                let mut message = reason
+                                    .to_string(scope)
+                                    .map(|s| s.to_rust_string_lossy(scope))
+                                    .unwrap_or_else(|| "javascript promise rejected".into());
+                                let mut stack: Option<String> = None;
+                                if let Some(object) = reason.to_object(scope) {
+                                    if let Some(name_value) = object.get(
+                                        scope,
+                                        v8::String::new(scope, "name")
+                                            .ok_or_else(|| {
+                                                PyRunnerError::Execution(
+                                                    "failed to allocate error name string".into(),
+                                                )
+                                            })?
+                                            .into(),
+                                    ) {
+                                        if let Some(name_str) = name_value.to_string(scope) {
+                                            typ = name_str.to_rust_string_lossy(scope);
+                                        }
+                                    }
+                                    if let Some(message_value) = object.get(
+                                        scope,
+                                        v8::String::new(scope, "message")
+                                            .ok_or_else(|| {
+                                                PyRunnerError::Execution(
+                                                    "failed to allocate error message string"
+                                                        .into(),
+                                                )
+                                            })?
+                                            .into(),
+                                    ) {
+                                        if let Some(msg_str) = message_value.to_string(scope) {
+                                            message = msg_str.to_rust_string_lossy(scope);
+                                        }
+                                    }
+                                    if let Some(stack_value) = object.get(
+                                        scope,
+                                        v8::String::new(scope, "stack")
+                                            .ok_or_else(|| {
+                                                PyRunnerError::Execution(
+                                                    "failed to allocate error stack string".into(),
+                                                )
+                                            })?
+                                            .into(),
+                                    ) {
+                                        if let Some(stack_str) = stack_value.to_string(scope) {
+                                            stack = Some(stack_str.to_rust_string_lossy(scope));
+                                        }
+                                    }
+                                }
+                                Ok(PromiseOutcome::Rejected {
+                                    typ,
+                                    value: message,
+                                    stack,
+                                })
+                            }
+                        }
+                    })?;
+
+                    match outcome {
+                        PromiseOutcome::Pending => {
+                            self.isolate.perform_microtask_checkpoint();
+                        }
+                        PromiseOutcome::Fulfilled(value) => break Some(value),
+                        PromiseOutcome::Rejected { typ, value, stack } => {
+                            execution.exception_type = Some(typ);
+                            execution.exception_value = Some(value);
+                            execution.traceback = stack;
+                            return Ok(execution);
+                        }
+                    }
+                };
+
+                if let Some(value_global) = resolved {
+                    populate_execution_output(self, value_global, &mut execution)?;
+                }
+                return Ok(execution);
+            }
+        }
+    }
+
     /// Resets the session scratch filesystem after an invocation completes.
     pub fn reset_filesystem(&mut self) -> Result<()> {
         self.with_context(|scope, _| {
@@ -1204,6 +1466,36 @@ impl JsRuntime {
             Ok(())
         })
     }
+}
+
+fn populate_execution_output(
+    runtime: &mut JsRuntime,
+    value_global: v8::Global<v8::Value>,
+    execution: &mut ExecutionOutput,
+) -> Result<()> {
+    runtime.with_context(|scope, _| {
+        let value = v8::Local::new(scope, &value_global);
+        if value.is_null_or_undefined() {
+            execution.result = None;
+            execution.json = None;
+            return Ok(());
+        }
+
+        if let Some(json_value) = v8::json::stringify(scope, value) {
+            let json_str = json_value.to_rust_string_lossy(scope);
+            if let Ok(parsed) = serde_json::from_str(&json_str) {
+                execution.json = Some(parsed);
+            }
+        }
+
+        if let Some(string_value) = value.to_string(scope) {
+            execution.result = Some(string_value.to_rust_string_lossy(scope));
+        } else {
+            execution.result = Some("<unprintable>".to_string());
+        }
+
+        Ok(())
+    })
 }
 
 fn exec_script(
