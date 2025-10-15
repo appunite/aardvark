@@ -12,6 +12,7 @@ use crate::outcome::{
     NetworkHostContact, ResultPayload,
 };
 use crate::package_metadata;
+use crate::runtime_language::RuntimeLanguage;
 use crate::session::PySession;
 use crate::strategy::{
     DefaultInvocationStrategy, InvocationContext, PyInvocationStrategy, StrategyResult,
@@ -129,6 +130,15 @@ impl PyRuntime {
         bundle: Bundle,
         descriptor: InvocationDescriptor,
     ) -> Result<PySession> {
+        let mut descriptor = descriptor;
+        let language = descriptor.language.unwrap_or(self.config.default_language);
+        descriptor.language = Some(language);
+        if language != RuntimeLanguage::Python {
+            return Err(PyRunnerError::Descriptor(format!(
+                "runtime language '{}' is not supported yet",
+                language
+            )));
+        }
         {
             let js = self.js_mut();
             js.set_network_policy(&[], true);
@@ -181,6 +191,13 @@ impl PyRuntime {
             .unwrap_or_else(|| "main:handler".to_string());
 
         let mut descriptor = InvocationDescriptor::new(entrypoint);
+        if let Some(runtime) = manifest
+            .as_ref()
+            .and_then(|m| m.runtime.as_ref())
+            .and_then(|rt| rt.language)
+        {
+            descriptor.language = Some(runtime);
+        }
         let mut filesystem_policy = FilesystemPolicy::default();
         let mut manifest_host_capabilities: Option<Vec<String>> = None;
         if let Some(manifest) = &manifest {

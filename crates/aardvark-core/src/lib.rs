@@ -48,6 +48,7 @@ pub mod outcome;
 mod package_metadata;
 pub mod pool;
 pub mod runtime;
+mod runtime_language;
 pub mod strategy;
 
 mod engine;
@@ -69,6 +70,7 @@ pub use outcome::{
 };
 pub use pool::{PoolConfig, PyRuntimePool};
 pub use runtime::PyRuntime;
+pub use runtime_language::RuntimeLanguage;
 pub use session::PySession;
 pub use strategy::{
     DefaultInvocationStrategy, JsonInvocationStrategy, PyInvocationStrategy, RawCtxBindingBuilder,

@@ -7,20 +7,25 @@
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `schemaVersion` | string | yes | Must equal `"1.0"`. The runtime rejects other versions.
-| `entrypoint` | string | yes | `module:function` pointing at the Python handler exported by the bundle.
+| `entrypoint` | string | yes | `module:export` pointing at the handler exported by the bundle.
 | `packages` | array(string) | no | Pyodide packages to preload. Names are normalised (trimmed, case-insensitive dedupe).
-| `runtime` | object | no | Additional runtime constraints (currently only Pyodide version pinning).
+| `runtime` | object | no | Runtime selection and language-specific constraints (language defaults to `python`).
 | `resources` | object | no | Resource policies for CPU, network, filesystem, and host capabilities.
 
 ### `runtime`
 
 ```
 "runtime": {
+  "language": "javascript",
   "pyodide": {"version": "0.28.2"}
 }
 ```
 
+- `language` – Optional runtime override. Accepts `"python"` (default) or `"javascript"`.
 - `pyodide.version` is optional. When present it must match the version bundled with the runtime.
+
+> JavaScript runtime support is under active development. Until the engine lands, selecting
+> `"javascript"` will return a descriptive error at runtime.
 
 ### `resources`
 
@@ -54,6 +59,7 @@
   "entrypoint": "service:handler",
   "packages": ["numpy", "pandas"],
   "runtime": {
+    "language": "python",
     "pyodide": {"version": "0.28.2"}
   },
   "resources": {
@@ -81,7 +87,7 @@
 ## When to skip the manifest
 
 - Infrastructure that already ships descriptors, packages, and limits through another channel can omit the manifest entirely.
-- The runtime still expects the entrypoint to follow the `module:function` convention even without the manifest; hosts pass it via `InvocationDescriptor`.
+- The runtime still expects the entrypoint to follow the `module:export` convention even without the manifest; hosts pass it via `InvocationDescriptor`.
 - Bundles without a manifest cannot use manifest-only features such as built-in package installation or manifest-defined network policies.
 
 ## Known gaps

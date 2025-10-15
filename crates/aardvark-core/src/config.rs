@@ -1,6 +1,7 @@
 //! Runtime configuration options.
 
 use crate::invocation::InvocationLimits;
+use crate::runtime_language::RuntimeLanguage;
 
 /// Controls how the runtime loads and captures Pyodide snapshots.
 #[derive(Debug, Clone, Default)]
@@ -16,6 +17,8 @@ pub struct SnapshotConfig {
 pub struct PyRuntimeConfig {
     /// Bundled Pyodide version string (usually derived from build-time assets).
     pub pyodide_version: String,
+    /// Default guest language selected when manifests/descriptors omit one.
+    pub default_language: RuntimeLanguage,
     /// Snapshot-related configuration.
     pub snapshot: SnapshotConfig,
     /// Optional global budget override applied to every session.
@@ -30,6 +33,7 @@ impl Default for PyRuntimeConfig {
     fn default() -> Self {
         Self {
             pyodide_version: "0.28.2".to_owned(),
+            default_language: RuntimeLanguage::Python,
             snapshot: SnapshotConfig::default(),
             budget_override: None,
             reset_policy: ResetPolicy::Manual,

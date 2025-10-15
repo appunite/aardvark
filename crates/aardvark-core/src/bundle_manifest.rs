@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 use crate::assets::PYODIDE_VERSION;
 use crate::error::{PyRunnerError, Result};
+use crate::runtime_language::RuntimeLanguage;
 
 /// Canonical filename for the manifest within the bundle archive.
 pub const MANIFEST_BASENAME: &str = "aardvark.manifest.json";
@@ -43,6 +44,9 @@ pub struct BundleManifest {
 #[serde(rename_all = "camelCase")]
 /// Runtime-specific manifest configuration.
 pub struct ManifestRuntime {
+    /// Desired guest language runtime.
+    #[serde(default)]
+    pub language: Option<RuntimeLanguage>,
     /// Optional Pyodide configuration block.
     #[serde(default)]
     pub pyodide: Option<ManifestPyodide>,
@@ -283,7 +287,7 @@ mod tests {
     #[test]
     fn manifest_round_trip() {
         let json = format!(
-            "{{\n            \"schemaVersion\": \"1.0\",\n            \"entrypoint\": \"main:run\",\n            \"packages\": [\"Pandas\", \"numpy\"],\n            \"runtime\": {{\"pyodide\": {{\"version\": \"{}\"}}}},\n            \"resources\": {{\n                \"cpu\": {{\"defaultLimitMs\": 5000}},\n                \"network\": {{\"allow\": [\"Example.com\", \"api.example.com\"], \"httpsOnly\": true}},\n                \"filesystem\": {{\"mode\": \"readWrite\", \"quotaBytes\": 1048576}},\n                \"hostCapabilities\": [\"rawctx_buffers\", \"rawctx_buffers\"]\n            }}\n        }}",
+            "{{\n            \"schemaVersion\": \"1.0\",\n            \"entrypoint\": \"main:run\",\n            \"packages\": [\"Pandas\", \"numpy\"],\n            \"runtime\": {{\"language\": \"python\", \"pyodide\": {{\"version\": \"{}\"}}}},\n            \"resources\": {{\n                \"cpu\": {{\"defaultLimitMs\": 5000}},\n                \"network\": {{\"allow\": [\"Example.com\", \"api.example.com\"], \"httpsOnly\": true}},\n                \"filesystem\": {{\"mode\": \"readWrite\", \"quotaBytes\": 1048576}},\n                \"hostCapabilities\": [\"rawctx_buffers\", \"rawctx_buffers\"]\n            }}\n        }}",
             PYODIDE_VERSION
         );
 
@@ -311,6 +315,8 @@ mod tests {
             resources.host_capabilities,
             vec!["rawctx_buffers".to_string()]
         );
+        let runtime = manifest.runtime.as_ref().expect("runtime present");
+        assert_eq!(runtime.language, Some(RuntimeLanguage::Python));
     }
 
     #[test]

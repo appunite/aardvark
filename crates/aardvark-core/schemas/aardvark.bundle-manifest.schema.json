@@ -28,6 +28,11 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "language": {
+          "type": "string",
+          "enum": ["python", "javascript"],
+          "description": "Guest language runtime to load. Defaults to python."
+        },
         "pyodide": {
           "type": "object",
           "additionalProperties": false,

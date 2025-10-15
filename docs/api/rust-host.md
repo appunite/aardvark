@@ -31,6 +31,7 @@ Key configuration knobs:
 - `snapshot.save_to` – capture a new snapshot after the first load.
 - `budget_override` – clamp descriptor limits globally (e.g., enforce platform-wide CPU ceilings).
 - `host_capabilities` – capability allowlist applied to every session unless the manifest narrows it further.
+- `default_language` – fallback guest language when descriptors/manifests omit one (defaults to `python`; `javascript` is available behind the experimental engine).
 
 ## Preparing a session
 
