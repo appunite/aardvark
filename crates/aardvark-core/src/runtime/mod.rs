@@ -1,17 +1,18 @@
-//! Runtime coordination between V8 and Pyodide assets.
+//! Runtime coordination between the host and language-specific engines.
 
-use crate::assets;
+mod javascript;
+mod python;
+
 use crate::bundle::Bundle;
 use crate::bundle_manifest::{BundleManifest, ManifestFilesystemMode, ManifestFilesystemResources};
 use crate::config::{PyRuntimeConfig, ResetPolicy};
-use crate::engine::{ExecutionOutput, FilesystemModeConfig, JsRuntime, PyodideLoadOptions};
+use crate::engine::{ExecutionOutput, FilesystemModeConfig, JsRuntime};
 use crate::error::{PyRunnerError, Result};
 use crate::invocation::{InvocationDescriptor, InvocationLimits};
 use crate::outcome::{
     Diagnostics, ExecutionOutcome, FailureKind, FilesystemViolation, NetworkDeniedHost,
     NetworkHostContact, ResultPayload,
 };
-use crate::package_metadata;
 use crate::runtime_language::RuntimeLanguage;
 use crate::session::PySession;
 use crate::strategy::{
@@ -19,16 +20,31 @@ use crate::strategy::{
 };
 use std::collections::HashSet;
 use std::env;
-use std::fs;
-use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc, Arc,
 };
-use std::thread;
 use std::time::Duration;
 use tracing::{info, info_span, warn};
 use v8::{self, PinScope};
+
+pub use javascript::JavaScriptEngine;
+pub use python::PythonEngine;
+
+pub type PyRuntime = AardvarkRuntime;
+
+pub struct AardvarkRuntime {
+    config: PyRuntimeConfig,
+    engine: Box<dyn LanguageEngine>,
+    runtime_id: Option<String>,
+}
+
+trait LanguageEngine {
+    fn language(&self) -> RuntimeLanguage;
+    fn js_mut(&mut self) -> &mut JsRuntime;
+    fn prepare_environment(&mut self, config: &PyRuntimeConfig) -> Result<()>;
+    fn load_manifest_packages(&mut self, manifest: &BundleManifest) -> Result<()>;
+}
 
 #[derive(Debug, Clone)]
 struct FilesystemPolicy {
@@ -49,20 +65,6 @@ impl Default for FilesystemPolicy {
             quota_bytes: None,
         }
     }
-}
-
-fn normalize_capabilities<'a, I>(caps: I) -> Vec<String>
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let mut normalized: Vec<String> = caps
-        .into_iter()
-        .map(|cap| cap.trim().to_ascii_lowercase())
-        .filter(|cap| !cap.is_empty())
-        .collect();
-    normalized.sort();
-    normalized.dedup();
-    normalized
 }
 
 impl FilesystemPolicy {
@@ -90,41 +92,25 @@ struct CollectedDiagnostics {
     cpu_ms_used: Option<u64>,
     filesystem_bytes_written: Option<u64>,
     network_hosts_contacted: Vec<NetworkHostContact>,
-    network_hosts_blocked: Vec<crate::outcome::NetworkDeniedHost>,
-    filesystem_violations: Vec<crate::outcome::FilesystemViolation>,
+    network_hosts_blocked: Vec<NetworkDeniedHost>,
+    filesystem_violations: Vec<FilesystemViolation>,
 }
 
-/// Main runtime handle embedding V8 and Pyodide.
-pub struct PyRuntime {
-    config: PyRuntimeConfig,
-    js: Option<JsRuntime>,
-    snapshot_bytes: Option<Vec<u8>>,
-    runtime_id: Option<String>,
-}
-
-impl PyRuntime {
-    /// Create a new runtime instance with the given configuration.
+impl AardvarkRuntime {
     pub fn new(config: PyRuntimeConfig) -> Result<Self> {
-        let js = JsRuntime::new()?;
-        let snapshot_bytes = Self::load_snapshot_bytes(&config)?;
-        let mut runtime = Self {
+        let engine = create_engine(config.default_language, &config)?;
+        Ok(Self {
             config,
-            js: Some(js),
-            snapshot_bytes,
+            engine,
             runtime_id: None,
-        };
-        runtime.register_core_assets();
-        runtime.inject_version_globals()?;
-        Ok(runtime)
+        })
     }
 
-    /// Converts a bundle into an executable session.
     pub fn prepare_session(&mut self, bundle: Bundle, entrypoint: &str) -> Result<PySession> {
         let descriptor = InvocationDescriptor::trivial(entrypoint);
         self.prepare_session_with_descriptor(bundle, descriptor)
     }
 
-    /// Converts a bundle and descriptor into an executable session.
     pub fn prepare_session_with_descriptor(
         &mut self,
         bundle: Bundle,
@@ -133,30 +119,21 @@ impl PyRuntime {
         let mut descriptor = descriptor;
         let language = descriptor.language.unwrap_or(self.config.default_language);
         descriptor.language = Some(language);
-        if language != RuntimeLanguage::Python {
-            return Err(PyRunnerError::Descriptor(format!(
-                "runtime language '{}' is not supported yet",
-                language
-            )));
-        }
+        self.ensure_engine(language)?;
+
         {
-            let js = self.js_mut();
+            let js = self.engine_mut().js_mut();
             js.set_network_policy(&[], true);
         }
-        self.ensure_pyodide_module()?;
-        let make_snapshot = self.config.snapshot.save_to.is_some();
-        let snapshot_owned = self.snapshot_bytes.clone();
-        let load_opts = PyodideLoadOptions {
-            snapshot: snapshot_owned.as_deref(),
-            make_snapshot,
-        };
-        self.js_mut().load_pyodide(load_opts)?;
         {
-            let js = self.js_mut();
+            let config = self.config.clone();
+            self.engine_mut().prepare_environment(&config)?;
+        }
+        {
+            let js = self.engine_mut().js_mut();
             js.set_filesystem_policy(FilesystemModeConfig::Read, None)?;
         }
         self.apply_host_capabilities(None)?;
-        self.snapshot_bytes = None;
         descriptor
             .validate()
             .map_err(|err| PyRunnerError::Descriptor(err.to_string()))?;
@@ -175,11 +152,13 @@ impl PyRuntime {
         self.publish_manifest(&bundle)?;
         let session = PySession::new(bundle, descriptor);
         self.publish_descriptor(session.descriptor())?;
-        self.js_mut().mount_bundle(session.bundle(), "/app")?;
+        {
+            let js = self.engine_mut().js_mut();
+            js.mount_bundle(session.bundle(), "/app")?;
+        }
         Ok(session)
     }
 
-    /// Prepares a session using the bundle manifest when present, automatically loading any listed packages.
     pub fn prepare_session_with_manifest(
         &mut self,
         bundle: Bundle,
@@ -198,6 +177,7 @@ impl PyRuntime {
         {
             descriptor.language = Some(runtime);
         }
+
         let mut filesystem_policy = FilesystemPolicy::default();
         let mut manifest_host_capabilities: Option<Vec<String>> = None;
         if let Some(manifest) = &manifest {
@@ -216,10 +196,11 @@ impl PyRuntime {
                 }
             }
         }
+
         let session = self.prepare_session_with_descriptor(bundle, descriptor)?;
 
         {
-            let js = self.js_mut();
+            let js = self.engine_mut().js_mut();
             js.set_filesystem_policy(
                 filesystem_policy.mode_config(),
                 filesystem_policy.quota_bytes,
@@ -230,26 +211,24 @@ impl PyRuntime {
         if let Some(manifest) = &manifest {
             if let Some(resources) = manifest.resources() {
                 if let Some(network) = &resources.network {
-                    self.js_mut()
+                    self.engine_mut()
+                        .js_mut()
                         .set_network_policy(network.allow.as_slice(), network.https_only);
                 }
             }
             if !manifest.packages().is_empty() {
-                self.js_runtime().load_packages(manifest.packages())?;
-                self.js_runtime().prepare_dynlibs()?;
+                self.engine_mut().load_manifest_packages(manifest)?;
             }
         }
 
         Ok((session, manifest))
     }
 
-    /// Executes the entrypoint captured in the session and returns the Python output.
     pub fn run_session(&mut self, session: &PySession) -> Result<ExecutionOutcome> {
         let mut strategy = DefaultInvocationStrategy;
         self.run_session_with_strategy(session, &mut strategy)
     }
 
-    /// Executes the session using the provided invocation strategy.
     pub fn run_session_with_strategy<S: PyInvocationStrategy>(
         &mut self,
         session: &PySession,
@@ -267,9 +246,10 @@ impl PyRuntime {
             strategy = strategy.name(),
             "applying descriptor limits"
         );
+
         let heap_limit_bytes = limits.heap_mb.map(bytes_from_mb);
         if let (Some(limit_bytes), Some(limit_mb)) = (heap_limit_bytes, limits.heap_mb) {
-            let used_before = self.js_mut().heap_used_bytes();
+            let used_before = self.engine_mut().js_mut().heap_used_bytes();
             if used_before > limit_bytes {
                 warn!(
                     target: "aardvark::budget",
@@ -284,24 +264,26 @@ impl PyRuntime {
                 });
             }
         }
+
         {
-            let js = self.js_mut();
+            let js = self.engine_mut().js_mut();
             js.clear_network_contacts();
             js.clear_network_denied();
             js.clear_filesystem_events();
         }
+
         let mut watchdog = self.arm_watchdog(limits.wall_ms);
         let cpu_start_ns = thread_cpu_time_ns();
 
         let runtime_id_owned = self.runtime_id_str().to_owned();
         let strategy_result = {
-            let js = self.js_mut();
+            let js = self.engine_mut().js_mut();
             let mut ctx = InvocationContext::new(session, js);
             Self::execute_strategy(strategy, &mut ctx, &runtime_id_owned)?
         };
 
         let timeout_triggered = if let Some(guard) = watchdog.take() {
-            guard.complete(self.js_mut())
+            guard.complete(self.engine_mut().js_mut())
         } else {
             false
         };
@@ -317,7 +299,7 @@ impl PyRuntime {
             network_denied_raw,
             filesystem_violations_raw,
         ) = {
-            let js = self.js_mut();
+            let js = self.engine_mut().js_mut();
             let usage = js.filesystem_usage_bytes().ok();
             let contacts = js.drain_network_contacts();
             let denied = js.drain_network_denied();
@@ -412,14 +394,15 @@ impl PyRuntime {
             }
         }
         if let (Some(limit_bytes), Some(limit_mb)) = (heap_limit_bytes, limits.heap_mb) {
-            let used_after = self.js_mut().heap_used_bytes();
+            let used_after = self.engine_mut().js_mut().heap_used_bytes();
             if used_after > limit_bytes {
                 warn!(
                     target: "aardvark::budget",
                     runtime_id = self.runtime_id_str(),
+                    entrypoint = descriptor.entrypoint(),
                     heap.used_bytes = used_after,
                     heap.limit_bytes = limit_bytes,
-                    "heap limit exceeded after execution"
+                    "heap usage exceeded"
                 );
                 let diagnostics = Self::make_diagnostics(
                     strategy_result.as_ref().ok().map(|res| &res.execution),
@@ -436,12 +419,15 @@ impl PyRuntime {
 
         let mut outcome = match strategy_result {
             Ok(result) => Self::finalize_success(result, descriptor, &collected),
-            Err(err) => ExecutionOutcome::failure(
-                FailureKind::AdapterError {
-                    message: err.to_string(),
-                },
-                Self::make_diagnostics(None, &collected),
-            ),
+            Err(err) => {
+                let diagnostics = Self::make_diagnostics(None, &collected);
+                ExecutionOutcome::failure(
+                    FailureKind::AdapterError {
+                        message: err.to_string(),
+                    },
+                    diagnostics,
+                )
+            }
         };
 
         if matches!(self.config.reset_policy, ResetPolicy::AfterInvocation) {
@@ -479,31 +465,72 @@ impl PyRuntime {
         self.finish_with_cleanup(outcome)
     }
 
+    pub fn cleanup_filesystem(&mut self) {
+        if let Err(err) = self.engine_mut().js_mut().reset_filesystem() {
+            warn!(
+                target: "aardvark::sandbox",
+                runtime_id = self.runtime_id_str(),
+                error = %err,
+                "filesystem cleanup failed"
+            );
+        }
+    }
+
     /// Exposes the underlying JS runtime for advanced operations.
     pub fn js_runtime(&mut self) -> &mut JsRuntime {
-        self.js_mut()
+        self.engine_mut().js_mut()
     }
 
-    /// Ensures the embedded Pyodide loader module is compiled and instantiated.
-    pub fn ensure_pyodide_module(&mut self) -> Result<()> {
-        self.js_mut().ensure_module("pyodide.mjs")
+    pub fn set_runtime_id(&mut self, id: impl Into<String>) {
+        self.runtime_id = Some(id.into());
     }
 
-    fn inject_version_globals(&mut self) -> Result<()> {
-        let version = self.config.pyodide_version.clone();
-        self.js_mut().with_context(|scope, context| {
-            let global = context.global(scope);
-            let key = v8::String::new(scope, "__pyRunnerPyodideVersion")
-                .ok_or_else(|| PyRunnerError::Init("failed to allocate version key".into()))?;
-            let value = v8::String::new(scope, &version)
-                .ok_or_else(|| PyRunnerError::Init("failed to allocate version string".into()))?;
-            let _ = global.set(scope, key.into(), value.into());
-            Ok(())
-        })
+    pub fn runtime_id(&self) -> Option<&str> {
+        self.runtime_id.as_deref()
+    }
+
+    pub fn reset_to_snapshot(&mut self) -> Result<()> {
+        let span = info_span!(
+            target: "aardvark::runtime",
+            "runtime.reset_to_snapshot",
+            runtime_id = self.runtime_id_str()
+        );
+        let _guard = span.enter();
+        if let Some(token) = env::var_os("AARDVARK_TEST_FORCE_RESET_FAILURE") {
+            env::remove_var("AARDVARK_TEST_FORCE_RESET_FAILURE");
+            let label = token
+                .to_str()
+                .filter(|value| !value.is_empty())
+                .map(|value| format!(" forced by {value}"))
+                .unwrap_or_default();
+            return Err(PyRunnerError::Internal(format!(
+                "forced reset failure{label}"
+            )));
+        }
+        let language = self.engine.language();
+        self.engine = create_engine(language, &self.config)?;
+        Ok(())
+    }
+
+    fn ensure_engine(&mut self, language: RuntimeLanguage) -> Result<()> {
+        if self.engine.language() == language {
+            return Ok(());
+        }
+        self.engine = create_engine(language, &self.config)?;
+        Ok(())
+    }
+
+    fn engine_mut(&mut self) -> &mut dyn LanguageEngine {
+        &mut *self.engine
+    }
+
+    fn runtime_id_str(&self) -> &str {
+        self.runtime_id.as_deref().unwrap_or("<unassigned>")
     }
 
     fn publish_manifest(&mut self, bundle: &Bundle) -> Result<()> {
-        self.js_mut().with_context(|scope, context| {
+        let engine = self.engine_mut();
+        engine.js_mut().with_context(|scope, context| {
             let manifest = serialize_manifest(scope, bundle)?;
             let global = context.global(scope);
             let key = v8::String::new(scope, "__pyRunnerManifest")
@@ -517,7 +544,8 @@ impl PyRuntime {
         let json = serde_json::to_string(descriptor).map_err(|err| {
             PyRunnerError::Descriptor(format!("failed to serialize descriptor: {err}"))
         })?;
-        self.js_mut().with_context(|scope, context| {
+        let engine = self.engine_mut();
+        engine.js_mut().with_context(|scope, context| {
             let global = context.global(scope);
             let key =
                 v8::String::new(scope, "__pyRunnerInvocationDescriptor").ok_or_else(|| {
@@ -542,7 +570,7 @@ impl PyRuntime {
         if requested_ms == 0 {
             return None;
         }
-        let handle = self.js_mut().isolate_handle();
+        let handle = self.engine_mut().js_mut().isolate_handle();
         Some(WallClockGuard::new(handle, requested_ms))
     }
 
@@ -603,7 +631,7 @@ impl PyRuntime {
     }
 
     fn finalize_success(
-        result: crate::strategy::StrategyResult,
+        result: StrategyResult,
         descriptor: &InvocationDescriptor,
         collected: &CollectedDiagnostics,
     ) -> ExecutionOutcome {
@@ -660,22 +688,10 @@ impl PyRuntime {
             }
         }
 
-        {
-            let js = self.js_mut();
-            js.set_host_capabilities(&effective)?;
-        }
+        let engine = self.engine_mut();
+        let js = engine.js_mut();
+        js.set_host_capabilities(&effective)?;
         Ok(())
-    }
-
-    fn cleanup_filesystem(&mut self) {
-        if let Err(err) = self.js_mut().reset_filesystem() {
-            warn!(
-                target: "aardvark::sandbox",
-                runtime_id = self.runtime_id_str(),
-                error = %err,
-                "filesystem cleanup failed"
-            );
-        }
     }
 
     fn finish_with_cleanup(&mut self, outcome: ExecutionOutcome) -> Result<ExecutionOutcome> {
@@ -773,96 +789,32 @@ impl PyRuntime {
             );
         }
     }
+}
 
-    fn load_snapshot_bytes(config: &PyRuntimeConfig) -> Result<Option<Vec<u8>>> {
-        if let Some(path) = config.snapshot.load_from.as_ref() {
-            read_snapshot_bytes(path).map(Some)
-        } else {
-            Ok(None)
-        }
+fn create_engine(
+    language: RuntimeLanguage,
+    config: &PyRuntimeConfig,
+) -> Result<Box<dyn LanguageEngine>> {
+    match language {
+        RuntimeLanguage::Python => Ok(Box::new(PythonEngine::new(config)?)),
+        RuntimeLanguage::JavaScript => Err(PyRunnerError::Descriptor(
+            "javascript runtime is not supported yet".into(),
+        )),
     }
+}
 
-    fn runtime_id_str(&self) -> &str {
-        self.runtime_id.as_deref().unwrap_or("<unassigned>")
-    }
-
-    fn js_mut(&mut self) -> &mut JsRuntime {
-        self.js.as_mut().expect("JS runtime is not initialized")
-    }
-
-    fn js_ref(&self) -> &JsRuntime {
-        self.js.as_ref().expect("JS runtime is not initialized")
-    }
-
-    /// Assigns a runtime identifier used for tracing.
-    pub fn set_runtime_id(&mut self, id: impl Into<String>) {
-        self.runtime_id = Some(id.into());
-    }
-
-    /// Returns the runtime identifier, if any.
-    pub fn runtime_id(&self) -> Option<&str> {
-        self.runtime_id.as_deref()
-    }
-
-    /// Reset the runtime to its baseline snapshot.
-    pub fn reset_to_snapshot(&mut self) -> Result<()> {
-        let span = info_span!(
-            target: "aardvark::runtime",
-            "runtime.reset_to_snapshot",
-            runtime_id = self.runtime_id_str()
-        );
-        let _guard = span.enter();
-        if let Some(token) = env::var_os("AARDVARK_TEST_FORCE_RESET_FAILURE") {
-            env::remove_var("AARDVARK_TEST_FORCE_RESET_FAILURE");
-            let label = token
-                .to_str()
-                .filter(|value| !value.is_empty())
-                .map(|value| format!(" forced by {value}"))
-                .unwrap_or_default();
-            return Err(PyRunnerError::Internal(format!(
-                "forced reset failure{label}"
-            )));
-        }
-        if let Some(old_js) = self.js.take() {
-            drop(old_js);
-        }
-        let js = JsRuntime::new()?;
-        self.js = Some(js);
-        self.register_core_assets();
-        self.inject_version_globals()?;
-        self.snapshot_bytes = Self::load_snapshot_bytes(&self.config)?;
-        Ok(())
-    }
-
-    fn register_core_assets(&self) {
-        let js = self.js_ref();
-        js.insert_binary_asset("pyodide.asm.wasm", assets::wasm());
-        js.insert_text_asset("pyodide.asm.js", assets::pyodide_asm_js());
-        js.insert_text_asset("pyodide.asm.patched.js", assets::pyodide_asm_patched_js());
-        js.insert_text_asset("pyodide_builtin_wrappers.js", assets::builtin_wrappers_js());
-        js.insert_text_asset("pyodide_bootstrap.js", assets::bootstrap_js());
-        js.insert_text_asset("pyodide_emscripten_setup.js", assets::emscripten_setup_js());
-        js.insert_text_asset("pyodide_packages.js", assets::packages_js());
-        js.insert_text_asset("pyodide.mjs", assets::loader_mjs());
-        js.insert_text_asset("pyodide.js", assets::loader_js());
-        js.insert_binary_asset("python_stdlib.zip", assets::python_stdlib_zip());
-        js.insert_text_asset(
-            "pyodide-lock.json",
-            package_metadata::package_metadata_json(),
-        );
-        let capnp_lock = package_metadata::package_metadata_capnp();
-        js.insert_binary_asset_owned("pyodide-lock.capnp", capnp_lock.as_ref().to_vec());
-        js.insert_text_asset("entropy/allow_entropy.py", assets::entropy_allow_py());
-        js.insert_text_asset(
-            "entropy/entropy_import_context.py",
-            assets::entropy_import_context_py(),
-        );
-        js.insert_text_asset("entropy/entropy_patches.py", assets::entropy_patches_py());
-        js.insert_text_asset(
-            "entropy/import_patch_manager.py",
-            assets::entropy_import_patch_manager_py(),
-        );
-    }
+fn normalize_capabilities<'a, I>(caps: I) -> Vec<String>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut normalized: Vec<String> = caps
+        .into_iter()
+        .map(|cap| cap.trim().to_ascii_lowercase())
+        .filter(|cap| !cap.is_empty())
+        .collect();
+    normalized.sort();
+    normalized.dedup();
+    normalized
 }
 
 struct WallClockGuard {
@@ -876,7 +828,7 @@ impl WallClockGuard {
         let fired = Arc::new(AtomicBool::new(false));
         let thread_handle = handle.clone();
         let fired_clone = fired.clone();
-        thread::spawn(
+        std::thread::spawn(
             move || match rx.recv_timeout(Duration::from_millis(requested_ms)) {
                 Ok(_) => {}
                 Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -980,15 +932,6 @@ fn thread_rusage_scope() -> libc::c_int {
 
 fn ns_to_ms(value: u64) -> u64 {
     value.div_ceil(1_000_000)
-}
-
-fn read_snapshot_bytes(path: &Path) -> Result<Vec<u8>> {
-    fs::read(path).map_err(|err| {
-        PyRunnerError::Init(format!(
-            "failed to read snapshot from {}: {err}",
-            path.display()
-        ))
-    })
 }
 
 fn serialize_manifest<'a>(
