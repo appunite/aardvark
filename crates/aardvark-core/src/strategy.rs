@@ -436,7 +436,8 @@ impl PyInvocationStrategy for RawCtxInvocationStrategy {
     }
 
     fn pre_execute_js(&mut self, ctx: &mut InvocationContext<'_>) -> Result<()> {
-        self.publish_inputs(ctx.runtime())
+        self.publish_inputs(ctx.runtime())?;
+        self.install_js_auto_wrapper(ctx)
     }
 
     fn pre_execute_py(&mut self, ctx: &mut InvocationContext<'_>) -> Result<()> {
@@ -478,6 +479,30 @@ impl PyInvocationStrategy for RawCtxInvocationStrategy {
                 Ok(StrategyResult { execution, payload })
             }
         }
+    }
+}
+
+impl RawCtxInvocationStrategy {
+    fn install_js_auto_wrapper(&self, ctx: &mut InvocationContext<'_>) -> Result<()> {
+        if ctx.language() != RuntimeLanguage::JavaScript {
+            return Ok(());
+        }
+        let spec = build_rawctx_auto_spec(ctx.session())?;
+        let script = if let Some(spec) = spec {
+            let payload = serde_json::to_string(&spec).map_err(|err| {
+                PyRunnerError::Execution(format!(
+                    "failed to serialize rawctx auto-wrapper spec: {err}"
+                ))
+            })?;
+            format!("globalThis.__aardvarkSetRawctxSpec({payload});")
+        } else {
+            "globalThis.__aardvarkSetRawctxSpec(null);".to_string()
+        };
+        ctx.runtime()
+            .execute_script("__aardvark_rawctx_spec.js", &script)
+            .map_err(|err| {
+                PyRunnerError::Execution(format!("failed to configure rawctx auto-wrapper: {err}"))
+            })
     }
 }
 
@@ -1328,8 +1353,8 @@ fn merge_metadata(target: &mut JsonValue, incoming: JsonValue) {
     }
 }
 
-#[derive(Debug, Serialize)]
-struct RawCtxAutoSpec {
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct RawCtxAutoSpec {
     entrypoint: String,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     inputs: Vec<RawCtxInputBindingSpec>,
@@ -1339,8 +1364,8 @@ struct RawCtxAutoSpec {
     outputs: Vec<RawCtxOutputSpec>,
 }
 
-#[derive(Debug, Serialize)]
-struct RawCtxInputBindingSpec {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct RawCtxInputBindingSpec {
     field: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     arg: Option<String>,
@@ -1364,8 +1389,8 @@ struct RawCtxInputBindingSpec {
     table: Option<RawCtxTableSpec>,
 }
 
-#[derive(Clone, Debug, Serialize)]
-struct RawCtxOutputSpec {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct RawCtxOutputSpec {
     id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     mode: Option<String>,

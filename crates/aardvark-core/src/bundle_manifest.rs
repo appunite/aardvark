@@ -184,6 +184,21 @@ impl BundleManifest {
         }
         self.entrypoint = format!("{}:{}", module.trim(), function.trim());
 
+        if let Some(runtime) = &self.runtime {
+            if matches!(runtime.language, Some(RuntimeLanguage::JavaScript)) {
+                if !self.packages.is_empty() {
+                    return Err(PyRunnerError::Manifest(
+                        "javascript runtime bundles must inline dependencies; 'packages' is not supported".into(),
+                    ));
+                }
+                if runtime.pyodide.is_some() {
+                    return Err(PyRunnerError::Manifest(
+                        "pyodide configuration is unsupported when runtime.language is 'javascript'".into(),
+                    ));
+                }
+            }
+        }
+
         let mut seen = HashSet::new();
         let mut normalized = Vec::with_capacity(self.packages.len());
         for pkg in self.packages.iter() {
@@ -361,5 +376,50 @@ mod tests {
         }"#;
         let err = BundleManifest::from_bytes(json.as_bytes()).unwrap_err();
         assert!(matches!(err, PyRunnerError::Manifest(_)));
+    }
+
+    #[test]
+    fn manifest_rejects_packages_for_js_runtime() {
+        let json = r#"{
+            "schemaVersion": "1.0",
+            "entrypoint": "app:main",
+            "packages": ["leftpad"],
+            "runtime": { "language": "javascript" }
+        }"#;
+        let err = BundleManifest::from_bytes(json.as_bytes()).unwrap_err();
+        assert!(
+            matches!(err, PyRunnerError::Manifest(_)),
+            "expected manifest error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_pyodide_block_for_js_runtime() {
+        let json = r#"{
+            "schemaVersion": "1.0",
+            "entrypoint": "app:main",
+            "runtime": { "language": "javascript", "pyodide": { "version": "0.23.0" } }
+        }"#;
+        let err = BundleManifest::from_bytes(json.as_bytes()).unwrap_err();
+        assert!(
+            matches!(err, PyRunnerError::Manifest(_)),
+            "expected manifest error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn manifest_allows_minimal_js_bundle() {
+        let json = r#"{
+            "schemaVersion": "1.0",
+            "entrypoint": "main:default",
+            "runtime": { "language": "javascript" }
+        }"#;
+        let manifest = BundleManifest::from_bytes(json.as_bytes()).expect("manifest parses");
+        assert!(manifest.packages().is_empty());
+        assert_eq!(manifest.entrypoint(), "main:default");
+        assert_eq!(
+            manifest.runtime.as_ref().and_then(|rt| rt.language),
+            Some(RuntimeLanguage::JavaScript)
+        );
     }
 }

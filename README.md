@@ -72,6 +72,7 @@ The crate exposes the library as `aardvark-core`. When publishing to crates.io:
 
 - Windows builds are not supported or tested.
 - Shared buffer handles now expose zero-copy slices; request an owned copy only if you need to mutate or persist the data.
+- JavaScript support expects pre-bundled modules; the runtime will not fetch npm packages or resolve bare specifiers at invocation time.
 - Network sandboxing is allowlist-based per session; there is no per-request override yet.
 - Filesystem quota enforcement only covers the `/session` tree.
 - Streaming outputs and incremental logs are not available; handlers must return a single payload.

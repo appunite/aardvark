@@ -136,4 +136,5 @@ fn record(outcome: &ExecutionOutcome) {
 
 - There is no async API; integrate with async runtimes by wrapping the blocking calls in thread pools.
 - Shared buffers expose zero-copy views via `SharedBufferHandle::as_slice()`; call `into_bytes()` only if you need an owned copy.
+- JavaScript bundles are “bring your own modules”: package resolution is not performed at runtime, so ship a single self-contained bundle produced by your JS bundler.
 - Manifest-driven package caches must be prepared out of band. The core crate does not download wheels from the network.

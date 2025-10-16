@@ -7,7 +7,7 @@ use aardvark_core::{
         JsonInvocationStrategy, RawCtxBindingBuilder, RawCtxInput, RawCtxInvocationStrategy,
         RawCtxMetadata, RawCtxPublishBuilder, RawCtxTableColumnBuilder, RawCtxTableSpecBuilder,
     },
-    Bundle, ExecutionOutcome, PyRuntime, PyRuntimePool, Result,
+    Bundle, ExecutionOutcome, PyRuntime, PyRuntimePool, Result, RuntimeLanguage,
 };
 use bytes::Bytes;
 use serde_json::json;
@@ -28,6 +28,8 @@ fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_javascript_shared_buffers_payload()?;
     verify_javascript_json_strategy()?;
     verify_javascript_rawctx_strategy()?;
+    verify_javascript_rawctx_auto_wrapper()?;
+    verify_javascript_rawctx_output_transform()?;
     verify_rawctx_adapter_roundtrip()?;
     verify_prepare_session_with_manifest_defaults()?;
     verify_rawctx_auto_wrapper()?;
@@ -365,6 +367,148 @@ export default function main() {
             assert_eq!(handle.id, "echo-js");
             let bytes = handle.as_slice().expect("shared buffer should retain data");
             assert_eq!(bytes, b"rawctx-js");
+        }
+        other => panic!("unexpected payload variant: {:?}", other),
+    }
+
+    Ok(())
+}
+
+fn verify_javascript_rawctx_auto_wrapper() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:handler",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export function handler(text, extras) {
+    if (text !== "hello-js") {
+        throw new Error("unexpected text value");
+    }
+    if (!extras || typeof extras.amount !== "number" || Math.abs(extras.amount - 42.5) > 1e-6) {
+        throw new Error("missing amount");
+    }
+    if (!extras.meta_info || extras.meta_info.dtype !== "utf8") {
+        throw new Error("missing metadata");
+    }
+    if (!extras.payload_raw || !(extras.payload_raw.data instanceof Uint8Array)) {
+        throw new Error("missing raw payload");
+    }
+    const decoded = new TextDecoder().decode(extras.payload_raw.data);
+    return { upper: decoded.toUpperCase(), amount: extras.amount };
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+
+    let mut descriptor = InvocationDescriptor::new("main:handler");
+    descriptor.language = Some(RuntimeLanguage::JavaScript);
+    descriptor.inputs.push(FieldDescriptor {
+        name: "payload".to_owned(),
+        type_tag: None,
+        metadata: Some(
+            RawCtxBindingBuilder::keyword("text")
+                .mode("positional")
+                .decoder("utf8")
+                .metadata_arg("meta_info")
+                .raw_arg("payload_raw")
+                .build(),
+        ),
+    });
+    descriptor.inputs.push(FieldDescriptor {
+        name: "amount".to_owned(),
+        type_tag: None,
+        metadata: Some(
+            RawCtxBindingBuilder::keyword("amount")
+                .decoder("float64")
+                .build(),
+        ),
+    });
+
+    let session = runtime.prepare_session_with_descriptor(bundle, descriptor)?;
+
+    let payload_meta = RawCtxMetadata::new("utf8").with_extra(json!({ "dtype": "utf8" }))?;
+    let inputs = vec![
+        RawCtxInput::new(
+            "payload",
+            Bytes::from_static(b"hello-js"),
+            Some(payload_meta),
+        )?,
+        RawCtxInput::new(
+            "amount",
+            Bytes::copy_from_slice(&42.5f64.to_le_bytes()),
+            None,
+        )?,
+    ];
+    let mut strategy = RawCtxInvocationStrategy::new(inputs);
+    let outcome = runtime.run_session_with_strategy(&session, &mut strategy)?;
+
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => {
+            assert_eq!(value["upper"], json!("HELLO-JS"));
+            assert_eq!(value["amount"], json!(42.5));
+        }
+        other => panic!("expected json payload, got {:?}", other),
+    }
+
+    Ok(())
+}
+
+fn verify_javascript_rawctx_output_transform() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:handler",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export function handler() {
+    return "buffer-js";
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+
+    let mut descriptor = InvocationDescriptor::new("main:handler");
+    descriptor.language = Some(RuntimeLanguage::JavaScript);
+    descriptor.outputs.push(FieldDescriptor {
+        name: "result".to_owned(),
+        type_tag: None,
+        metadata: Some(
+            RawCtxPublishBuilder::new("js-output")
+                .transform("utf8")
+                .metadata(json!({ "kind": "js" }))
+                .build(),
+        ),
+    });
+
+    let session = runtime.prepare_session_with_descriptor(bundle, descriptor)?;
+    let mut strategy = RawCtxInvocationStrategy::default();
+    let outcome = runtime.run_session_with_strategy(&session, &mut strategy)?;
+
+    match &outcome.status {
+        OutcomeStatus::Success(ResultPayload::SharedBuffers(buffers)) => {
+            assert_eq!(buffers.len(), 1);
+            let handle = &buffers[0];
+            assert_eq!(handle.id, "js-output");
+            let bytes = handle
+                .as_slice()
+                .expect("shared buffer should expose zero-copy slice");
+            assert_eq!(bytes, b"buffer-js");
+            let kind = handle
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("kind"))
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            assert_eq!(kind, "js");
         }
         other => panic!("unexpected payload variant: {:?}", other),
     }

@@ -100,5 +100,30 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "runtime": {
+            "properties": {
+              "language": { "const": "javascript" }
+            },
+            "required": ["language"]
+          }
+        },
+        "required": ["runtime"]
+      },
+      "then": {
+        "properties": {
+          "packages": { "maxItems": 0 },
+          "runtime": {
+            "not": {
+              "required": ["pyodide"]
+            }
+          }
+        }
+      }
+    }
+  ]
 }

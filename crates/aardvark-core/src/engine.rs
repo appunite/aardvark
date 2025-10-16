@@ -504,7 +504,31 @@ impl JsRuntime {
                 )));
             };
 
-            let call_result = function.call(try_catch, namespace.into(), &[]);
+            let global = try_catch.get_current_context().global(try_catch);
+            let wrap_key = v8::String::new(try_catch, "__aardvarkWrapRawctxFunction").unwrap();
+            let mut callable = function;
+            if let Some(wrap_value) = global.get(try_catch, wrap_key.into()) {
+                if let Ok(wrap_fn) = v8::Local::<Function>::try_from(wrap_value) {
+                    let module_name = v8::String::new(try_catch, module_part).ok_or_else(|| {
+                        PyRunnerError::Execution("failed to allocate module name".into())
+                    })?;
+                    let export_js = v8::String::new(try_catch, export_name).ok_or_else(|| {
+                        PyRunnerError::Execution("failed to allocate export name".into())
+                    })?;
+                    let wrapped = wrap_fn.call(
+                        try_catch,
+                        global.into(),
+                        &[callable.into(), module_name.into(), export_js.into()],
+                    );
+                    if let Some(value) = wrapped {
+                        if let Ok(func) = v8::Local::<Function>::try_from(value) {
+                            callable = func;
+                        }
+                    }
+                }
+            }
+
+            let call_result = callable.call(try_catch, namespace.into(), &[]);
             let Some(value) = call_result else {
                 let exception = try_catch.exception();
                 let mut typ = "JavaScriptError".to_string();
