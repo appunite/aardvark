@@ -1,4 +1,5 @@
 target/
+/dist/
 **/*.pyc
 .DS_Store
 .tmp/

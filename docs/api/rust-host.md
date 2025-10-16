@@ -11,6 +11,29 @@ aardvark-core = { path = "crates/aardvark-core" }
 
 For crates.io you will depend on the published version instead of the workspace path.
 
+## Preparing Pyodide assets
+
+Before initialising the runtime you need the pinned Pyodide bundle on disk. The recommended path is
+
+```
+cargo aardvark fetch-pyodide --version 0.28.2 --variant core
+```
+
+which creates `./.aardvark/pyodide/0.28.2/core`. Export `AARDVARK_PYODIDE_PACKAGE_DIR` (or configure `PyRuntimeConfig`) to that directory. Use `--variant full` or `--extra static-libraries,xbuildenv` when you need the larger bundles.
+
+Need a shell-only alternative? Download manually:
+
+```
+curl -L -o pyodide-core-0.28.2.tar.bz2 \
+  https://github.com/pyodide/pyodide/releases/download/0.28.2/pyodide-core-0.28.2.tar.bz2
+echo "c9f6dd067d119e50850849f7428e3c636ecbc2684a0d2ff992f3bd48a1062b6c  pyodide-core-0.28.2.tar.bz2" | sha256sum --check
+tar -xjf pyodide-core-0.28.2.tar.bz2
+mkdir -p .aardvark/pyodide/0.28.2
+mv pyodide .aardvark/pyodide/0.28.2/core
+```
+
+Point the environment variable at the resulting directory and mirror the URL/hash when you upgrade Pyodide.
+
 ## Creating a runtime
 
 ```rust
