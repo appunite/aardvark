@@ -22,10 +22,11 @@
 ```
 
 - `language` – Optional runtime override. Accepts `"python"` (default) or `"javascript"`.
-- `pyodide.version` is optional. When present it must match the version bundled with the runtime.
+- `pyodide.version` is optional and only valid when `language` is `"python"`. When present it must match the version bundled with the runtime.
 
-> JavaScript runtime support is available but currently limited: bundles run with a read-only
-> filesystem and manifest packages are ignored.
+> JavaScript runtime support is available as a preview: bundles run with a read-only filesystem
+> and manifest `packages` are ignored. Ship fully bundled JavaScript code; the runtime does not
+> resolve npm dependencies.
 
 ### `resources`
 
@@ -77,12 +78,29 @@
 }
 ```
 
+### JavaScript example
+
+```json
+{
+  "schemaVersion": "1.0",
+  "entrypoint": "handler:fetch",
+  "runtime": {"language": "javascript"},
+  "resources": {
+    "network": {"allow": ["api.example"], "httpsOnly": true}
+  }
+}
+```
+
+> Ship JavaScript bundles that already include dependencies (via esbuild, webpack, etc.).
+> The runtime does not resolve `node_modules` paths or download packages at invocation time.
+
 ## Validation rules
 
 - Entrypoints must include both module and function names separated by `:`. Whitespace is trimmed automatically.
 - Empty strings in `packages`, `network.allow`, or `hostCapabilities` cause the manifest to be rejected.
 - `quotaBytes` and `defaultLimitMs` must be positive when provided.
 - Mixing Pyodide versions is not supported. Upgrade the runtime or regenerate bundles when Pyodide changes.
+- When `runtime.language` is `"javascript"`, omit `runtime.pyodide` and leave `packages` empty.
 
 ## When to skip the manifest
 

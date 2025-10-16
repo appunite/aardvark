@@ -30,9 +30,10 @@ pub struct BundleManifest {
     /// Entrypoint formatted as `module:function`.
     pub entrypoint: String,
     /// Optional packages that the runtime should preload inside Pyodide.
+    /// Ignored when the selected language is JavaScript.
     #[serde(default)]
     pub packages: Vec<String>,
-    /// Optional runtime-level constraints (currently Pyodide version pinning).
+    /// Optional runtime selection and language-specific constraints.
     #[serde(default)]
     pub runtime: Option<ManifestRuntime>,
     /// Optional sandbox resource policies.
@@ -42,19 +43,20 @@ pub struct BundleManifest {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-/// Runtime-specific manifest configuration.
+/// Runtime-specific manifest configuration selected per bundle.
 pub struct ManifestRuntime {
     /// Desired guest language runtime.
     #[serde(default)]
     pub language: Option<RuntimeLanguage>,
-    /// Optional Pyodide configuration block.
+    /// Optional Pyodide configuration block. Only respected when `language`
+    /// resolves to [`RuntimeLanguage::Python`].
     #[serde(default)]
     pub pyodide: Option<ManifestPyodide>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-/// Pyodide-specific overrides.
+/// Pyodide-specific overrides applied when Python is selected.
 pub struct ManifestPyodide {
     /// Optional Pyodide version requirement.
     #[serde(default)]

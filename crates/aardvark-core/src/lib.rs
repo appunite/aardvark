@@ -1,7 +1,8 @@
-//! Aardvark is an embeddable Pyodide runtime for executing Python bundles inside V8.
+//! Aardvark is an embeddable multi-language runtime for executing sandboxed bundles inside V8.
 //!
-//! The crate targets host services that need a predictable, sandboxed way to run
-//! Python code without shipping a full browser. It exposes:
+//! The crate targets host services that need a predictable, resource-constrained way to run
+//! guest code without shipping a full browser. It currently supports Python (via Pyodide)
+//! and an experimental JavaScript engine. It exposes:
 //!
 //! * [`PyRuntime`] – a single-tenant runtime that prepares bundles, enforces
 //!   resource limits, and surfaces structured outcomes.

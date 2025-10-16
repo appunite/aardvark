@@ -34,6 +34,10 @@ pub use python::PythonEngine;
 
 pub type PyRuntime = AardvarkRuntime;
 
+/// Primary host-facing runtime capable of executing bundles for multiple guest languages.
+///
+/// Instances are cheap to create but expensive to warm; consider pooling via
+/// [`PyRuntimePool`](crate::PyRuntimePool) for throughput-sensitive workloads.
 pub struct AardvarkRuntime {
     config: PyRuntimeConfig,
     engine: Option<Box<dyn LanguageEngine>>,
@@ -99,6 +103,7 @@ struct CollectedDiagnostics {
 }
 
 impl AardvarkRuntime {
+    /// Creates a new runtime instance based on the provided configuration.
     pub fn new(config: PyRuntimeConfig) -> Result<Self> {
         let engine = create_engine(config.default_language, &config)?;
         Ok(Self {
@@ -108,11 +113,14 @@ impl AardvarkRuntime {
         })
     }
 
+    /// Prepares a session from a bundle and entrypoint string using default limits.
     pub fn prepare_session(&mut self, bundle: Bundle, entrypoint: &str) -> Result<PySession> {
         let descriptor = InvocationDescriptor::trivial(entrypoint);
         self.prepare_session_with_descriptor(bundle, descriptor)
     }
 
+    /// Prepares a session using a host-supplied descriptor, allowing fine-grained
+    /// control over limits, language selection, and expected inputs/outputs.
     pub fn prepare_session_with_descriptor(
         &mut self,
         bundle: Bundle,
@@ -223,6 +231,7 @@ impl AardvarkRuntime {
         Ok((session, manifest))
     }
 
+    /// Runs a prepared session using the default invocation strategy for the selected language.
     pub fn run_session(&mut self, session: &PySession) -> Result<ExecutionOutcome> {
         let language = session
             .descriptor()
@@ -240,6 +249,7 @@ impl AardvarkRuntime {
         }
     }
 
+    /// Runs a prepared session with a caller-provided invocation strategy.
     pub fn run_session_with_strategy<S: PyInvocationStrategy>(
         &mut self,
         session: &PySession,

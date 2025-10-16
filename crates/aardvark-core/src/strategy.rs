@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{self, Map as JsonMap, Value as JsonValue};
 use v8;
 
-/// Shared context passed to invocation strategies.
+/// Shared context passed to invocation strategies during a single invocation.
 pub struct InvocationContext<'a> {
     session: &'a PySession,
     runtime: &'a mut JsRuntime,
@@ -48,6 +48,9 @@ impl<'a> InvocationContext<'a> {
 }
 
 /// Trait implemented by host-provided invocation adapters.
+///
+/// Implementations can customise how arguments are materialised, how results
+/// are captured, and which guest runtime APIs are exercised during execution.
 pub trait PyInvocationStrategy {
     /// Human-readable identifier for telemetry.
     fn name(&self) -> &str {
@@ -87,6 +90,10 @@ pub trait PyInvocationStrategy {
 }
 
 /// Simple strategy that executes the entrypoint with no additional hooks.
+///
+/// For Python handlers it forwards descriptor arguments positionally. When the
+/// guest language is JavaScript it invokes the exported function with a single
+/// descriptor argument, matching the semantics of `JavaScriptInvocationStrategy`.
 #[derive(Default)]
 pub struct DefaultInvocationStrategy;
 
@@ -117,12 +124,20 @@ impl PyInvocationStrategy for DefaultInvocationStrategy {
 }
 
 /// Strategy that marshals inputs/outputs via JSON helpers.
+///
+/// When targeting Python, the strategy injects a temporary global containing
+/// the JSON-decoded payload. For JavaScript the payload is published to the
+/// bootstrap so the handler receives a deserialised value via the descriptor.
 #[derive(Default)]
 pub struct JsonInvocationStrategy {
     input: Option<JsonValue>,
 }
 
 /// Strategy that executes JavaScript module exports.
+///
+/// The entrypoint must refer to an exported function (`module:export`). The
+/// runtime passes the invocation descriptor as the single argument, mirroring
+/// the default Cloudflare Workers contract.
 #[derive(Default)]
 pub struct JavaScriptInvocationStrategy;
 

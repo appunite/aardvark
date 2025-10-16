@@ -1,4 +1,4 @@
-# Aardvark Python Runner
+# Aardvark Runtime
 
 ![Aardvark in the Bushveld, Limpopo](https://upload.wikimedia.org/wikipedia/commons/thumb/f/f0/Orycteropus_afer_175359469.jpg/1039px-Orycteropus_afer_175359469.jpg "By Kelly Abram - https://www.inaturalist.org/photos/175359469, CC BY 4.0, https://commons.wikimedia.org/w/index.php?curid=134253363")
 
@@ -6,16 +6,16 @@
 >
 > -- [Wikipedia](https://en.wikipedia.org/wiki/Aardvark)
 
-Embedded Pyodide runtime for executing Python bundles inside V8, with hardened resource controls and structured diagnostics. Inspired by Cloudflare Python Workers, implemented in Rust for host applications that need tight integration and predictable performance. A lightweight JavaScript engine path is also available for preview without filesystem or package provisioning.
+Embedded multi-language runtime for executing sandboxed bundles inside V8, with hardened resource controls and structured diagnostics. The project takes clear inspiration from Cloudflare Python Workers while pursuing an embeddable library-first design for Rust hosts. **Aardvark is experimental software**: APIs, manifests, and runtime semantics may change without notice, and the system has not been hardened for production traffic yet.
 
 ## Why Aardvark?
 
-- **Snapshot-friendly Pyodide** – Reuse warm isolates across requests, preload packages, and capture snapshots to keep cold-starts in check.
+- **Snapshot-friendly runtimes** – Reuse warm isolates across requests, preload packages, and capture snapshots to keep cold-starts in check.
 - **Deterministic sandboxing** – Enforce per-invocation budgets for wall time, CPU, heap, filesystem writes, and outbound network hosts.
 - **Self-describing bundles** – Ship code, manifest, and dependency hints together as a ZIP; hosts can honour or override the manifest contract at runtime.
 - **First-class telemetry** – Every invocation emits structured diagnostics (stdout/stderr, exceptions, resource usage, policy violations) that hosts can feed into their own observability stack.
-- **Runtime pooling** – Amortise Pyodide startup cost by recycling isolates with predictable reset semantics.
-- **Dual-language engine (preview)** – Run JavaScript bundles alongside Python handlers using the same network/filesystem sandboxing. JavaScript support is currently read-only and does not provide package preloads yet.
+- **Runtime pooling** – Amortise startup cost by recycling isolates with predictable reset semantics.
+- **Dual-language engine (preview)** – Run JavaScript bundles alongside Python handlers using the same network/filesystem sandboxing. JavaScript support is read-only for now and expects bring-your-own modules.
 
 ## Quick Start (CLI)
 
@@ -53,29 +53,32 @@ fn execute(bytes: &[u8]) -> anyhow::Result<()> {
 }
 ```
 
-`docs/api/rust-host.md` expands on pooling, custom descriptors, and telemetry export.
+`docs/api/rust-host.md` expands on pooling, invocation strategies, and telemetry export. For JavaScript bundles, pass `language = "javascript"` in the manifest or descriptor and ship a self-contained bundle produced by your JS build tool.
 
 ## Documentation
 
-- Architecture: `docs/architecture/overview.md` (start here), plus deeper dives into lifecycle, sandboxing, packages, and telemetry.
-- API reference: `docs/api/` covers the manifest schema, host integration, Python handler expectations, and diagnostics handling with examples.
+- Architecture guidance lives under `docs/architecture/`. Start with `overview.md` for a top-down explanation, then branch into resource-limits, sandbox internals, and telemetry.
+- API reference under `docs/api/` covers the manifest schema, host integration, handler contracts, and diagnostics handling with examples.
+- Developer onboarding material is available in `docs/dev/` for contributors extending the project.
 
 ## Publishing Notes
 
-The crate exposes the library as `aardvark-core`. When publishing to crates.io:
+The core library is published as `aardvark-core`. Before cutting any experimental build:
 
 - Audit the bundled Pyodide version and rebuild snapshots if needed.
-- Decide whether to ship the CLI (`aardvark-cli`) alongside or keep it as a workspace-only helper.
-- Ensure `AARDVARK_PYODIDE_PACKAGE_DIR` points at a cache available on the target system; the crate does not download wheels at runtime.
+- Decide whether to ship the CLI (`aardvark-cli`) alongside or keep it workspace-only.
+- Ensure `AARDVARK_PYODIDE_PACKAGE_DIR` points at a cache available on the target system; the crate never downloads wheels at runtime.
+- Regenerate the bundle manifest schema if new fields were added.
 
 ## Limitations and Open Work
 
 - Windows builds are not supported or tested.
-- Shared buffer handles now expose zero-copy slices; request an owned copy only if you need to mutate or persist the data.
-- JavaScript support expects pre-bundled modules; the runtime will not fetch npm packages or resolve bare specifiers at invocation time.
+- Shared buffer handles expose zero-copy slices; request an owned copy only if you need to mutate or persist the data.
+- JavaScript support expects pre-bundled modules and does not resolve npm packages or access the filesystem for node_modules.
 - Network sandboxing is allowlist-based per session; there is no per-request override yet.
 - Filesystem quota enforcement only covers the `/session` tree.
 - Streaming outputs and incremental logs are not available; handlers must return a single payload.
+- API stability is not guaranteed; expect breaking changes while the runtime matures.
 
 ## License
 

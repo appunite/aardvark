@@ -1,6 +1,6 @@
 # Host Integration (Rust)
 
-This guide shows how to embed `aardvark-core` in a Rust service. It covers runtime setup, bundle execution, pooling, and error handling.
+This guide shows how to embed `aardvark-core` in a Rust service. It covers runtime setup, bundle execution, pooling, and error handling. Everything here is **experimental** and likely to change; use it for prototypes rather than production traffic.
 
 ## Adding the dependency
 
@@ -31,7 +31,7 @@ Key configuration knobs:
 - `snapshot.save_to` – capture a new snapshot after the first load.
 - `budget_override` – clamp descriptor limits globally (e.g., enforce platform-wide CPU ceilings).
 - `host_capabilities` – capability allowlist applied to every session unless the manifest narrows it further.
-- `default_language` – fallback guest language when descriptors/manifests omit one (defaults to `python`; `javascript` is available behind the experimental engine).
+- `default_language` – fallback guest language when descriptors/manifests omit one (defaults to `python`; set to `javascript` to prefer the preview engine).
 
 ## Preparing a session
 
@@ -52,7 +52,7 @@ fn prepare(runtime: &mut PyRuntime, bundle: Bundle) -> anyhow::Result<aardvark_c
 }
 ```
 
-If you need full control, create an `InvocationDescriptor` and call `prepare_session_with_descriptor` instead.
+If you need full control, create an `InvocationDescriptor` and call `prepare_session_with_descriptor` instead. The descriptor lets you pin the language per invocation via `descriptor.language = Some(RuntimeLanguage::JavaScript);`.
 
 ## Running the session
 
@@ -138,3 +138,9 @@ fn record(outcome: &ExecutionOutcome) {
 - Shared buffers expose zero-copy views via `SharedBufferHandle::as_slice()`; call `into_bytes()` only if you need an owned copy.
 - JavaScript bundles are “bring your own modules”: package resolution is not performed at runtime, so ship a single self-contained bundle produced by your JS bundler.
 - Manifest-driven package caches must be prepared out of band. The core crate does not download wheels from the network.
+
+## Stability & Release Readiness
+
+- Neither runtime path is production hardened. Expect breaking changes to manifests, descriptors, and configuration while we iterate.
+- The manifest schema is currently versioned as `1.0` but should be treated as provisional; schema bumps may happen without backwards compatibility.
+- When we approach a stable release we will publish migration guides and follow semantic versioning.
