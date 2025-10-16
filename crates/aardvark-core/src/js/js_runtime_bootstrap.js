@@ -25,10 +25,59 @@ globalThis.__aardvarkSetHostCapabilities = function setHostCapabilities(list) {
   }
 };
 
+globalThis.__aardvarkGetJsonInput = function getJsonInput() {
+  return globalThis.__aardvarkJsonInput ?? null;
+};
+
+globalThis.__aardvarkConsumeJsonInput = function consumeJsonInput() {
+  const value = globalThis.__aardvarkJsonInput ?? null;
+  globalThis.__aardvarkJsonInput = undefined;
+  return value;
+};
+
 const sharedBufferState = {
   map: new Map(),
   nextId: 1,
 };
+
+const inputBufferState = {
+  buffers: Object.create(null),
+  metadata: Object.create(null),
+};
+
+globalThis.__aardvarkClearInputBuffers = function clearInputBuffers() {
+  inputBufferState.buffers = Object.create(null);
+  inputBufferState.metadata = Object.create(null);
+  globalThis.__aardvarkInputBuffers = inputBufferState.buffers;
+  globalThis.__aardvarkInputMetadata = inputBufferState.metadata;
+  return undefined;
+};
+
+globalThis.__aardvarkRegisterInputBuffer = function registerInputBuffer(
+  name,
+  buffer,
+  metadata,
+) {
+  const key = String(name ?? "").trim();
+  if (!key) {
+    throw new Error("input buffer requires a non-empty name");
+  }
+  if (!(buffer instanceof Uint8Array)) {
+    throw new TypeError("input buffer payload must be a Uint8Array");
+  }
+  inputBufferState.buffers[key] = buffer;
+  if (metadata === undefined || metadata === null) {
+    delete inputBufferState.metadata[key];
+  } else {
+    inputBufferState.metadata[key] = metadata;
+  }
+  globalThis.__aardvarkInputBuffers = inputBufferState.buffers;
+  globalThis.__aardvarkInputMetadata = inputBufferState.metadata;
+  return undefined;
+};
+
+globalThis.__aardvarkInputBuffers = inputBufferState.buffers;
+globalThis.__aardvarkInputMetadata = inputBufferState.metadata;
 
 function normalizeSharedBufferInput(data) {
   if (data instanceof Uint8Array) {

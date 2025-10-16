@@ -246,6 +246,7 @@ impl AardvarkRuntime {
         strategy: &mut S,
     ) -> Result<ExecutionOutcome> {
         let descriptor = session.descriptor();
+        let language = descriptor.language.unwrap_or(self.config.default_language);
         let limits = self.effective_limits(descriptor);
         info!(
             target: "aardvark::budget",
@@ -289,7 +290,7 @@ impl AardvarkRuntime {
         let runtime_id_owned = self.runtime_id_str().to_owned();
         let strategy_result = {
             let js = self.engine_mut().js_mut();
-            let mut ctx = InvocationContext::new(session, js);
+            let mut ctx = InvocationContext::new(session, js, language);
             Self::execute_strategy(strategy, &mut ctx, &runtime_id_owned)?
         };
 

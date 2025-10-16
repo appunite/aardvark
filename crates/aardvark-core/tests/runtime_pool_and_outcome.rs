@@ -26,6 +26,8 @@ fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_javascript_default_entrypoint()?;
     verify_javascript_console_diagnostics()?;
     verify_javascript_shared_buffers_payload()?;
+    verify_javascript_json_strategy()?;
+    verify_javascript_rawctx_strategy()?;
     verify_rawctx_adapter_roundtrip()?;
     verify_prepare_session_with_manifest_defaults()?;
     verify_rawctx_auto_wrapper()?;
@@ -269,6 +271,107 @@ export default function main() {
         "expected empty stderr, got {:?}",
         diagnostics.stderr
     );
+
+    Ok(())
+}
+
+fn verify_javascript_json_strategy() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export default function main() {
+    const consume = globalThis.__aardvarkConsumeJsonInput
+        ? globalThis.__aardvarkConsumeJsonInput()
+        : globalThis.__aardvarkGetJsonInput?.();
+    if (!consume || consume.answer !== 42) {
+        throw new Error("json input missing");
+    }
+    return { ok: true, text: consume.message };
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+
+    let mut strategy = JsonInvocationStrategy::new(Some(json!({
+        "answer": 42,
+        "message": "hello-json",
+    })));
+    let outcome = runtime.run_session_with_strategy(&session, &mut strategy)?;
+
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => {
+            assert_eq!(value["ok"], json!(true));
+            assert_eq!(value["text"], json!("hello-json"));
+        }
+        other => panic!("expected json payload, got {:?}", other),
+    }
+
+    Ok(())
+}
+
+fn verify_javascript_rawctx_strategy() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export default function main() {
+    const buffers = globalThis.__aardvarkInputBuffers || {};
+    const metadata = globalThis.__aardvarkInputMetadata || {};
+    const payload = buffers["payload"];
+    if (!(payload instanceof Uint8Array)) {
+        throw new Error("payload buffer missing");
+    }
+    const meta = metadata["payload"] || {};
+    if (meta.dtype !== "utf8") {
+        throw new Error("unexpected dtype");
+    }
+    const text = new TextDecoder().decode(payload);
+    if (text !== "rawctx-js") {
+        throw new Error("unexpected payload contents");
+    }
+    globalThis.__aardvarkPublishBuffer("echo-js", payload, meta);
+    return null;
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+
+    let meta = RawCtxMetadata::new("utf8");
+    let inputs = vec![RawCtxInput::new(
+        "payload",
+        Bytes::from_static(b"rawctx-js"),
+        Some(meta),
+    )?];
+    let mut strategy = RawCtxInvocationStrategy::new(inputs);
+    let outcome = runtime.run_session_with_strategy(&session, &mut strategy)?;
+
+    match &outcome.status {
+        OutcomeStatus::Success(ResultPayload::SharedBuffers(buffers)) => {
+            assert_eq!(buffers.len(), 1);
+            let handle = &buffers[0];
+            assert_eq!(handle.id, "echo-js");
+            let bytes = handle
+                .as_bytes()
+                .expect("shared buffer should retain bytes");
+            assert_eq!(bytes.as_ref(), b"rawctx-js");
+        }
+        other => panic!("unexpected payload variant: {:?}", other),
+    }
 
     Ok(())
 }
