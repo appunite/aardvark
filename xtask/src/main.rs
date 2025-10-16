@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::process::Command;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use camino::Utf8PathBuf;
 use clap::{Args, Parser, Subcommand};
 
