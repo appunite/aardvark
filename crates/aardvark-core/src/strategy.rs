@@ -2236,25 +2236,33 @@ def __aardvark__apply_single_output(spec, result):
     transform = spec.get("transform", "memoryview")
     if transform == "memoryview":
         if not isinstance(data_value, memoryview):
-            try:
+            if isinstance(data_value, (bytes, bytearray)):
                 data_value = memoryview(data_value)
-            except TypeError:
-                if isinstance(data_value, (bytes, bytearray)):
+            else:
+                try:
                     data_value = memoryview(data_value)
-                else:
+                except TypeError:
                     data_value = memoryview(bytes(data_value))
     elif transform == "bytes":
         if not isinstance(data_value, memoryview):
-            try:
+            if isinstance(data_value, (bytes, bytearray)):
                 data_value = memoryview(data_value)
-            except TypeError:
-                data_value = memoryview(bytes(data_value))
+            else:
+                try:
+                    data_value = memoryview(data_value)
+                except TypeError:
+                    data_value = memoryview(bytes(data_value))
+
         try:
-            data_value = data_value.cast("B")
+            cast_view = data_value.cast("B")
         except (TypeError, ValueError):
-            data_value = memoryview(data_value.tobytes())
-        if not data_value.contiguous:
-            data_value = memoryview(data_value.tobytes())
+            cast_view = None
+
+        if cast_view is not None and cast_view.contiguous:
+            data_value = cast_view
+        else:
+            source_view = cast_view if cast_view is not None else data_value
+            data_value = memoryview(source_view.tobytes())
     elif transform == "utf8":
         if not isinstance(data_value, str):
             raise TypeError("rawctx output expected str for utf8 transform")

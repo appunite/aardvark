@@ -101,7 +101,10 @@ function ensureUint8Array(value) {
     return value;
   }
   if (ArrayBuffer.isView(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset ?? 0, value.byteLength ?? value.length ?? 0);
+    if (typeof value.byteLength !== "number") {
+      throw new TypeError("ArrayBuffer view missing byteLength property");
+    }
+    return new Uint8Array(value.buffer, value.byteOffset ?? 0, value.byteLength);
   }
   if (value instanceof ArrayBuffer || value instanceof SharedArrayBuffer) {
     return new Uint8Array(value);
@@ -194,7 +197,12 @@ function decodeRawctxScalar(binding, payload) {
     case "b64": {
       const encoding = options.encoding || "utf-8";
       const text = getTextDecoder(encoding).decode(buffer);
-      const decoded = atob(text);
+      let decoded;
+      try {
+        decoded = atob(text);
+      } catch (error) {
+        throw new TypeError("invalid base64 payload");
+      }
       const result = new Uint8Array(decoded.length);
       for (let i = 0; i < decoded.length; i += 1) {
         result[i] = decoded.charCodeAt(i);

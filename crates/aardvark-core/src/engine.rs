@@ -2409,6 +2409,17 @@ impl SharedBufferBacking {
         let Some(ptr) = self.store.data() else {
             return &[];
         };
+        let store_size = self.store.byte_length();
+        if self.offset > store_size || self.length > store_size {
+            return &[];
+        }
+        if let Some(end) = self.offset.checked_add(self.length) {
+            if end > store_size {
+                return &[];
+            }
+        } else {
+            return &[];
+        }
         unsafe {
             let data = ptr.as_ptr().add(self.offset) as *const u8;
             std::slice::from_raw_parts(data, self.length)
