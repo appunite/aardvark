@@ -234,7 +234,7 @@ impl AardvarkRuntime {
                 self.run_session_with_strategy(session, &mut strategy)
             }
             RuntimeLanguage::JavaScript => {
-                let mut strategy = JavaScriptInvocationStrategy::default();
+                let mut strategy = JavaScriptInvocationStrategy;
                 self.run_session_with_strategy(session, &mut strategy)
             }
         }
@@ -544,8 +544,7 @@ impl AardvarkRuntime {
 
     fn engine_mut(&mut self) -> &mut dyn LanguageEngine {
         self.engine
-            .as_mut()
-            .map(|engine| &mut **engine)
+            .as_deref_mut()
             .expect("language engine must be initialized")
     }
 
