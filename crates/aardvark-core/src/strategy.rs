@@ -125,7 +125,20 @@ impl PyInvocationStrategy for JavaScriptInvocationStrategy {
     fn invoke(&mut self, ctx: &mut InvocationContext<'_>) -> Result<StrategyResult> {
         let entrypoint = ctx.session().entrypoint().to_owned();
         let execution = ctx.runtime().run_js_entrypoint(&entrypoint)?;
-        let payload = if let Some(json) = execution.json.clone() {
+        let payload = if !execution.shared_buffers.is_empty() {
+            let buffers = execution
+                .shared_buffers
+                .iter()
+                .map(|buffer| {
+                    SharedBufferHandle::with_bytes(
+                        buffer.id.clone(),
+                        buffer.bytes.clone(),
+                        buffer.metadata.clone(),
+                    )
+                })
+                .collect();
+            ResultPayload::SharedBuffers(buffers)
+        } else if let Some(json) = execution.json.clone() {
             ResultPayload::Json(json)
         } else if let Some(text) = execution.result.clone() {
             ResultPayload::Text(text)

@@ -304,10 +304,17 @@ struct RuntimeContext {
     module_by_hash: RefCell<HashMap<i32, String>>,
     module_namespaces: RefCell<HashMap<String, v8::Global<Object>>>,
     pyodide_instance: RefCell<Option<v8::Global<Object>>>,
+    stdout_log: RefCell<String>,
+    stderr_log: RefCell<String>,
     network_policy: RwLock<NetworkPolicy>,
     network_contacts: RwLock<Vec<NetworkContactRecord>>,
     network_denied: RwLock<Vec<NetworkDeniedRecord>>,
     filesystem_violations: RwLock<Vec<FilesystemViolationRecord>>,
+}
+
+enum ConsoleStream {
+    Stdout,
+    Stderr,
 }
 
 impl JsRuntime {
@@ -320,6 +327,8 @@ impl JsRuntime {
             module_by_hash: RefCell::new(HashMap::new()),
             module_namespaces: RefCell::new(HashMap::new()),
             pyodide_instance: RefCell::new(None),
+            stdout_log: RefCell::new(String::new()),
+            stderr_log: RefCell::new(String::new()),
             network_policy: RwLock::new(NetworkPolicy::default()),
             network_contacts: RwLock::new(Vec::new()),
             network_denied: RwLock::new(Vec::new()),
@@ -458,6 +467,19 @@ impl JsRuntime {
         }
 
         let ctx_state = self.context_state.clone();
+        ctx_state.clear_console();
+
+        self.with_context(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let reset_key = v8::String::new(scope, "__aardvarkResetSharedBuffers").unwrap();
+            if let Some(reset_value) = global.get(scope, reset_key.into()) {
+                if let Ok(reset_fn) = Local::<Function>::try_from(reset_value) {
+                    let _ = reset_fn.call(scope, global.into(), &[]);
+                }
+            }
+            Ok(())
+        })?;
+
         let mut invocation: Option<InvocationResult> = None;
 
         self.with_context(|scope, _| {
@@ -572,11 +594,9 @@ impl JsRuntime {
                 execution.exception_type = Some(typ);
                 execution.exception_value = Some(value);
                 execution.traceback = stack;
-                return Ok(execution);
             }
             InvocationResult::Immediate(value_global) => {
                 populate_execution_output(self, value_global, &mut execution)?;
-                return Ok(execution);
             }
             InvocationResult::Promise(promise_global) => {
                 enum PromiseOutcome {
@@ -589,7 +609,9 @@ impl JsRuntime {
                     },
                 }
 
-                let resolved = loop {
+                let mut resolved_value: Option<v8::Global<v8::Value>> = None;
+
+                loop {
                     let outcome = self.with_context(|scope, _| -> Result<PromiseOutcome> {
                         let promise = v8::Local::new(scope, &promise_global);
                         match promise.state() {
@@ -664,22 +686,41 @@ impl JsRuntime {
                         PromiseOutcome::Pending => {
                             self.isolate.perform_microtask_checkpoint();
                         }
-                        PromiseOutcome::Fulfilled(value) => break Some(value),
+                        PromiseOutcome::Fulfilled(value) => {
+                            resolved_value = Some(value);
+                            break;
+                        }
                         PromiseOutcome::Rejected { typ, value, stack } => {
                             execution.exception_type = Some(typ);
                             execution.exception_value = Some(value);
                             execution.traceback = stack;
-                            return Ok(execution);
+                            break;
                         }
                     }
-                };
+                }
 
-                if let Some(value_global) = resolved {
+                if let Some(value_global) = resolved_value {
                     populate_execution_output(self, value_global, &mut execution)?;
                 }
-                return Ok(execution);
             }
         }
+
+        let shared_buffers = self.with_context(|scope, _| -> Result<Vec<SharedBuffer>> {
+            let global = scope.get_current_context().global(scope);
+            let buffers = collect_shared_buffers(scope, global)?;
+            if !buffers.is_empty() {
+                let release_ids: Vec<String> =
+                    buffers.iter().map(|buffer| buffer.id.clone()).collect();
+                release_shared_buffers(scope, global, &release_ids)?;
+            }
+            Ok(buffers)
+        })?;
+        execution.shared_buffers = shared_buffers;
+
+        execution.stdout = ctx_state.take_stdout();
+        execution.stderr = ctx_state.take_stderr();
+
+        Ok(execution)
     }
 
     /// Resets the session scratch filesystem after an invocation completes.
@@ -1706,8 +1747,45 @@ fn native_log_callback(
             parts.push(text.to_rust_string_lossy(scope));
         }
     }
-    if !parts.is_empty() {
-        info!(target = "aardvark::js", "{}", parts.join(" "));
+
+    let mut stream = ConsoleStream::Stdout;
+    let mut start_index = 0;
+    if let Some(first) = parts.first() {
+        match first.as_str() {
+            "__stderr__" => {
+                stream = ConsoleStream::Stderr;
+                start_index = 1;
+            }
+            "__stdout__" => {
+                stream = ConsoleStream::Stdout;
+                start_index = 1;
+            }
+            _ => {}
+        }
+    }
+
+    let message = if start_index >= parts.len() {
+        String::new()
+    } else {
+        parts[start_index..].join(" ")
+    };
+
+    if let Some(context_state) = scope.get_slot::<Rc<RuntimeContext>>() {
+        match stream {
+            ConsoleStream::Stdout => context_state.append_stdout(&message),
+            ConsoleStream::Stderr => context_state.append_stderr(&message),
+        }
+    }
+
+    if !message.is_empty() {
+        match stream {
+            ConsoleStream::Stdout => {
+                info!(target = "aardvark::js", "{}", message);
+            }
+            ConsoleStream::Stderr => {
+                warn!(target = "aardvark::js", "{}", message);
+            }
+        }
     }
     rv.set(v8::undefined(scope).into());
 }
@@ -2138,6 +2216,39 @@ fn normalize_specifier(spec: &str) -> String {
 }
 
 impl RuntimeContext {
+    fn clear_console(&self) {
+        self.stdout_log.borrow_mut().clear();
+        self.stderr_log.borrow_mut().clear();
+    }
+
+    fn append_stdout(&self, message: &str) {
+        if message.is_empty() {
+            return;
+        }
+        let mut stdout = self.stdout_log.borrow_mut();
+        stdout.push_str(message);
+        stdout.push('\n');
+    }
+
+    fn append_stderr(&self, message: &str) {
+        if message.is_empty() {
+            return;
+        }
+        let mut stderr = self.stderr_log.borrow_mut();
+        stderr.push_str(message);
+        stderr.push('\n');
+    }
+
+    fn take_stdout(&self) -> String {
+        let mut stdout = self.stdout_log.borrow_mut();
+        std::mem::take(&mut *stdout)
+    }
+
+    fn take_stderr(&self) -> String {
+        let mut stderr = self.stderr_log.borrow_mut();
+        std::mem::take(&mut *stderr)
+    }
+
     fn module_namespace<'a>(
         &self,
         scope: &mut PinScope<'a, '_>,

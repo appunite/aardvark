@@ -24,6 +24,8 @@ fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_timeout_failure()?;
     verify_shared_buffer_payload()?;
     verify_javascript_default_entrypoint()?;
+    verify_javascript_console_diagnostics()?;
+    verify_javascript_shared_buffers_payload()?;
     verify_rawctx_adapter_roundtrip()?;
     verify_prepare_session_with_manifest_defaults()?;
     verify_rawctx_auto_wrapper()?;
@@ -166,6 +168,108 @@ export default function main() {
         }
         other => panic!("expected json payload, got {:?}", other),
     }
+    Ok(())
+}
+
+fn verify_javascript_console_diagnostics() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export default function main() {
+    console.log("hello js stdout");
+    console.error("hello js stderr");
+    return "ok";
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    assert!(outcome.is_success(), "expected success outcome");
+
+    let diagnostics = &outcome.diagnostics;
+    assert!(
+        diagnostics.stdout.contains("hello js stdout"),
+        "stdout should capture console.log output: {:?}",
+        diagnostics.stdout
+    );
+    assert!(
+        diagnostics.stderr.contains("hello js stderr"),
+        "stderr should capture console.error output: {:?}",
+        diagnostics.stderr
+    );
+
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => assert_eq!(value, &json!("ok")),
+        Some(ResultPayload::Text(text)) => assert_eq!(text, "ok"),
+        other => panic!("unexpected payload variant: {:?}", other),
+    }
+
+    Ok(())
+}
+
+fn verify_javascript_shared_buffers_payload() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export default function main() {
+    const data = new Uint8Array([1, 2, 3, 4]);
+    globalThis.__aardvarkPublishBuffer("js-buffer", data, { dtype: "u8" });
+    return null;
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+
+    match &outcome.status {
+        OutcomeStatus::Success(ResultPayload::SharedBuffers(buffers)) => {
+            assert_eq!(buffers.len(), 1);
+            let handle = &buffers[0];
+            assert_eq!(handle.id, "js-buffer");
+            assert_eq!(handle.length, 4);
+            let bytes = handle
+                .as_bytes()
+                .expect("shared buffer should retain bytes for inspection");
+            assert_eq!(bytes.as_ref(), &[1, 2, 3, 4]);
+            let dtype = handle
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("dtype"))
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            assert_eq!(dtype, "u8");
+        }
+        other => panic!("unexpected payload variant: {:?}", other),
+    }
+
+    let diagnostics = &outcome.diagnostics;
+    assert!(
+        diagnostics.stdout.is_empty(),
+        "expected empty stdout, got {:?}",
+        diagnostics.stdout
+    );
+    assert!(
+        diagnostics.stderr.is_empty(),
+        "expected empty stderr, got {:?}",
+        diagnostics.stderr
+    );
+
     Ok(())
 }
 

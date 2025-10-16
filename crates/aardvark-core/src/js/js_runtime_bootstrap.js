@@ -6,6 +6,13 @@ function normalizeCapabilityName(value) {
   return String(value ?? "").trim().toLowerCase();
 }
 
+function requireCapability(name) {
+  const canonical = normalizeCapabilityName(name);
+  if (!hostCapabilityState.enabled.has(canonical)) {
+    throw new Error(`host capability '${canonical}' is not enabled`);
+  }
+}
+
 globalThis.__aardvarkSetHostCapabilities = function setHostCapabilities(list) {
   hostCapabilityState.enabled.clear();
   if (Array.isArray(list)) {
@@ -18,21 +25,111 @@ globalThis.__aardvarkSetHostCapabilities = function setHostCapabilities(list) {
   }
 };
 
-globalThis.__aardvarkPublishBuffer = function publishBuffer() {
-  // JavaScript engine does not expose shared buffers yet.
-  return undefined;
+const sharedBufferState = {
+  map: new Map(),
+  nextId: 1,
+};
+
+function normalizeSharedBufferInput(data) {
+  if (data instanceof Uint8Array) {
+    return new Uint8Array(data);
+  }
+  if (ArrayBuffer.isView(data)) {
+    const view = data;
+    return new Uint8Array(
+      view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength),
+    );
+  }
+  if (data instanceof ArrayBuffer) {
+    return new Uint8Array(data.slice(0));
+  }
+  if (typeof SharedArrayBuffer !== "undefined" && data instanceof SharedArrayBuffer) {
+    return new Uint8Array(new Uint8Array(data));
+  }
+  if (typeof data === "string") {
+    return new TextEncoder().encode(data);
+  }
+  if (data == null) {
+    return new Uint8Array();
+  }
+  if (Array.isArray(data)) {
+    return Uint8Array.from(data);
+  }
+  throw new TypeError(
+    "publish-buffer expects a Uint8Array, ArrayBuffer view, ArrayBuffer, string, or array",
+  );
+}
+
+function normalizeMetadataInput(metadata) {
+  if (metadata == null) {
+    return null;
+  }
+  try {
+    return JSON.parse(JSON.stringify(metadata));
+  } catch (_err) {
+    throw new TypeError("metadata must be JSON-serializable");
+  }
+}
+
+function recordSharedBufferEvent(event, id, size, metadata) {
+  if (typeof globalThis.__aardvarkRecordBufferEvent === "function") {
+    try {
+      globalThis.__aardvarkRecordBufferEvent(event, id, size, metadata ?? null);
+    } catch (error) {
+      try {
+        console.warn("[buffers] failed to record event", event, id, error);
+      } catch (_logErr) {
+        // ignore logging failures
+      }
+    }
+  }
+}
+
+globalThis.__aardvarkPublishBuffer = function publishBuffer(bufferId, data, metadata) {
+  requireCapability("rawctx_buffers");
+  const assigned =
+    bufferId != null && bufferId !== ""
+      ? String(bufferId)
+      : `buffer-${sharedBufferState.nextId++}`;
+  const view = normalizeSharedBufferInput(data);
+  const metaObject = normalizeMetadataInput(metadata);
+  sharedBufferState.map.set(assigned, {
+    view,
+    metadata: metaObject,
+  });
+  recordSharedBufferEvent("publish", assigned, view.byteLength, metaObject);
+  return assigned;
 };
 
 globalThis.__aardvarkCollectSharedBuffers = function collectSharedBuffers() {
-  return [];
+  requireCapability("rawctx_buffers");
+  const result = [];
+  for (const [id, entry] of sharedBufferState.map.entries()) {
+    result.push({
+      id,
+      buffer: entry.view,
+      metadata: entry.metadata ?? null,
+    });
+  }
+  return result;
 };
 
-globalThis.__aardvarkReleaseSharedBuffers = function releaseSharedBuffers() {
-  return undefined;
+globalThis.__aardvarkReleaseSharedBuffers = function releaseSharedBuffers(ids) {
+  requireCapability("rawctx_buffers");
+  const pending = Array.isArray(ids) ? ids : Array.from(sharedBufferState.map.keys());
+  for (const id of pending) {
+    const key = String(id);
+    if (!sharedBufferState.map.has(key)) {
+      continue;
+    }
+    const entry = sharedBufferState.map.get(key);
+    recordSharedBufferEvent("release", key, entry?.view?.byteLength ?? 0, entry?.metadata ?? null);
+    sharedBufferState.map.delete(key);
+  }
 };
 
 globalThis.__aardvarkResetSharedBuffers = function resetSharedBuffers() {
-  return undefined;
+  globalThis.__aardvarkReleaseSharedBuffers();
 };
 
 const filesystemState = {
