@@ -3,6 +3,7 @@ members = [
   "crates/aardvark-core",
   "crates/aardvark-cli",
   "integration-tests",
+  "xtask",
 ]
 resolver = "2"
 

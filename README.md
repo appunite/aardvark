@@ -38,6 +38,57 @@ AARDVARK_PYODIDE_PACKAGE_DIR=tmp/pyodide \
 
 The manifest bundled with the example instructs the runtime to install `numpy` and `pandas` before executing the handler.
 
+### Preparing Pyodide assets
+
+The runtime expects a local Pyodide cache. Use the helper to download and verify the pinned build:
+
+```
+cargo aardvark fetch-pyodide --version 0.28.2 --variant core
+```
+
+Assets land under `./.aardvark/pyodide/0.28.2/core`. Point `AARDVARK_PYODIDE_PACKAGE_DIR` (or `PyRuntimeConfig::pyodide_version`) at that directory before running the runtime. Swap `--variant full` for the full bundle or add extras like `--extra static-libraries,xbuildenv` when you need development tooling.
+
+Only need the downloader? Install it standalone:
+
+```
+cargo install aardvark-cli --no-default-features --features fetcher
+```
+
+Prefer a pure shell workflow? Mirror the helper with `curl` and `tar`:
+
+```
+curl -L -o pyodide-core-0.28.2.tar.bz2 \
+  https://github.com/pyodide/pyodide/releases/download/0.28.2/pyodide-core-0.28.2.tar.bz2
+echo "c9f6dd067d119e50850849f7428e3c636ecbc2684a0d2ff992f3bd48a1062b6c  pyodide-core-0.28.2.tar.bz2" | sha256sum --check
+tar -xjf pyodide-core-0.28.2.tar.bz2
+mkdir -p .aardvark/pyodide/0.28.2
+mv pyodide .aardvark/pyodide/0.28.2/core
+```
+
+Adjust the URL and checksum if you pin a different version.
+
+### Building CLI release binaries
+
+Use the workspace task runner to produce release artefacts for both CLI variants:
+
+    cargo install cross
+    cargo run -p xtask -- release-cli
+
+The task ensures the required Rust targets are installed (`rustup target add …`) before building.
+
+The command writes binaries into `./dist/`, building the full runtime CLI (`aardvark-cli`) and the downloader-only helper (`cargo-aardvark`) for the default targets (`x86_64-apple-darwin` and `x86_64-unknown-linux-gnu`).
+
+Useful flags:
+
+- `--targets <triple[,triple]>` – override the target list.
+- `--skip-full` / `--skip-fetcher` – build only one variant.
+- `--out-dir <path>` – choose a different output directory.
+
+Prefer to run the underlying cross-compiles yourself?
+
+    cross build -p aardvark-cli --release --target x86_64-unknown-linux-gnu
+    cross build -p aardvark-cli --release --no-default-features --features fetcher --target x86_64-unknown-linux-gnu
+
 ## Embedding in Rust
 
 ```rust
