@@ -2356,8 +2356,40 @@ struct PythonCallResult {
 #[derive(Debug, Clone)]
 pub struct SharedBuffer {
     pub id: String,
-    pub bytes: Bytes,
+    pub length: usize,
     pub metadata: Option<JsonValue>,
+    pub backing: Option<Arc<SharedBufferBacking>>,
+    pub bytes: Option<Bytes>,
+}
+
+#[derive(Debug)]
+pub struct SharedBufferBacking {
+    store: v8::SharedRef<v8::BackingStore>,
+    offset: usize,
+    length: usize,
+}
+
+impl SharedBufferBacking {
+    fn new(store: v8::SharedRef<v8::BackingStore>, offset: usize, length: usize) -> Self {
+        Self {
+            store,
+            offset,
+            length,
+        }
+    }
+
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        if self.length == 0 {
+            return &[];
+        }
+        let Some(ptr) = self.store.data() else {
+            return &[];
+        };
+        unsafe {
+            let data = ptr.as_ptr().add(self.offset) as *const u8;
+            std::slice::from_raw_parts(data, self.length)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2436,8 +2468,11 @@ fn collect_shared_buffers<'a>(
             PyRunnerError::Execution("shared buffer payload is not a Uint8Array".into())
         })?;
         let byte_len = typed_array.byte_length();
-        let mut data = vec![0u8; byte_len];
-        typed_array.copy_contents(&mut data);
+        let array_buffer = typed_array.buffer(scope).ok_or_else(|| {
+            PyRunnerError::Execution("shared buffer missing backing store".into())
+        })?;
+        let backing_store = array_buffer.get_backing_store();
+        let offset = typed_array.byte_offset();
 
         let metadata = match entry_obj.get(scope, metadata_key.into()) {
             Some(value) if !value.is_null_or_undefined() => {
@@ -2456,8 +2491,14 @@ fn collect_shared_buffers<'a>(
 
         buffers.push(SharedBuffer {
             id,
-            bytes: Bytes::from(data),
+            length: byte_len,
             metadata,
+            backing: Some(Arc::new(SharedBufferBacking::new(
+                backing_store,
+                offset,
+                byte_len,
+            ))),
+            bytes: None,
         });
     }
 

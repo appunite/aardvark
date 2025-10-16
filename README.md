@@ -71,7 +71,7 @@ The crate exposes the library as `aardvark-core`. When publishing to crates.io:
 ## Limitations and Open Work
 
 - Windows builds are not supported or tested.
-- Shared buffer handles currently copy data; zero-copy transports are planned but not implemented.
+- Shared buffer handles now expose zero-copy slices; request an owned copy only if you need to mutate or persist the data.
 - Network sandboxing is allowlist-based per session; there is no per-request override yet.
 - Filesystem quota enforcement only covers the `/session` tree.
 - Streaming outputs and incremental logs are not available; handlers must return a single payload.

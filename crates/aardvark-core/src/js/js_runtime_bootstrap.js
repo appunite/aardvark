@@ -81,19 +81,17 @@ globalThis.__aardvarkInputMetadata = inputBufferState.metadata;
 
 function normalizeSharedBufferInput(data) {
   if (data instanceof Uint8Array) {
-    return new Uint8Array(data);
+    return data.subarray(0, data.byteLength);
   }
   if (ArrayBuffer.isView(data)) {
     const view = data;
-    return new Uint8Array(
-      view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength),
-    );
+    return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
   }
   if (data instanceof ArrayBuffer) {
-    return new Uint8Array(data.slice(0));
+    return new Uint8Array(data);
   }
   if (typeof SharedArrayBuffer !== "undefined" && data instanceof SharedArrayBuffer) {
-    return new Uint8Array(new Uint8Array(data));
+    return new Uint8Array(data);
   }
   if (typeof data === "string") {
     return new TextEncoder().encode(data);

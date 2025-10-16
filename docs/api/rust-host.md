@@ -135,5 +135,5 @@ fn record(outcome: &ExecutionOutcome) {
 ## Known gaps
 
 - There is no async API; integrate with async runtimes by wrapping the blocking calls in thread pools.
-- Shared buffers cannot yet be mapped into host memory directly; data copies are required for now.
+- Shared buffers expose zero-copy views via `SharedBufferHandle::as_slice()`; call `into_bytes()` only if you need an owned copy.
 - Manifest-driven package caches must be prepared out of band. The core crate does not download wheels from the network.

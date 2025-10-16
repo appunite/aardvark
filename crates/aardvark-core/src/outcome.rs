@@ -1,9 +1,12 @@
 //! Structured execution outcome returned by the runtime.
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
+use crate::engine::{SharedBuffer, SharedBufferBacking};
 use crate::host::SandboxTelemetry;
 
 /// Aggregated result of an invocation.
@@ -99,13 +102,15 @@ impl ResultPayload {
     }
 }
 
-/// Metadata for zero-copy buffers (not yet fully implemented).
+/// Metadata for zero-copy buffers exposed through the runtime.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SharedBufferHandle {
     pub id: String,
     pub length: usize,
     #[serde(default, skip_serializing, skip_deserializing)]
     data: Option<Bytes>,
+    #[serde(default, skip_serializing, skip_deserializing)]
+    backing: Option<Arc<SharedBufferBacking>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<JsonValue>,
 }
@@ -117,7 +122,18 @@ impl SharedBufferHandle {
             id: id.into(),
             length: bytes.len(),
             data: Some(bytes),
+            backing: None,
             metadata,
+        }
+    }
+
+    pub(crate) fn from_shared_buffer(buffer: &SharedBuffer) -> Self {
+        Self {
+            id: buffer.id.clone(),
+            length: buffer.length,
+            data: buffer.bytes.clone(),
+            backing: buffer.backing.clone(),
+            metadata: buffer.metadata.clone(),
         }
     }
 
@@ -126,9 +142,22 @@ impl SharedBufferHandle {
         self.data.as_ref()
     }
 
+    /// Returns a borrowed slice of the buffer if zero-copy storage is available.
+    pub fn as_slice(&self) -> Option<&[u8]> {
+        if let Some(bytes) = self.data.as_ref() {
+            Some(bytes.as_ref())
+        } else {
+            self.backing.as_ref().map(|backing| backing.as_slice())
+        }
+    }
+
     /// Consume the handle and return the owned Bytes, if present.
     pub fn into_bytes(self) -> Option<Bytes> {
-        self.data
+        match (self.data, self.backing) {
+            (Some(bytes), _) => Some(bytes),
+            (None, Some(backing)) => Some(Bytes::copy_from_slice(backing.as_slice())),
+            _ => None,
+        }
     }
 
     /// Drop the in-memory data but keep metadata/id for out-of-band transports.
@@ -137,6 +166,7 @@ impl SharedBufferHandle {
             id: self.id,
             length: self.length,
             data: None,
+            backing: self.backing,
             metadata: self.metadata,
         }
     }

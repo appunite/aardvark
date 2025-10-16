@@ -129,10 +129,8 @@ def main():
                 ),
                 "metadata should include dtype='u8'"
             );
-            let bytes = handle
-                .as_bytes()
-                .expect("shared buffer should retain bytes");
-            assert_eq!(bytes.as_ref(), b"shared-data");
+            let bytes = handle.as_slice().expect("shared buffer should retain data");
+            assert_eq!(bytes, b"shared-data");
         }
         other => panic!("unexpected payload variant: {:?}", other),
     }
@@ -246,9 +244,9 @@ export default function main() {
             assert_eq!(handle.id, "js-buffer");
             assert_eq!(handle.length, 4);
             let bytes = handle
-                .as_bytes()
-                .expect("shared buffer should retain bytes for inspection");
-            assert_eq!(bytes.as_ref(), &[1, 2, 3, 4]);
+                .as_slice()
+                .expect("shared buffer should retain data for inspection");
+            assert_eq!(bytes, &[1, 2, 3, 4]);
             let dtype = handle
                 .metadata
                 .as_ref()
@@ -365,10 +363,8 @@ export default function main() {
             assert_eq!(buffers.len(), 1);
             let handle = &buffers[0];
             assert_eq!(handle.id, "echo-js");
-            let bytes = handle
-                .as_bytes()
-                .expect("shared buffer should retain bytes");
-            assert_eq!(bytes.as_ref(), b"rawctx-js");
+            let bytes = handle.as_slice().expect("shared buffer should retain data");
+            assert_eq!(bytes, b"rawctx-js");
         }
         other => panic!("unexpected payload variant: {:?}", other),
     }
@@ -543,10 +539,8 @@ def main():
             let handle = &buffers[0];
             assert_eq!(handle.id, "echo");
             assert_eq!(handle.length, b"rawctx-bytes".len());
-            let bytes = handle
-                .as_bytes()
-                .expect("shared buffer should retain bytes");
-            assert_eq!(bytes.as_ref(), b"rawctx-bytes");
+            let bytes = handle.as_slice().expect("shared buffer should retain data");
+            assert_eq!(bytes, b"rawctx-bytes");
             let source = handle
                 .metadata
                 .as_ref()
@@ -652,10 +646,8 @@ def handler(text, amount, blob, text_meta=None, blob_record=None):
             assert_eq!(buffers.len(), 1);
             let handle = &buffers[0];
             assert_eq!(handle.id, "response");
-            let bytes = handle
-                .as_bytes()
-                .expect("shared buffer should retain bytes");
-            assert_eq!(bytes.as_ref(), b"raw-bytes");
+            let bytes = handle.as_slice().expect("shared buffer should retain data");
+            assert_eq!(bytes, b"raw-bytes");
             let dtype = handle
                 .metadata
                 .as_ref()
@@ -714,9 +706,9 @@ def handler():
         OutcomeStatus::Success(ResultPayload::SharedBuffers(buffers)) => {
             assert_eq!(buffers.len(), 2);
             let text = buffers[0]
-                .as_bytes()
-                .expect("text output should expose bytes");
-            assert_eq!(text.as_ref(), b"hello-multi");
+                .as_slice()
+                .expect("text output should expose data");
+            assert_eq!(text, b"hello-multi");
             let text_kind = buffers[0]
                 .metadata
                 .as_ref()
@@ -726,9 +718,9 @@ def handler():
             assert_eq!(text_kind, "text");
 
             let blob = buffers[1]
-                .as_bytes()
-                .expect("blob output should expose bytes");
-            assert_eq!(blob.as_ref(), b"\x00\x01\x02\x03");
+                .as_slice()
+                .expect("blob output should expose data");
+            assert_eq!(blob, b"\x00\x01\x02\x03");
             let blob_kind = buffers[1]
                 .metadata
                 .as_ref()
@@ -1078,10 +1070,8 @@ def handler(blob):
             assert_eq!(buffers.len(), 1);
             let handle = &buffers[0];
             assert_eq!(handle.id, "decoded");
-            let bytes = handle
-                .as_bytes()
-                .expect("shared buffer should retain bytes");
-            assert_eq!(bytes.as_ref(), b"raw-bytes");
+            let bytes = handle.as_slice().expect("shared buffer should retain data");
+            assert_eq!(bytes, b"raw-bytes");
         }
         other => panic!("unexpected payload variant: {:?}", other),
     }

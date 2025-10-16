@@ -102,13 +102,7 @@ impl PyInvocationStrategy for DefaultInvocationStrategy {
             let buffers = execution
                 .shared_buffers
                 .iter()
-                .map(|buffer| {
-                    SharedBufferHandle::with_bytes(
-                        buffer.id.clone(),
-                        buffer.bytes.clone(),
-                        buffer.metadata.clone(),
-                    )
-                })
+                .map(SharedBufferHandle::from_shared_buffer)
                 .collect();
             ResultPayload::SharedBuffers(buffers)
         } else {
@@ -498,13 +492,7 @@ fn payload_from_execution(execution: &ExecutionOutput) -> ResultPayload {
         let buffers = execution
             .shared_buffers
             .iter()
-            .map(|buffer| {
-                SharedBufferHandle::with_bytes(
-                    buffer.id.clone(),
-                    buffer.bytes.clone(),
-                    buffer.metadata.clone(),
-                )
-            })
+            .map(SharedBufferHandle::from_shared_buffer)
             .collect();
         ResultPayload::SharedBuffers(buffers)
     } else if let Some(json) = execution.json.clone() {
@@ -2208,17 +2196,25 @@ def __aardvark__apply_single_output(spec, result):
     transform = spec.get("transform", "memoryview")
     if transform == "memoryview":
         if not isinstance(data_value, memoryview):
-            if isinstance(data_value, (bytes, bytearray)):
+            try:
                 data_value = memoryview(data_value)
-            else:
-                data_value = memoryview(bytes(data_value))
+            except TypeError:
+                if isinstance(data_value, (bytes, bytearray)):
+                    data_value = memoryview(data_value)
+                else:
+                    data_value = memoryview(bytes(data_value))
     elif transform == "bytes":
-        if isinstance(data_value, memoryview):
+        if not isinstance(data_value, memoryview):
+            try:
+                data_value = memoryview(data_value)
+            except TypeError:
+                data_value = memoryview(bytes(data_value))
+        try:
+            data_value = data_value.cast("B")
+        except (TypeError, ValueError):
             data_value = memoryview(data_value.tobytes())
-        elif isinstance(data_value, (bytes, bytearray)):
-            data_value = memoryview(bytes(data_value))
-        else:
-            data_value = memoryview(bytes(data_value))
+        if not data_value.contiguous:
+            data_value = memoryview(data_value.tobytes())
     elif transform == "utf8":
         if not isinstance(data_value, str):
             raise TypeError("rawctx output expected str for utf8 transform")
