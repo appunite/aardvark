@@ -28,6 +28,11 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "language": {
+          "type": "string",
+          "enum": ["python", "javascript"],
+          "description": "Guest language runtime to load. Defaults to python."
+        },
         "pyodide": {
           "type": "object",
           "additionalProperties": false,
@@ -95,5 +100,30 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "runtime": {
+            "properties": {
+              "language": { "const": "javascript" }
+            },
+            "required": ["language"]
+          }
+        },
+        "required": ["runtime"]
+      },
+      "then": {
+        "properties": {
+          "packages": { "maxItems": 0 },
+          "runtime": {
+            "not": {
+              "required": ["pyodide"]
+            }
+          }
+        }
+      }
+    }
+  ]
 }

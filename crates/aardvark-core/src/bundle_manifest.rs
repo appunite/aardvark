@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 use crate::assets::PYODIDE_VERSION;
 use crate::error::{PyRunnerError, Result};
+use crate::runtime_language::RuntimeLanguage;
 
 /// Canonical filename for the manifest within the bundle archive.
 pub const MANIFEST_BASENAME: &str = "aardvark.manifest.json";
@@ -29,9 +30,10 @@ pub struct BundleManifest {
     /// Entrypoint formatted as `module:function`.
     pub entrypoint: String,
     /// Optional packages that the runtime should preload inside Pyodide.
+    /// Ignored when the selected language is JavaScript.
     #[serde(default)]
     pub packages: Vec<String>,
-    /// Optional runtime-level constraints (currently Pyodide version pinning).
+    /// Optional runtime selection and language-specific constraints.
     #[serde(default)]
     pub runtime: Option<ManifestRuntime>,
     /// Optional sandbox resource policies.
@@ -41,16 +43,20 @@ pub struct BundleManifest {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-/// Runtime-specific manifest configuration.
+/// Runtime-specific manifest configuration selected per bundle.
 pub struct ManifestRuntime {
-    /// Optional Pyodide configuration block.
+    /// Desired guest language runtime.
+    #[serde(default)]
+    pub language: Option<RuntimeLanguage>,
+    /// Optional Pyodide configuration block. Only respected when `language`
+    /// resolves to [`RuntimeLanguage::Python`].
     #[serde(default)]
     pub pyodide: Option<ManifestPyodide>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-/// Pyodide-specific overrides.
+/// Pyodide-specific overrides applied when Python is selected.
 pub struct ManifestPyodide {
     /// Optional Pyodide version requirement.
     #[serde(default)]
@@ -180,6 +186,21 @@ impl BundleManifest {
         }
         self.entrypoint = format!("{}:{}", module.trim(), function.trim());
 
+        if let Some(runtime) = &self.runtime {
+            if matches!(runtime.language, Some(RuntimeLanguage::JavaScript)) {
+                if !self.packages.is_empty() {
+                    return Err(PyRunnerError::Manifest(
+                        "javascript runtime bundles must inline dependencies; 'packages' is not supported".into(),
+                    ));
+                }
+                if runtime.pyodide.is_some() {
+                    return Err(PyRunnerError::Manifest(
+                        "pyodide configuration is unsupported when runtime.language is 'javascript'".into(),
+                    ));
+                }
+            }
+        }
+
         let mut seen = HashSet::new();
         let mut normalized = Vec::with_capacity(self.packages.len());
         for pkg in self.packages.iter() {
@@ -283,7 +304,7 @@ mod tests {
     #[test]
     fn manifest_round_trip() {
         let json = format!(
-            "{{\n            \"schemaVersion\": \"1.0\",\n            \"entrypoint\": \"main:run\",\n            \"packages\": [\"Pandas\", \"numpy\"],\n            \"runtime\": {{\"pyodide\": {{\"version\": \"{}\"}}}},\n            \"resources\": {{\n                \"cpu\": {{\"defaultLimitMs\": 5000}},\n                \"network\": {{\"allow\": [\"Example.com\", \"api.example.com\"], \"httpsOnly\": true}},\n                \"filesystem\": {{\"mode\": \"readWrite\", \"quotaBytes\": 1048576}},\n                \"hostCapabilities\": [\"rawctx_buffers\", \"rawctx_buffers\"]\n            }}\n        }}",
+            "{{\n            \"schemaVersion\": \"1.0\",\n            \"entrypoint\": \"main:run\",\n            \"packages\": [\"Pandas\", \"numpy\"],\n            \"runtime\": {{\"language\": \"python\", \"pyodide\": {{\"version\": \"{}\"}}}},\n            \"resources\": {{\n                \"cpu\": {{\"defaultLimitMs\": 5000}},\n                \"network\": {{\"allow\": [\"Example.com\", \"api.example.com\"], \"httpsOnly\": true}},\n                \"filesystem\": {{\"mode\": \"readWrite\", \"quotaBytes\": 1048576}},\n                \"hostCapabilities\": [\"rawctx_buffers\", \"rawctx_buffers\"]\n            }}\n        }}",
             PYODIDE_VERSION
         );
 
@@ -311,6 +332,8 @@ mod tests {
             resources.host_capabilities,
             vec!["rawctx_buffers".to_string()]
         );
+        let runtime = manifest.runtime.as_ref().expect("runtime present");
+        assert_eq!(runtime.language, Some(RuntimeLanguage::Python));
     }
 
     #[test]
@@ -355,5 +378,50 @@ mod tests {
         }"#;
         let err = BundleManifest::from_bytes(json.as_bytes()).unwrap_err();
         assert!(matches!(err, PyRunnerError::Manifest(_)));
+    }
+
+    #[test]
+    fn manifest_rejects_packages_for_js_runtime() {
+        let json = r#"{
+            "schemaVersion": "1.0",
+            "entrypoint": "app:main",
+            "packages": ["leftpad"],
+            "runtime": { "language": "javascript" }
+        }"#;
+        let err = BundleManifest::from_bytes(json.as_bytes()).unwrap_err();
+        assert!(
+            matches!(err, PyRunnerError::Manifest(_)),
+            "expected manifest error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_pyodide_block_for_js_runtime() {
+        let json = r#"{
+            "schemaVersion": "1.0",
+            "entrypoint": "app:main",
+            "runtime": { "language": "javascript", "pyodide": { "version": "0.23.0" } }
+        }"#;
+        let err = BundleManifest::from_bytes(json.as_bytes()).unwrap_err();
+        assert!(
+            matches!(err, PyRunnerError::Manifest(_)),
+            "expected manifest error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn manifest_allows_minimal_js_bundle() {
+        let json = r#"{
+            "schemaVersion": "1.0",
+            "entrypoint": "main:default",
+            "runtime": { "language": "javascript" }
+        }"#;
+        let manifest = BundleManifest::from_bytes(json.as_bytes()).expect("manifest parses");
+        assert!(manifest.packages().is_empty());
+        assert_eq!(manifest.entrypoint(), "main:default");
+        assert_eq!(
+            manifest.runtime.as_ref().and_then(|rt| rt.language),
+            Some(RuntimeLanguage::JavaScript)
+        );
     }
 }

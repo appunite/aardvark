@@ -1,7 +1,8 @@
-//! Aardvark is an embeddable Pyodide runtime for executing Python bundles inside V8.
+//! Aardvark is an embeddable multi-language runtime for executing sandboxed bundles inside V8.
 //!
-//! The crate targets host services that need a predictable, sandboxed way to run
-//! Python code without shipping a full browser. It exposes:
+//! The crate targets host services that need a predictable, resource-constrained way to run
+//! guest code without shipping a full browser. It currently supports Python (via Pyodide)
+//! and an experimental JavaScript engine. It exposes:
 //!
 //! * [`PyRuntime`] – a single-tenant runtime that prepares bundles, enforces
 //!   resource limits, and surfaces structured outcomes.
@@ -48,6 +49,7 @@ pub mod outcome;
 mod package_metadata;
 pub mod pool;
 pub mod runtime;
+mod runtime_language;
 pub mod strategy;
 
 mod engine;
@@ -69,9 +71,11 @@ pub use outcome::{
 };
 pub use pool::{PoolConfig, PyRuntimePool};
 pub use runtime::PyRuntime;
+pub use runtime_language::RuntimeLanguage;
 pub use session::PySession;
 pub use strategy::{
-    DefaultInvocationStrategy, JsonInvocationStrategy, PyInvocationStrategy, RawCtxBindingBuilder,
-    RawCtxInput, RawCtxInvocationStrategy, RawCtxMetadata, RawCtxPublishBuilder,
-    RawCtxTableColumnBuilder, RawCtxTableSpec, RawCtxTableSpecBuilder,
+    DefaultInvocationStrategy, JavaScriptInvocationStrategy, JsonInvocationStrategy,
+    PyInvocationStrategy, RawCtxBindingBuilder, RawCtxInput, RawCtxInvocationStrategy,
+    RawCtxMetadata, RawCtxPublishBuilder, RawCtxTableColumnBuilder, RawCtxTableSpec,
+    RawCtxTableSpecBuilder,
 };

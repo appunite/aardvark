@@ -7,7 +7,7 @@ use aardvark_core::{
         JsonInvocationStrategy, RawCtxBindingBuilder, RawCtxInput, RawCtxInvocationStrategy,
         RawCtxMetadata, RawCtxPublishBuilder, RawCtxTableColumnBuilder, RawCtxTableSpecBuilder,
     },
-    Bundle, ExecutionOutcome, PyRuntime, PyRuntimePool, Result,
+    Bundle, ExecutionOutcome, PyRuntime, PyRuntimePool, Result, RuntimeLanguage,
 };
 use bytes::Bytes;
 use serde_json::json;
@@ -23,6 +23,13 @@ fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_python_exception_outcome()?;
     verify_timeout_failure()?;
     verify_shared_buffer_payload()?;
+    verify_javascript_default_entrypoint()?;
+    verify_javascript_console_diagnostics()?;
+    verify_javascript_shared_buffers_payload()?;
+    verify_javascript_json_strategy()?;
+    verify_javascript_rawctx_strategy()?;
+    verify_javascript_rawctx_auto_wrapper()?;
+    verify_javascript_rawctx_output_transform()?;
     verify_rawctx_adapter_roundtrip()?;
     verify_prepare_session_with_manifest_defaults()?;
     verify_rawctx_auto_wrapper()?;
@@ -124,10 +131,384 @@ def main():
                 ),
                 "metadata should include dtype='u8'"
             );
+            let bytes = handle.as_slice().expect("shared buffer should retain data");
+            assert_eq!(bytes, b"shared-data");
+        }
+        other => panic!("unexpected payload variant: {:?}", other),
+    }
+
+    Ok(())
+}
+
+fn verify_javascript_default_entrypoint() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export default function main() {
+    return { greeting: "hello" };
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, manifest_opt) = runtime.prepare_session_with_manifest(bundle)?;
+    assert!(manifest_opt.is_some(), "manifest should be detected");
+    assert_eq!(
+        session.descriptor().language,
+        Some(aardvark_core::RuntimeLanguage::JavaScript)
+    );
+    let outcome = runtime.run_session(&session)?;
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => {
+            assert_eq!(value, &json!({ "greeting": "hello" }));
+        }
+        other => panic!("expected json payload, got {:?}", other),
+    }
+    Ok(())
+}
+
+fn verify_javascript_console_diagnostics() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export default function main() {
+    console.log("hello js stdout");
+    console.error("hello js stderr");
+    return "ok";
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    assert!(outcome.is_success(), "expected success outcome");
+
+    let diagnostics = &outcome.diagnostics;
+    assert!(
+        diagnostics.stdout.contains("hello js stdout"),
+        "stdout should capture console.log output: {:?}",
+        diagnostics.stdout
+    );
+    assert!(
+        diagnostics.stderr.contains("hello js stderr"),
+        "stderr should capture console.error output: {:?}",
+        diagnostics.stderr
+    );
+
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => assert_eq!(value, &json!("ok")),
+        Some(ResultPayload::Text(text)) => assert_eq!(text, "ok"),
+        other => panic!("unexpected payload variant: {:?}", other),
+    }
+
+    Ok(())
+}
+
+fn verify_javascript_shared_buffers_payload() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export default function main() {
+    const data = new Uint8Array([1, 2, 3, 4]);
+    globalThis.__aardvarkPublishBuffer("js-buffer", data, { dtype: "u8" });
+    return null;
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+
+    match &outcome.status {
+        OutcomeStatus::Success(ResultPayload::SharedBuffers(buffers)) => {
+            assert_eq!(buffers.len(), 1);
+            let handle = &buffers[0];
+            assert_eq!(handle.id, "js-buffer");
+            assert_eq!(handle.length, 4);
             let bytes = handle
-                .as_bytes()
-                .expect("shared buffer should retain bytes");
-            assert_eq!(bytes.as_ref(), b"shared-data");
+                .as_slice()
+                .expect("shared buffer should retain data for inspection");
+            assert_eq!(bytes, &[1, 2, 3, 4]);
+            let dtype = handle
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("dtype"))
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            assert_eq!(dtype, "u8");
+        }
+        other => panic!("unexpected payload variant: {:?}", other),
+    }
+
+    let diagnostics = &outcome.diagnostics;
+    assert!(
+        diagnostics.stdout.is_empty(),
+        "expected empty stdout, got {:?}",
+        diagnostics.stdout
+    );
+    assert!(
+        diagnostics.stderr.is_empty(),
+        "expected empty stderr, got {:?}",
+        diagnostics.stderr
+    );
+
+    Ok(())
+}
+
+fn verify_javascript_json_strategy() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export default function main() {
+    const consume = globalThis.__aardvarkConsumeJsonInput
+        ? globalThis.__aardvarkConsumeJsonInput()
+        : globalThis.__aardvarkGetJsonInput?.();
+    if (!consume || consume.answer !== 42) {
+        throw new Error("json input missing");
+    }
+    return { ok: true, text: consume.message };
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+
+    let mut strategy = JsonInvocationStrategy::new(Some(json!({
+        "answer": 42,
+        "message": "hello-json",
+    })));
+    let outcome = runtime.run_session_with_strategy(&session, &mut strategy)?;
+
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => {
+            assert_eq!(value["ok"], json!(true));
+            assert_eq!(value["text"], json!("hello-json"));
+        }
+        other => panic!("expected json payload, got {:?}", other),
+    }
+
+    Ok(())
+}
+
+fn verify_javascript_rawctx_strategy() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export default function main() {
+    const buffers = globalThis.__aardvarkInputBuffers || {};
+    const metadata = globalThis.__aardvarkInputMetadata || {};
+    const payload = buffers["payload"];
+    if (!(payload instanceof Uint8Array)) {
+        throw new Error("payload buffer missing");
+    }
+    const meta = metadata["payload"] || {};
+    if (meta.dtype !== "utf8") {
+        throw new Error("unexpected dtype");
+    }
+    const text = new TextDecoder().decode(payload);
+    if (text !== "rawctx-js") {
+        throw new Error("unexpected payload contents");
+    }
+    globalThis.__aardvarkPublishBuffer("echo-js", payload, meta);
+    return null;
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+
+    let meta = RawCtxMetadata::new("utf8");
+    let inputs = vec![RawCtxInput::new(
+        "payload",
+        Bytes::from_static(b"rawctx-js"),
+        Some(meta),
+    )?];
+    let mut strategy = RawCtxInvocationStrategy::new(inputs);
+    let outcome = runtime.run_session_with_strategy(&session, &mut strategy)?;
+
+    match &outcome.status {
+        OutcomeStatus::Success(ResultPayload::SharedBuffers(buffers)) => {
+            assert_eq!(buffers.len(), 1);
+            let handle = &buffers[0];
+            assert_eq!(handle.id, "echo-js");
+            let bytes = handle.as_slice().expect("shared buffer should retain data");
+            assert_eq!(bytes, b"rawctx-js");
+        }
+        other => panic!("unexpected payload variant: {:?}", other),
+    }
+
+    Ok(())
+}
+
+fn verify_javascript_rawctx_auto_wrapper() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:handler",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export function handler(text, extras) {
+    if (text !== "hello-js") {
+        throw new Error("unexpected text value");
+    }
+    if (!extras || typeof extras.amount !== "number" || Math.abs(extras.amount - 42.5) > 1e-6) {
+        throw new Error("missing amount");
+    }
+    if (!extras.meta_info || extras.meta_info.dtype !== "utf8") {
+        throw new Error("missing metadata");
+    }
+    if (!extras.payload_raw || !(extras.payload_raw.data instanceof Uint8Array)) {
+        throw new Error("missing raw payload");
+    }
+    const decoded = new TextDecoder().decode(extras.payload_raw.data);
+    return { upper: decoded.toUpperCase(), amount: extras.amount };
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+
+    let mut descriptor = InvocationDescriptor::new("main:handler");
+    descriptor.language = Some(RuntimeLanguage::JavaScript);
+    descriptor.inputs.push(FieldDescriptor {
+        name: "payload".to_owned(),
+        type_tag: None,
+        metadata: Some(
+            RawCtxBindingBuilder::keyword("text")
+                .mode("positional")
+                .decoder("utf8")
+                .metadata_arg("meta_info")
+                .raw_arg("payload_raw")
+                .build(),
+        ),
+    });
+    descriptor.inputs.push(FieldDescriptor {
+        name: "amount".to_owned(),
+        type_tag: None,
+        metadata: Some(
+            RawCtxBindingBuilder::keyword("amount")
+                .decoder("float64")
+                .build(),
+        ),
+    });
+
+    let session = runtime.prepare_session_with_descriptor(bundle, descriptor)?;
+
+    let payload_meta = RawCtxMetadata::new("utf8").with_extra(json!({ "dtype": "utf8" }))?;
+    let inputs = vec![
+        RawCtxInput::new(
+            "payload",
+            Bytes::from_static(b"hello-js"),
+            Some(payload_meta),
+        )?,
+        RawCtxInput::new(
+            "amount",
+            Bytes::copy_from_slice(&42.5f64.to_le_bytes()),
+            None,
+        )?,
+    ];
+    let mut strategy = RawCtxInvocationStrategy::new(inputs);
+    let outcome = runtime.run_session_with_strategy(&session, &mut strategy)?;
+
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => {
+            assert_eq!(value["upper"], json!("HELLO-JS"));
+            assert_eq!(value["amount"], json!(42.5));
+        }
+        other => panic!("expected json payload, got {:?}", other),
+    }
+
+    Ok(())
+}
+
+fn verify_javascript_rawctx_output_transform() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:handler",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export function handler() {
+    return "buffer-js";
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+
+    let mut descriptor = InvocationDescriptor::new("main:handler");
+    descriptor.language = Some(RuntimeLanguage::JavaScript);
+    descriptor.outputs.push(FieldDescriptor {
+        name: "result".to_owned(),
+        type_tag: None,
+        metadata: Some(
+            RawCtxPublishBuilder::new("js-output")
+                .transform("utf8")
+                .metadata(json!({ "kind": "js" }))
+                .build(),
+        ),
+    });
+
+    let session = runtime.prepare_session_with_descriptor(bundle, descriptor)?;
+    let mut strategy = RawCtxInvocationStrategy::default();
+    let outcome = runtime.run_session_with_strategy(&session, &mut strategy)?;
+
+    match &outcome.status {
+        OutcomeStatus::Success(ResultPayload::SharedBuffers(buffers)) => {
+            assert_eq!(buffers.len(), 1);
+            let handle = &buffers[0];
+            assert_eq!(handle.id, "js-output");
+            let bytes = handle
+                .as_slice()
+                .expect("shared buffer should expose zero-copy slice");
+            assert_eq!(bytes, b"buffer-js");
+            let kind = handle
+                .metadata
+                .as_ref()
+                .and_then(|meta| meta.get("kind"))
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            assert_eq!(kind, "js");
         }
         other => panic!("unexpected payload variant: {:?}", other),
     }
@@ -302,10 +683,8 @@ def main():
             let handle = &buffers[0];
             assert_eq!(handle.id, "echo");
             assert_eq!(handle.length, b"rawctx-bytes".len());
-            let bytes = handle
-                .as_bytes()
-                .expect("shared buffer should retain bytes");
-            assert_eq!(bytes.as_ref(), b"rawctx-bytes");
+            let bytes = handle.as_slice().expect("shared buffer should retain data");
+            assert_eq!(bytes, b"rawctx-bytes");
             let source = handle
                 .metadata
                 .as_ref()
@@ -411,10 +790,8 @@ def handler(text, amount, blob, text_meta=None, blob_record=None):
             assert_eq!(buffers.len(), 1);
             let handle = &buffers[0];
             assert_eq!(handle.id, "response");
-            let bytes = handle
-                .as_bytes()
-                .expect("shared buffer should retain bytes");
-            assert_eq!(bytes.as_ref(), b"raw-bytes");
+            let bytes = handle.as_slice().expect("shared buffer should retain data");
+            assert_eq!(bytes, b"raw-bytes");
             let dtype = handle
                 .metadata
                 .as_ref()
@@ -473,9 +850,9 @@ def handler():
         OutcomeStatus::Success(ResultPayload::SharedBuffers(buffers)) => {
             assert_eq!(buffers.len(), 2);
             let text = buffers[0]
-                .as_bytes()
-                .expect("text output should expose bytes");
-            assert_eq!(text.as_ref(), b"hello-multi");
+                .as_slice()
+                .expect("text output should expose data");
+            assert_eq!(text, b"hello-multi");
             let text_kind = buffers[0]
                 .metadata
                 .as_ref()
@@ -485,9 +862,9 @@ def handler():
             assert_eq!(text_kind, "text");
 
             let blob = buffers[1]
-                .as_bytes()
-                .expect("blob output should expose bytes");
-            assert_eq!(blob.as_ref(), b"\x00\x01\x02\x03");
+                .as_slice()
+                .expect("blob output should expose data");
+            assert_eq!(blob, b"\x00\x01\x02\x03");
             let blob_kind = buffers[1]
                 .metadata
                 .as_ref()
@@ -837,10 +1214,8 @@ def handler(blob):
             assert_eq!(buffers.len(), 1);
             let handle = &buffers[0];
             assert_eq!(handle.id, "decoded");
-            let bytes = handle
-                .as_bytes()
-                .expect("shared buffer should retain bytes");
-            assert_eq!(bytes.as_ref(), b"raw-bytes");
+            let bytes = handle.as_slice().expect("shared buffer should retain data");
+            assert_eq!(bytes, b"raw-bytes");
         }
         other => panic!("unexpected payload variant: {:?}", other),
     }
@@ -1726,6 +2101,35 @@ fn bundle_with_main_and_manifest(code: &str, manifest: &str) -> Bundle {
     writer
         .write_all(code.as_bytes())
         .expect("failed to write main entry");
+
+    writer
+        .start_file(
+            "aardvark.manifest.json",
+            FileOptions::default().compression_method(CompressionMethod::Stored),
+        )
+        .expect("failed to start manifest entry");
+    writer
+        .write_all(manifest.as_bytes())
+        .expect("failed to write manifest");
+
+    let cursor = writer.finish().expect("failed to finish bundle");
+    Bundle::from_zip_bytes(cursor.into_inner()).expect("failed to parse bundle")
+}
+
+fn bundle_with_js_main_and_manifest(code: &str, manifest: &str) -> Bundle {
+    use std::io::Cursor;
+
+    let cursor = Cursor::new(Vec::new());
+    let mut writer = zip::ZipWriter::new(cursor);
+    writer
+        .start_file(
+            "main.js",
+            FileOptions::default().compression_method(CompressionMethod::Stored),
+        )
+        .expect("failed to start main.js entry");
+    writer
+        .write_all(code.as_bytes())
+        .expect("failed to write main.js");
 
     writer
         .start_file(

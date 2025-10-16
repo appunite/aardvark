@@ -304,10 +304,17 @@ struct RuntimeContext {
     module_by_hash: RefCell<HashMap<i32, String>>,
     module_namespaces: RefCell<HashMap<String, v8::Global<Object>>>,
     pyodide_instance: RefCell<Option<v8::Global<Object>>>,
+    stdout_log: RefCell<String>,
+    stderr_log: RefCell<String>,
     network_policy: RwLock<NetworkPolicy>,
     network_contacts: RwLock<Vec<NetworkContactRecord>>,
     network_denied: RwLock<Vec<NetworkDeniedRecord>>,
     filesystem_violations: RwLock<Vec<FilesystemViolationRecord>>,
+}
+
+enum ConsoleStream {
+    Stdout,
+    Stderr,
 }
 
 impl JsRuntime {
@@ -320,6 +327,8 @@ impl JsRuntime {
             module_by_hash: RefCell::new(HashMap::new()),
             module_namespaces: RefCell::new(HashMap::new()),
             pyodide_instance: RefCell::new(None),
+            stdout_log: RefCell::new(String::new()),
+            stderr_log: RefCell::new(String::new()),
             network_policy: RwLock::new(NetworkPolicy::default()),
             network_contacts: RwLock::new(Vec::new()),
             network_denied: RwLock::new(Vec::new()),
@@ -418,6 +427,324 @@ impl JsRuntime {
                 })?;
             Ok(())
         })
+    }
+
+    /// Executes a JavaScript module export and returns the normalized output.
+    pub fn run_js_entrypoint(&mut self, entrypoint: &str) -> Result<ExecutionOutput> {
+        let entry_trimmed = entrypoint.trim();
+        let (module_part, export_part) = entry_trimmed
+            .split_once(':')
+            .map(|(module, export)| (module.trim(), export.trim()))
+            .unwrap_or((entry_trimmed, "default"));
+
+        if module_part.is_empty() {
+            return Err(PyRunnerError::Execution(
+                "entrypoint must include a module name".into(),
+            ));
+        }
+
+        let export_name = if export_part.is_empty() {
+            "default"
+        } else {
+            export_part
+        };
+
+        let mut specifier = module_part.replace('.', "/");
+        if !specifier.ends_with(".js") {
+            specifier.push_str(".js");
+        }
+        let specifier = normalize_specifier(&specifier);
+        self.ensure_module(&specifier)?;
+
+        enum InvocationResult {
+            Immediate(v8::Global<v8::Value>),
+            Promise(v8::Global<Promise>),
+            Exception {
+                typ: String,
+                value: String,
+                stack: Option<String>,
+            },
+        }
+
+        let ctx_state = self.context_state.clone();
+        ctx_state.clear_console();
+
+        self.with_context(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let reset_key = v8::String::new(scope, "__aardvarkResetSharedBuffers").unwrap();
+            if let Some(reset_value) = global.get(scope, reset_key.into()) {
+                if let Ok(reset_fn) = Local::<Function>::try_from(reset_value) {
+                    let _ = reset_fn.call(scope, global.into(), &[]);
+                }
+            }
+            Ok(())
+        })?;
+
+        let mut invocation: Option<InvocationResult> = None;
+
+        self.with_context(|scope, _| {
+            v8::tc_scope!(let try_catch, scope);
+            let Some(namespace) = ctx_state.module_namespace(try_catch, &specifier) else {
+                return Err(PyRunnerError::Execution(format!(
+                    "module '{specifier}' not loaded"
+                )));
+            };
+
+            let export_key = v8::String::new(try_catch, export_name)
+                .ok_or_else(|| PyRunnerError::Execution("failed to allocate export name".into()))?;
+            let export_value = namespace.get(try_catch, export_key.into()).ok_or_else(|| {
+                PyRunnerError::Execution(format!(
+                    "module '{specifier}' missing export '{export_name}'"
+                ))
+            })?;
+
+            let Ok(function) = v8::Local::<Function>::try_from(export_value) else {
+                return Err(PyRunnerError::Execution(format!(
+                    "export '{export_name}' is not callable"
+                )));
+            };
+
+            let global = try_catch.get_current_context().global(try_catch);
+            let wrap_key = v8::String::new(try_catch, "__aardvarkWrapRawctxFunction").unwrap();
+            let mut callable = function;
+            if let Some(wrap_value) = global.get(try_catch, wrap_key.into()) {
+                if let Ok(wrap_fn) = v8::Local::<Function>::try_from(wrap_value) {
+                    let module_name = v8::String::new(try_catch, module_part).ok_or_else(|| {
+                        PyRunnerError::Execution("failed to allocate module name".into())
+                    })?;
+                    let export_js = v8::String::new(try_catch, export_name).ok_or_else(|| {
+                        PyRunnerError::Execution("failed to allocate export name".into())
+                    })?;
+                    let wrapped = wrap_fn.call(
+                        try_catch,
+                        global.into(),
+                        &[callable.into(), module_name.into(), export_js.into()],
+                    );
+                    if let Some(value) = wrapped {
+                        if let Ok(func) = v8::Local::<Function>::try_from(value) {
+                            callable = func;
+                        }
+                    }
+                }
+            }
+
+            let call_result = callable.call(try_catch, namespace.into(), &[]);
+            let Some(value) = call_result else {
+                let exception = try_catch.exception();
+                let mut typ = "JavaScriptError".to_string();
+                let mut message = "javascript execution failed".to_string();
+                let mut stack: Option<String> = None;
+
+                if let Some(object) = exception.and_then(|value| value.to_object(try_catch)) {
+                    if let Some(name_value) = object.get(
+                        try_catch,
+                        v8::String::new(try_catch, "name")
+                            .ok_or_else(|| {
+                                PyRunnerError::Execution(
+                                    "failed to allocate error name string".into(),
+                                )
+                            })?
+                            .into(),
+                    ) {
+                        if let Some(name_str) = name_value.to_string(try_catch) {
+                            typ = name_str.to_rust_string_lossy(try_catch);
+                        }
+                    }
+                    if let Some(message_value) = object.get(
+                        try_catch,
+                        v8::String::new(try_catch, "message")
+                            .ok_or_else(|| {
+                                PyRunnerError::Execution(
+                                    "failed to allocate error message string".into(),
+                                )
+                            })?
+                            .into(),
+                    ) {
+                        if let Some(msg_str) = message_value.to_string(try_catch) {
+                            message = msg_str.to_rust_string_lossy(try_catch);
+                        }
+                    }
+                } else if let Some(value) = exception {
+                    if let Some(msg) = value.to_string(try_catch) {
+                        message = msg.to_rust_string_lossy(try_catch);
+                    }
+                }
+
+                if let Some(stack_value) = try_catch.stack_trace() {
+                    if let Some(stack_str) = stack_value.to_string(try_catch) {
+                        stack = Some(stack_str.to_rust_string_lossy(try_catch));
+                    }
+                }
+
+                invocation = Some(InvocationResult::Exception {
+                    typ,
+                    value: message,
+                    stack,
+                });
+                return Ok(());
+            };
+
+            if let Ok(promise) = v8::Local::<Promise>::try_from(value) {
+                invocation = Some(InvocationResult::Promise(v8::Global::new(
+                    try_catch, promise,
+                )));
+            } else {
+                invocation = Some(InvocationResult::Immediate(v8::Global::new(
+                    try_catch, value,
+                )));
+            }
+            Ok(())
+        })?;
+
+        let invocation = invocation.unwrap_or_else(|| InvocationResult::Exception {
+            typ: "JavaScriptError".to_string(),
+            value: "javascript execution failed".to_string(),
+            stack: None,
+        });
+
+        let mut execution = ExecutionOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            result: None,
+            exception_type: None,
+            exception_value: None,
+            traceback: None,
+            json: None,
+            shared_buffers: Vec::new(),
+        };
+
+        match invocation {
+            InvocationResult::Exception { typ, value, stack } => {
+                execution.exception_type = Some(typ);
+                execution.exception_value = Some(value);
+                execution.traceback = stack;
+            }
+            InvocationResult::Immediate(value_global) => {
+                populate_execution_output(self, value_global, &mut execution)?;
+            }
+            InvocationResult::Promise(promise_global) => {
+                enum PromiseOutcome {
+                    Pending,
+                    Fulfilled(v8::Global<v8::Value>),
+                    Rejected {
+                        typ: String,
+                        value: String,
+                        stack: Option<String>,
+                    },
+                }
+
+                let mut resolved_value: Option<v8::Global<v8::Value>> = None;
+
+                loop {
+                    let outcome = self.with_context(|scope, _| -> Result<PromiseOutcome> {
+                        let promise = v8::Local::new(scope, &promise_global);
+                        match promise.state() {
+                            PromiseState::Pending => Ok(PromiseOutcome::Pending),
+                            PromiseState::Fulfilled => {
+                                let value = promise.result(scope);
+                                Ok(PromiseOutcome::Fulfilled(v8::Global::new(scope, value)))
+                            }
+                            PromiseState::Rejected => {
+                                let reason = promise.result(scope);
+                                let mut typ = "JavaScriptError".to_string();
+                                let mut message = reason
+                                    .to_string(scope)
+                                    .map(|s| s.to_rust_string_lossy(scope))
+                                    .unwrap_or_else(|| "javascript promise rejected".into());
+                                let mut stack: Option<String> = None;
+                                if let Some(object) = reason.to_object(scope) {
+                                    if let Some(name_value) = object.get(
+                                        scope,
+                                        v8::String::new(scope, "name")
+                                            .ok_or_else(|| {
+                                                PyRunnerError::Execution(
+                                                    "failed to allocate error name string".into(),
+                                                )
+                                            })?
+                                            .into(),
+                                    ) {
+                                        if let Some(name_str) = name_value.to_string(scope) {
+                                            typ = name_str.to_rust_string_lossy(scope);
+                                        }
+                                    }
+                                    if let Some(message_value) = object.get(
+                                        scope,
+                                        v8::String::new(scope, "message")
+                                            .ok_or_else(|| {
+                                                PyRunnerError::Execution(
+                                                    "failed to allocate error message string"
+                                                        .into(),
+                                                )
+                                            })?
+                                            .into(),
+                                    ) {
+                                        if let Some(msg_str) = message_value.to_string(scope) {
+                                            message = msg_str.to_rust_string_lossy(scope);
+                                        }
+                                    }
+                                    if let Some(stack_value) = object.get(
+                                        scope,
+                                        v8::String::new(scope, "stack")
+                                            .ok_or_else(|| {
+                                                PyRunnerError::Execution(
+                                                    "failed to allocate error stack string".into(),
+                                                )
+                                            })?
+                                            .into(),
+                                    ) {
+                                        if let Some(stack_str) = stack_value.to_string(scope) {
+                                            stack = Some(stack_str.to_rust_string_lossy(scope));
+                                        }
+                                    }
+                                }
+                                Ok(PromiseOutcome::Rejected {
+                                    typ,
+                                    value: message,
+                                    stack,
+                                })
+                            }
+                        }
+                    })?;
+
+                    match outcome {
+                        PromiseOutcome::Pending => {
+                            self.isolate.perform_microtask_checkpoint();
+                        }
+                        PromiseOutcome::Fulfilled(value) => {
+                            resolved_value = Some(value);
+                            break;
+                        }
+                        PromiseOutcome::Rejected { typ, value, stack } => {
+                            execution.exception_type = Some(typ);
+                            execution.exception_value = Some(value);
+                            execution.traceback = stack;
+                            break;
+                        }
+                    }
+                }
+
+                if let Some(value_global) = resolved_value {
+                    populate_execution_output(self, value_global, &mut execution)?;
+                }
+            }
+        }
+
+        let shared_buffers = self.with_context(|scope, _| -> Result<Vec<SharedBuffer>> {
+            let global = scope.get_current_context().global(scope);
+            let buffers = collect_shared_buffers(scope, global)?;
+            if !buffers.is_empty() {
+                let release_ids: Vec<String> =
+                    buffers.iter().map(|buffer| buffer.id.clone()).collect();
+                release_shared_buffers(scope, global, &release_ids)?;
+            }
+            Ok(buffers)
+        })?;
+        execution.shared_buffers = shared_buffers;
+
+        execution.stdout = ctx_state.take_stdout();
+        execution.stderr = ctx_state.take_stderr();
+
+        Ok(execution)
     }
 
     /// Resets the session scratch filesystem after an invocation completes.
@@ -1206,6 +1533,36 @@ impl JsRuntime {
     }
 }
 
+fn populate_execution_output(
+    runtime: &mut JsRuntime,
+    value_global: v8::Global<v8::Value>,
+    execution: &mut ExecutionOutput,
+) -> Result<()> {
+    runtime.with_context(|scope, _| {
+        let value = v8::Local::new(scope, &value_global);
+        if value.is_null_or_undefined() {
+            execution.result = None;
+            execution.json = None;
+            return Ok(());
+        }
+
+        if let Some(json_value) = v8::json::stringify(scope, value) {
+            let json_str = json_value.to_rust_string_lossy(scope);
+            if let Ok(parsed) = serde_json::from_str(&json_str) {
+                execution.json = Some(parsed);
+            }
+        }
+
+        if let Some(string_value) = value.to_string(scope) {
+            execution.result = Some(string_value.to_rust_string_lossy(scope));
+        } else {
+            execution.result = Some("<unprintable>".to_string());
+        }
+
+        Ok(())
+    })
+}
+
 fn exec_script(
     scope: &mut PinScope<'_, '_>,
     name: &str,
@@ -1414,8 +1771,45 @@ fn native_log_callback(
             parts.push(text.to_rust_string_lossy(scope));
         }
     }
-    if !parts.is_empty() {
-        info!(target = "aardvark::js", "{}", parts.join(" "));
+
+    let mut stream = ConsoleStream::Stdout;
+    let mut start_index = 0;
+    if let Some(first) = parts.first() {
+        match first.as_str() {
+            "__stderr__" => {
+                stream = ConsoleStream::Stderr;
+                start_index = 1;
+            }
+            "__stdout__" => {
+                stream = ConsoleStream::Stdout;
+                start_index = 1;
+            }
+            _ => {}
+        }
+    }
+
+    let message = if start_index >= parts.len() {
+        String::new()
+    } else {
+        parts[start_index..].join(" ")
+    };
+
+    if let Some(context_state) = scope.get_slot::<Rc<RuntimeContext>>() {
+        match stream {
+            ConsoleStream::Stdout => context_state.append_stdout(&message),
+            ConsoleStream::Stderr => context_state.append_stderr(&message),
+        }
+    }
+
+    if !message.is_empty() {
+        match stream {
+            ConsoleStream::Stdout => {
+                info!(target = "aardvark::js", "{}", message);
+            }
+            ConsoleStream::Stderr => {
+                warn!(target = "aardvark::js", "{}", message);
+            }
+        }
     }
     rv.set(v8::undefined(scope).into());
 }
@@ -1846,6 +2240,39 @@ fn normalize_specifier(spec: &str) -> String {
 }
 
 impl RuntimeContext {
+    fn clear_console(&self) {
+        self.stdout_log.borrow_mut().clear();
+        self.stderr_log.borrow_mut().clear();
+    }
+
+    fn append_stdout(&self, message: &str) {
+        if message.is_empty() {
+            return;
+        }
+        let mut stdout = self.stdout_log.borrow_mut();
+        stdout.push_str(message);
+        stdout.push('\n');
+    }
+
+    fn append_stderr(&self, message: &str) {
+        if message.is_empty() {
+            return;
+        }
+        let mut stderr = self.stderr_log.borrow_mut();
+        stderr.push_str(message);
+        stderr.push('\n');
+    }
+
+    fn take_stdout(&self) -> String {
+        let mut stdout = self.stdout_log.borrow_mut();
+        std::mem::take(&mut *stdout)
+    }
+
+    fn take_stderr(&self) -> String {
+        let mut stderr = self.stderr_log.borrow_mut();
+        std::mem::take(&mut *stderr)
+    }
+
     fn module_namespace<'a>(
         &self,
         scope: &mut PinScope<'a, '_>,
@@ -1953,8 +2380,51 @@ struct PythonCallResult {
 #[derive(Debug, Clone)]
 pub struct SharedBuffer {
     pub id: String,
-    pub bytes: Bytes,
+    pub length: usize,
     pub metadata: Option<JsonValue>,
+    pub backing: Option<Arc<SharedBufferBacking>>,
+    pub bytes: Option<Bytes>,
+}
+
+#[derive(Debug)]
+pub struct SharedBufferBacking {
+    store: v8::SharedRef<v8::BackingStore>,
+    offset: usize,
+    length: usize,
+}
+
+impl SharedBufferBacking {
+    fn new(store: v8::SharedRef<v8::BackingStore>, offset: usize, length: usize) -> Self {
+        Self {
+            store,
+            offset,
+            length,
+        }
+    }
+
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        if self.length == 0 {
+            return &[];
+        }
+        let Some(ptr) = self.store.data() else {
+            return &[];
+        };
+        let store_size = self.store.byte_length();
+        if self.offset > store_size || self.length > store_size {
+            return &[];
+        }
+        if let Some(end) = self.offset.checked_add(self.length) {
+            if end > store_size {
+                return &[];
+            }
+        } else {
+            return &[];
+        }
+        unsafe {
+            let data = ptr.as_ptr().add(self.offset) as *const u8;
+            std::slice::from_raw_parts(data, self.length)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2033,8 +2503,11 @@ fn collect_shared_buffers<'a>(
             PyRunnerError::Execution("shared buffer payload is not a Uint8Array".into())
         })?;
         let byte_len = typed_array.byte_length();
-        let mut data = vec![0u8; byte_len];
-        typed_array.copy_contents(&mut data);
+        let array_buffer = typed_array.buffer(scope).ok_or_else(|| {
+            PyRunnerError::Execution("shared buffer missing backing store".into())
+        })?;
+        let backing_store = array_buffer.get_backing_store();
+        let offset = typed_array.byte_offset();
 
         let metadata = match entry_obj.get(scope, metadata_key.into()) {
             Some(value) if !value.is_null_or_undefined() => {
@@ -2053,8 +2526,14 @@ fn collect_shared_buffers<'a>(
 
         buffers.push(SharedBuffer {
             id,
-            bytes: Bytes::from(data),
+            length: byte_len,
             metadata,
+            backing: Some(Arc::new(SharedBufferBacking::new(
+                backing_store,
+                offset,
+                byte_len,
+            ))),
+            bytes: None,
         });
     }
 

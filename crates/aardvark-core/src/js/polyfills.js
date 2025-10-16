@@ -1,7 +1,7 @@
 // Minimal host polyfills for the Pyodide runtime environment.
 globalThis.self = globalThis;
 
-const __pyRunnerForwardLog = (...args) => {
+const __pyRunnerForwardLogFactory = (stream) => (...args) => {
   const message = args
     .map((value) => {
       try {
@@ -26,16 +26,19 @@ const __pyRunnerForwardLog = (...args) => {
     })
     .join(" ");
   if (typeof globalThis.__pyRunnerNativeLog === "function") {
-    globalThis.__pyRunnerNativeLog(message);
+    globalThis.__pyRunnerNativeLog(stream, message);
   }
 };
 
 if (!globalThis.console) {
   globalThis.console = {};
 }
-globalThis.console.log = __pyRunnerForwardLog;
-globalThis.console.warn = __pyRunnerForwardLog;
-globalThis.console.error = __pyRunnerForwardLog;
+const __pyRunnerStdoutLog = __pyRunnerForwardLogFactory("__stdout__");
+const __pyRunnerStderrLog = __pyRunnerForwardLogFactory("__stderr__");
+globalThis.console.log = __pyRunnerStdoutLog;
+globalThis.console.info = __pyRunnerStdoutLog;
+globalThis.console.warn = __pyRunnerStderrLog;
+globalThis.console.error = __pyRunnerStderrLog;
 
 if (typeof globalThis.addEventListener !== "function") {
   globalThis.addEventListener = () => {};

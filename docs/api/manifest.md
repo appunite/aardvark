@@ -7,20 +7,26 @@
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `schemaVersion` | string | yes | Must equal `"1.0"`. The runtime rejects other versions.
-| `entrypoint` | string | yes | `module:function` pointing at the Python handler exported by the bundle.
+| `entrypoint` | string | yes | `module:export` pointing at the handler exported by the bundle.
 | `packages` | array(string) | no | Pyodide packages to preload. Names are normalised (trimmed, case-insensitive dedupe).
-| `runtime` | object | no | Additional runtime constraints (currently only Pyodide version pinning).
+| `runtime` | object | no | Runtime selection and language-specific constraints (language defaults to `python`).
 | `resources` | object | no | Resource policies for CPU, network, filesystem, and host capabilities.
 
 ### `runtime`
 
 ```
 "runtime": {
+  "language": "javascript",
   "pyodide": {"version": "0.28.2"}
 }
 ```
 
-- `pyodide.version` is optional. When present it must match the version bundled with the runtime.
+- `language` – Optional runtime override. Accepts `"python"` (default) or `"javascript"`.
+- `pyodide.version` is optional and only valid when `language` is `"python"`. When present it must match the version bundled with the runtime.
+
+> JavaScript runtime support is available as a preview: bundles run with a read-only filesystem
+> and manifest `packages` are ignored. Ship fully bundled JavaScript code; the runtime does not
+> resolve npm dependencies.
 
 ### `resources`
 
@@ -54,6 +60,7 @@
   "entrypoint": "service:handler",
   "packages": ["numpy", "pandas"],
   "runtime": {
+    "language": "python",
     "pyodide": {"version": "0.28.2"}
   },
   "resources": {
@@ -71,17 +78,34 @@
 }
 ```
 
+### JavaScript example
+
+```json
+{
+  "schemaVersion": "1.0",
+  "entrypoint": "handler:fetch",
+  "runtime": {"language": "javascript"},
+  "resources": {
+    "network": {"allow": ["api.example"], "httpsOnly": true}
+  }
+}
+```
+
+> Ship JavaScript bundles that already include dependencies (via esbuild, webpack, etc.).
+> The runtime does not resolve `node_modules` paths or download packages at invocation time.
+
 ## Validation rules
 
 - Entrypoints must include both module and function names separated by `:`. Whitespace is trimmed automatically.
 - Empty strings in `packages`, `network.allow`, or `hostCapabilities` cause the manifest to be rejected.
 - `quotaBytes` and `defaultLimitMs` must be positive when provided.
 - Mixing Pyodide versions is not supported. Upgrade the runtime or regenerate bundles when Pyodide changes.
+- When `runtime.language` is `"javascript"`, omit `runtime.pyodide` and leave `packages` empty.
 
 ## When to skip the manifest
 
 - Infrastructure that already ships descriptors, packages, and limits through another channel can omit the manifest entirely.
-- The runtime still expects the entrypoint to follow the `module:function` convention even without the manifest; hosts pass it via `InvocationDescriptor`.
+- The runtime still expects the entrypoint to follow the `module:export` convention even without the manifest; hosts pass it via `InvocationDescriptor`.
 - Bundles without a manifest cannot use manifest-only features such as built-in package installation or manifest-defined network policies.
 
 ## Known gaps

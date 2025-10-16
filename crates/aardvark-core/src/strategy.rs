@@ -4,21 +4,31 @@ use crate::engine::{ExecutionOutput, JsRuntime};
 use crate::error::{PyRunnerError, Result};
 use crate::invocation::FieldDescriptor;
 use crate::outcome::{ResultPayload, SharedBufferHandle};
+use crate::runtime_language::RuntimeLanguage;
 use crate::session::PySession;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{self, Map as JsonMap, Value as JsonValue};
 use v8;
 
-/// Shared context passed to invocation strategies.
+/// Shared context passed to invocation strategies during a single invocation.
 pub struct InvocationContext<'a> {
     session: &'a PySession,
     runtime: &'a mut JsRuntime,
+    language: RuntimeLanguage,
 }
 
 impl<'a> InvocationContext<'a> {
-    pub(crate) fn new(session: &'a PySession, runtime: &'a mut JsRuntime) -> Self {
-        Self { session, runtime }
+    pub(crate) fn new(
+        session: &'a PySession,
+        runtime: &'a mut JsRuntime,
+        language: RuntimeLanguage,
+    ) -> Self {
+        Self {
+            session,
+            runtime,
+            language,
+        }
     }
 
     /// Returns the prepared session, including descriptor metadata.
@@ -30,9 +40,17 @@ impl<'a> InvocationContext<'a> {
     pub fn runtime(&mut self) -> &mut JsRuntime {
         self.runtime
     }
+
+    /// Returns the guest language in use for this invocation.
+    pub fn language(&self) -> RuntimeLanguage {
+        self.language
+    }
 }
 
 /// Trait implemented by host-provided invocation adapters.
+///
+/// Implementations can customise how arguments are materialised, how results
+/// are captured, and which guest runtime APIs are exercised during execution.
 pub trait PyInvocationStrategy {
     /// Human-readable identifier for telemetry.
     fn name(&self) -> &str {
@@ -72,6 +90,10 @@ pub trait PyInvocationStrategy {
 }
 
 /// Simple strategy that executes the entrypoint with no additional hooks.
+///
+/// For Python handlers it forwards descriptor arguments positionally. When the
+/// guest language is JavaScript it invokes the exported function with a single
+/// descriptor argument, matching the semantics of `JavaScriptInvocationStrategy`.
 #[derive(Default)]
 pub struct DefaultInvocationStrategy;
 
@@ -87,13 +109,7 @@ impl PyInvocationStrategy for DefaultInvocationStrategy {
             let buffers = execution
                 .shared_buffers
                 .iter()
-                .map(|buffer| {
-                    SharedBufferHandle::with_bytes(
-                        buffer.id.clone(),
-                        buffer.bytes.clone(),
-                        buffer.metadata.clone(),
-                    )
-                })
+                .map(SharedBufferHandle::from_shared_buffer)
                 .collect();
             ResultPayload::SharedBuffers(buffers)
         } else {
@@ -108,9 +124,34 @@ impl PyInvocationStrategy for DefaultInvocationStrategy {
 }
 
 /// Strategy that marshals inputs/outputs via JSON helpers.
+///
+/// When targeting Python, the strategy injects a temporary global containing
+/// the JSON-decoded payload. For JavaScript the payload is published to the
+/// bootstrap so the handler receives a deserialised value via the descriptor.
 #[derive(Default)]
 pub struct JsonInvocationStrategy {
     input: Option<JsonValue>,
+}
+
+/// Strategy that executes JavaScript module exports.
+///
+/// The entrypoint must refer to an exported function (`module:export`). The
+/// runtime passes the invocation descriptor as the single argument, mirroring
+/// the default Cloudflare Workers contract.
+#[derive(Default)]
+pub struct JavaScriptInvocationStrategy;
+
+impl PyInvocationStrategy for JavaScriptInvocationStrategy {
+    fn name(&self) -> &str {
+        "javascript"
+    }
+
+    fn invoke(&mut self, ctx: &mut InvocationContext<'_>) -> Result<StrategyResult> {
+        let entrypoint = ctx.session().entrypoint().to_owned();
+        let execution = ctx.runtime().run_js_entrypoint(&entrypoint)?;
+        let payload = payload_from_execution(&execution);
+        Ok(StrategyResult { execution, payload })
+    }
 }
 
 impl JsonInvocationStrategy {
@@ -125,7 +166,44 @@ impl PyInvocationStrategy for JsonInvocationStrategy {
         "json"
     }
 
+    fn pre_execute_js(&mut self, ctx: &mut InvocationContext<'_>) -> Result<()> {
+        if ctx.language() != RuntimeLanguage::JavaScript {
+            return Ok(());
+        }
+
+        let json_string = match &self.input {
+            Some(value) => Some(serde_json::to_string(value).map_err(|err| {
+                PyRunnerError::Execution(format!("failed to encode json input: {err}"))
+            })?),
+            None => None,
+        };
+
+        ctx.runtime().with_context(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let key = v8::String::new(scope, "__aardvarkJsonInput").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate json input key".into())
+            })?;
+
+            let value: v8::Local<v8::Value> = if let Some(ref json) = json_string {
+                let json_str = v8::String::new(scope, json).ok_or_else(|| {
+                    PyRunnerError::Execution("failed to allocate json input payload".into())
+                })?;
+                v8::json::parse(scope, json_str).ok_or_else(|| {
+                    PyRunnerError::Execution("failed to parse json input payload".into())
+                })?
+            } else {
+                v8::undefined(scope).into()
+            };
+
+            global.set(scope, key.into(), value);
+            Ok(())
+        })
+    }
+
     fn pre_execute_py(&mut self, ctx: &mut InvocationContext<'_>) -> Result<()> {
+        if ctx.language() != RuntimeLanguage::Python {
+            return Ok(());
+        }
         if let Some(ref value) = self.input {
             let encoded = serde_json::to_string(value).map_err(|err| {
                 PyRunnerError::Execution(format!("failed to encode json input: {err}"))
@@ -142,37 +220,27 @@ impl PyInvocationStrategy for JsonInvocationStrategy {
 
     fn invoke(&mut self, ctx: &mut InvocationContext<'_>) -> Result<StrategyResult> {
         let entrypoint = ctx.session().entrypoint().to_owned();
-        let mut execution = ctx.runtime().run_python_entrypoint(&entrypoint)?;
-        if execution.json.is_none() {
-            if let Some(value) = execution
-                .result
-                .as_ref()
-                .and_then(|result| serde_json::from_str::<JsonValue>(result).ok())
-            {
-                execution.json = Some(value);
+        match ctx.language() {
+            RuntimeLanguage::Python => {
+                let mut execution = ctx.runtime().run_python_entrypoint(&entrypoint)?;
+                if execution.json.is_none() {
+                    if let Some(value) = execution
+                        .result
+                        .as_ref()
+                        .and_then(|result| serde_json::from_str::<JsonValue>(result).ok())
+                    {
+                        execution.json = Some(value);
+                    }
+                }
+                let payload = payload_from_execution(&execution);
+                Ok(StrategyResult { execution, payload })
+            }
+            RuntimeLanguage::JavaScript => {
+                let execution = ctx.runtime().run_js_entrypoint(&entrypoint)?;
+                let payload = payload_from_execution(&execution);
+                Ok(StrategyResult { execution, payload })
             }
         }
-        let payload = if !execution.shared_buffers.is_empty() {
-            let buffers = execution
-                .shared_buffers
-                .iter()
-                .map(|buffer| {
-                    SharedBufferHandle::with_bytes(
-                        buffer.id.clone(),
-                        buffer.bytes.clone(),
-                        buffer.metadata.clone(),
-                    )
-                })
-                .collect();
-            ResultPayload::SharedBuffers(buffers)
-        } else if let Some(value) = execution.json.as_ref() {
-            ResultPayload::Json(value.clone())
-        } else if let Some(text) = execution.result.as_ref() {
-            ResultPayload::Text(text.clone())
-        } else {
-            ResultPayload::None
-        };
-        Ok(StrategyResult { execution, payload })
     }
 }
 
@@ -383,10 +451,14 @@ impl PyInvocationStrategy for RawCtxInvocationStrategy {
     }
 
     fn pre_execute_js(&mut self, ctx: &mut InvocationContext<'_>) -> Result<()> {
-        self.publish_inputs(ctx.runtime())
+        self.publish_inputs(ctx.runtime())?;
+        self.install_js_auto_wrapper(ctx)
     }
 
     fn pre_execute_py(&mut self, ctx: &mut InvocationContext<'_>) -> Result<()> {
+        if ctx.language() != RuntimeLanguage::Python {
+            return Ok(());
+        }
         self.materialize_python_views(ctx)?;
         self.install_auto_wrapper(ctx)
     }
@@ -401,37 +473,51 @@ impl PyInvocationStrategy for RawCtxInvocationStrategy {
 
     fn invoke(&mut self, ctx: &mut InvocationContext<'_>) -> Result<StrategyResult> {
         let entrypoint = ctx.session().entrypoint().to_owned();
-        let mut execution = ctx.runtime().run_python_entrypoint(&entrypoint)?;
-        if execution.json.is_none() {
-            if let Some(value) = execution
-                .result
-                .as_ref()
-                .and_then(|result| serde_json::from_str::<JsonValue>(result).ok())
-            {
-                execution.json = Some(value);
+        match ctx.language() {
+            RuntimeLanguage::Python => {
+                let mut execution = ctx.runtime().run_python_entrypoint(&entrypoint)?;
+                if execution.json.is_none() {
+                    if let Some(value) = execution
+                        .result
+                        .as_ref()
+                        .and_then(|result| serde_json::from_str::<JsonValue>(result).ok())
+                    {
+                        execution.json = Some(value);
+                    }
+                }
+                let payload = payload_from_execution(&execution);
+                Ok(StrategyResult { execution, payload })
+            }
+            RuntimeLanguage::JavaScript => {
+                let execution = ctx.runtime().run_js_entrypoint(&entrypoint)?;
+                let payload = payload_from_execution(&execution);
+                Ok(StrategyResult { execution, payload })
             }
         }
-        let payload = if !execution.shared_buffers.is_empty() {
-            let buffers = execution
-                .shared_buffers
-                .iter()
-                .map(|buffer| {
-                    SharedBufferHandle::with_bytes(
-                        buffer.id.clone(),
-                        buffer.bytes.clone(),
-                        buffer.metadata.clone(),
-                    )
-                })
-                .collect();
-            ResultPayload::SharedBuffers(buffers)
-        } else if let Some(value) = execution.json.as_ref() {
-            ResultPayload::Json(value.clone())
-        } else if let Some(text) = execution.result.as_ref() {
-            ResultPayload::Text(text.clone())
+    }
+}
+
+impl RawCtxInvocationStrategy {
+    fn install_js_auto_wrapper(&self, ctx: &mut InvocationContext<'_>) -> Result<()> {
+        if ctx.language() != RuntimeLanguage::JavaScript {
+            return Ok(());
+        }
+        let spec = build_rawctx_auto_spec(ctx.session())?;
+        let script = if let Some(spec) = spec {
+            let payload = serde_json::to_string(&spec).map_err(|err| {
+                PyRunnerError::Execution(format!(
+                    "failed to serialize rawctx auto-wrapper spec: {err}"
+                ))
+            })?;
+            format!("globalThis.__aardvarkSetRawctxSpec({payload});")
         } else {
-            ResultPayload::None
+            "globalThis.__aardvarkSetRawctxSpec(null);".to_string()
         };
-        Ok(StrategyResult { execution, payload })
+        ctx.runtime()
+            .execute_script("__aardvark_rawctx_spec.js", &script)
+            .map_err(|err| {
+                PyRunnerError::Execution(format!("failed to configure rawctx auto-wrapper: {err}"))
+            })
     }
 }
 
@@ -439,6 +525,23 @@ impl PyInvocationStrategy for RawCtxInvocationStrategy {
 pub struct StrategyResult {
     pub execution: ExecutionOutput,
     pub payload: ResultPayload,
+}
+
+fn payload_from_execution(execution: &ExecutionOutput) -> ResultPayload {
+    if !execution.shared_buffers.is_empty() {
+        let buffers = execution
+            .shared_buffers
+            .iter()
+            .map(SharedBufferHandle::from_shared_buffer)
+            .collect();
+        ResultPayload::SharedBuffers(buffers)
+    } else if let Some(json) = execution.json.clone() {
+        ResultPayload::Json(json)
+    } else if let Some(text) = execution.result.clone() {
+        ResultPayload::Text(text)
+    } else {
+        ResultPayload::None
+    }
 }
 
 /// Builder that emits invocation-descriptor metadata for RawCtx inputs.
@@ -1265,8 +1368,8 @@ fn merge_metadata(target: &mut JsonValue, incoming: JsonValue) {
     }
 }
 
-#[derive(Debug, Serialize)]
-struct RawCtxAutoSpec {
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct RawCtxAutoSpec {
     entrypoint: String,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     inputs: Vec<RawCtxInputBindingSpec>,
@@ -1276,8 +1379,8 @@ struct RawCtxAutoSpec {
     outputs: Vec<RawCtxOutputSpec>,
 }
 
-#[derive(Debug, Serialize)]
-struct RawCtxInputBindingSpec {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct RawCtxInputBindingSpec {
     field: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     arg: Option<String>,
@@ -1301,8 +1404,8 @@ struct RawCtxInputBindingSpec {
     table: Option<RawCtxTableSpec>,
 }
 
-#[derive(Clone, Debug, Serialize)]
-struct RawCtxOutputSpec {
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct RawCtxOutputSpec {
     id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     mode: Option<String>,
@@ -2136,14 +2239,30 @@ def __aardvark__apply_single_output(spec, result):
             if isinstance(data_value, (bytes, bytearray)):
                 data_value = memoryview(data_value)
             else:
-                data_value = memoryview(bytes(data_value))
+                try:
+                    data_value = memoryview(data_value)
+                except TypeError:
+                    data_value = memoryview(bytes(data_value))
     elif transform == "bytes":
-        if isinstance(data_value, memoryview):
-            data_value = memoryview(data_value.tobytes())
-        elif isinstance(data_value, (bytes, bytearray)):
-            data_value = memoryview(bytes(data_value))
+        if not isinstance(data_value, memoryview):
+            if isinstance(data_value, (bytes, bytearray)):
+                data_value = memoryview(data_value)
+            else:
+                try:
+                    data_value = memoryview(data_value)
+                except TypeError:
+                    data_value = memoryview(bytes(data_value))
+
+        try:
+            cast_view = data_value.cast("B")
+        except (TypeError, ValueError):
+            cast_view = None
+
+        if cast_view is not None and cast_view.contiguous:
+            data_value = cast_view
         else:
-            data_value = memoryview(bytes(data_value))
+            source_view = cast_view if cast_view is not None else data_value
+            data_value = memoryview(source_view.tobytes())
     elif transform == "utf8":
         if not isinstance(data_value, str):
             raise TypeError("rawctx output expected str for utf8 transform")

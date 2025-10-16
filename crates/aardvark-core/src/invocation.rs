@@ -8,10 +8,15 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
+use crate::runtime_language::RuntimeLanguage;
+
 /// Describes the runtime contract for a single invocation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InvocationDescriptor {
     entrypoint: String,
+    /// Optional language override for the invocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<RuntimeLanguage>,
     /// Inputs passed positionally to the Python handler.
     #[serde(default)]
     pub inputs: Vec<FieldDescriptor>,
@@ -35,6 +40,7 @@ impl InvocationDescriptor {
         let entrypoint = entrypoint.into();
         Self {
             entrypoint: sanitize_entrypoint(entrypoint),
+            language: None,
             inputs: Vec::new(),
             outputs: Vec::new(),
             params: None,
