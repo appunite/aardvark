@@ -158,6 +158,8 @@ fn host_with_warm_state(warm: WarmState) -> anyhow::Result<PyRuntime> {
 
 The saved `WarmState` bundles a Pyodide memory snapshot with its overlay. Runtimes constructed with it skip package installation and restore the filesystem/DLLs immediately. Call `config.snapshot.clear_cache()` or set `config.warm_state = None` if you regenerate the warm state at runtime.
 
+Warm states captured via `capture_warm_state()` mark the overlay as preloaded, so `reset_in_place()` skips the heavy overlay import. If you assemble a warm state manually, call `WarmState::with_overlay_preloaded` (or `WarmState::into_overlay_preloaded`) after hydrating the overlay to unlock the same fast path.
+
 ### Warm Snapshot Hooks
 
 Hooks let you run custom logic right before a snapshot is captured and immediately after a warm snapshot is applied:

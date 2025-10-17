@@ -8,6 +8,7 @@ use crate::engine::{JsRuntime, PyodideLoadOptions};
 use crate::error::{PyRunnerError, Result};
 use crate::package_metadata;
 use crate::runtime_language::RuntimeLanguage;
+use std::env;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -103,9 +104,24 @@ impl LanguageEngine for PythonEngine {
         self.js.load_pyodide(load_opts)?;
         self.snapshot_bytes = None;
         if let Some(state) = self.warm_state.as_ref() {
-            let overlay = state.overlay();
-            self.js.import_overlay(&overlay.metadata, &overlay.blobs)?;
-            self.js.prepare_dynlibs()?;
+            if state.overlay_preloaded() {
+                // Overlay already baked into the snapshot; no additional work required.
+            } else {
+                if let Some(token) = env::var_os("AARDVARK_TEST_FORCE_OVERLAY_IMPORT_FAILURE") {
+                    env::remove_var("AARDVARK_TEST_FORCE_OVERLAY_IMPORT_FAILURE");
+                    let label = token
+                        .to_str()
+                        .filter(|value| !value.is_empty())
+                        .map(|value| format!(" forced by {value}"))
+                        .unwrap_or_default();
+                    return Err(PyRunnerError::Init(format!(
+                        "forced overlay import failure{label}"
+                    )));
+                }
+                let overlay = state.overlay();
+                self.js.import_overlay(&overlay.metadata, &overlay.blobs)?;
+                self.js.prepare_dynlibs()?;
+            }
         }
         Ok(())
     }

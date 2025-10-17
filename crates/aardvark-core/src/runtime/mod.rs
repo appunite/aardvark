@@ -257,7 +257,7 @@ impl AardvarkRuntime {
             Arc::<[u8]>::from(bytes.into_boxed_slice())
         };
         let overlay = self.engine_mut().js_mut().export_overlay()?;
-        let state = WarmState::new(snapshot_bytes, overlay);
+        let state = WarmState::with_overlay_preloaded(snapshot_bytes, overlay);
         self.config.warm_state = Some(state.clone());
         self.engine_mut().set_warm_state(Some(state.clone()));
         self.config.snapshot.store_cached_bytes(state.snapshot());

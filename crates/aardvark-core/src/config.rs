@@ -101,6 +101,7 @@ impl fmt::Debug for HostHooks {
 pub struct WarmState {
     snapshot: Arc<[u8]>,
     overlay: Arc<OverlayExport>,
+    overlay_preloaded: bool,
 }
 
 impl WarmState {
@@ -109,7 +110,23 @@ impl WarmState {
         Self {
             snapshot,
             overlay: Arc::new(overlay),
+            overlay_preloaded: false,
         }
+    }
+
+    /// Constructs a warm state that already includes the overlay in the snapshot image.
+    pub fn with_overlay_preloaded(snapshot: Arc<[u8]>, overlay: OverlayExport) -> Self {
+        Self {
+            snapshot,
+            overlay: Arc::new(overlay),
+            overlay_preloaded: true,
+        }
+    }
+
+    /// Returns a new warm state flagged as overlay-preloaded.
+    pub fn into_overlay_preloaded(mut self) -> Self {
+        self.overlay_preloaded = true;
+        self
     }
 
     /// Returns the snapshot bytes.
@@ -121,6 +138,11 @@ impl WarmState {
     pub fn overlay(&self) -> Arc<OverlayExport> {
         self.overlay.clone()
     }
+
+    /// Indicates whether the overlay contents were baked into the snapshot.
+    pub fn overlay_preloaded(&self) -> bool {
+        self.overlay_preloaded
+    }
 }
 
 impl fmt::Debug for WarmState {
@@ -128,6 +150,7 @@ impl fmt::Debug for WarmState {
         f.debug_struct("WarmState")
             .field("snapshot_len", &self.snapshot.len())
             .field("overlay_blobs", &self.overlay.blobs.len())
+            .field("overlay_preloaded", &self.overlay_preloaded)
             .finish()
     }
 }

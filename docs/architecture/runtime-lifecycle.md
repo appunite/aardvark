@@ -90,6 +90,7 @@ Regardless of success or failure the runtime collects:
 - Hosts that want to avoid tearing down the engine can call `PyRuntime::reset_in_place()`. This keeps the underlying isolate alive, wipes the context, and replays the bootstrap assets before the next invocation.
 - `PoolResetMode::InPlace` applies the same in-place reset when a pooled handle drops, trading strict engine recreation for lower latency on reuse.
 - Each reset (manual or in-place) records `mode`, `duration_ms`, and `engine_generation` so the next invocation’s diagnostics expose how the runtime was scrubbed.
+- Warm states captured inside the runtime mark their overlays as preloaded, allowing in-place resets to skip the expensive overlay import entirely.
 
 ## Failure Modes and Recovery
 

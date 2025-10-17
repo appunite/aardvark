@@ -12,6 +12,7 @@ use aardvark_core::{
 use bytes::Bytes;
 use serde_json::json;
 use std::env;
+use std::path::PathBuf;
 use std::io::Write;
 use zip::write::FileOptions;
 use zip::CompressionMethod;
@@ -21,6 +22,7 @@ fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_pooled_runtime_manual_reset()?;
     verify_pooled_runtime_in_place_reset()?;
     verify_runtime_reset_in_place()?;
+    verify_warm_state_skips_overlay_import()?;
     verify_after_invocation_reset_policy()?;
     verify_python_exception_outcome()?;
     verify_timeout_failure()?;
@@ -235,6 +237,32 @@ def main():
         .expect("expected reset telemetry");
     assert!(matches!(reset.mode, ResetMode::InPlace));
     assert!(reset.engine_generation >= 1);
+    Ok(())
+}
+
+fn verify_warm_state_skips_overlay_import() -> Result<()> {
+    let mut config = PyRuntimeConfig::default();
+    config.snapshot.save_to = Some(PathBuf::from("target/warm-state.snapshot"));
+    let mut runtime = PyRuntime::new(config)?;
+    let outcome = run_main(&mut runtime, SIMPLE_SUCCESS)?;
+    assert!(outcome.is_success(), "expected success outcome");
+
+    let warm_state = runtime.capture_warm_state()?;
+    assert!(
+        warm_state.overlay_preloaded(),
+        "warm state should mark overlay as preloaded"
+    );
+
+    let mut config = PyRuntimeConfig::default();
+    config.warm_state = Some(warm_state);
+    let mut runtime = PyRuntime::new(config)?;
+    env::set_var("AARDVARK_TEST_FORCE_OVERLAY_IMPORT_FAILURE", "1");
+    let outcome = run_main(&mut runtime, SIMPLE_SUCCESS)?;
+    env::remove_var("AARDVARK_TEST_FORCE_OVERLAY_IMPORT_FAILURE");
+    assert!(
+        outcome.is_success(),
+        "expected success outcome with preloaded overlay"
+    );
     Ok(())
 }
 
