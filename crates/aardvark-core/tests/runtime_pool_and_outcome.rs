@@ -2,7 +2,7 @@ use aardvark_core::{
     config::{PyRuntimeConfig, ResetPolicy},
     invocation::{FieldDescriptor, InvocationDescriptor, InvocationLimits},
     outcome::{FailureKind, OutcomeStatus, ResultPayload},
-    pool::PoolConfig,
+    pool::{PoolConfig, PoolResetMode},
     strategy::{
         JsonInvocationStrategy, RawCtxBindingBuilder, RawCtxInput, RawCtxInvocationStrategy,
         RawCtxMetadata, RawCtxPublishBuilder, RawCtxTableColumnBuilder, RawCtxTableSpecBuilder,
@@ -19,6 +19,8 @@ use zip::CompressionMethod;
 #[test]
 fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_pooled_runtime_manual_reset()?;
+    verify_pooled_runtime_in_place_reset()?;
+    verify_runtime_reset_in_place()?;
     verify_after_invocation_reset_policy()?;
     verify_python_exception_outcome()?;
     verify_timeout_failure()?;
@@ -101,6 +103,110 @@ def main():
         first_runtime_id, second_runtime_id,
         "pool should reuse the same runtime instance"
     );
+    Ok(())
+}
+
+fn verify_pooled_runtime_in_place_reset() -> Result<()> {
+    let runtime_config = PyRuntimeConfig {
+        reset_policy: ResetPolicy::Manual,
+        ..PyRuntimeConfig::default()
+    };
+    let pool = PyRuntimePool::new(PoolConfig {
+        max_runtimes: 1,
+        runtime_config,
+        reset_mode: PoolResetMode::InPlace,
+    })?;
+
+    let pointer_before;
+    {
+        let mut handle = pool.checkout()?;
+        let runtime = handle.runtime();
+        pointer_before = runtime.js_runtime() as *mut _ as usize;
+        let outcome = run_main(
+            runtime,
+            r#"
+import builtins
+
+def main():
+    if hasattr(builtins, "__pool_marker"):
+        return "stale"
+    builtins.__pool_marker = "present"
+    return "fresh"
+"#,
+        )?;
+        assert!(outcome.is_success(), "expected success outcome");
+        assert_eq!(payload_text(&outcome), "'fresh'");
+    }
+
+    {
+        let mut handle = pool.checkout()?;
+        let runtime = handle.runtime();
+        let pointer_after = runtime.js_runtime() as *mut _ as usize;
+        assert_eq!(pointer_before, pointer_after, "engine should stay in place");
+        let outcome = run_main(
+            runtime,
+            r#"
+import builtins
+
+def main():
+    if hasattr(builtins, "__pool_marker"):
+        return "stale"
+    builtins.__pool_marker = "present"
+    return "fresh"
+"#,
+        )?;
+        assert!(outcome.is_success(), "expected success outcome");
+        assert_eq!(payload_text(&outcome), "'fresh'");
+    }
+
+    Ok(())
+}
+
+fn verify_runtime_reset_in_place() -> Result<()> {
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+
+    let before_ptr = {
+        let js = runtime.js_runtime();
+        js as *mut _ as usize
+    };
+
+    let initial = run_main(
+        &mut runtime,
+        r#"
+import builtins
+
+def main():
+    if hasattr(builtins, "__reset_marker"):
+        return "stale"
+    builtins.__reset_marker = "present"
+    return "fresh"
+"#,
+    )?;
+    assert!(initial.is_success(), "expected success outcome");
+    assert_eq!(payload_text(&initial), "'fresh'");
+
+    runtime.reset_in_place()?;
+
+    let after_ptr = {
+        let js = runtime.js_runtime();
+        js as *mut _ as usize
+    };
+    assert_eq!(before_ptr, after_ptr, "engine should be reused in-place");
+
+    let second = run_main(
+        &mut runtime,
+        r#"
+import builtins
+
+def main():
+    if hasattr(builtins, "__reset_marker"):
+        return "stale"
+    builtins.__reset_marker = "present"
+    return "fresh"
+"#,
+    )?;
+    assert!(second.is_success(), "expected success outcome");
+    assert_eq!(payload_text(&second), "'fresh'");
     Ok(())
 }
 

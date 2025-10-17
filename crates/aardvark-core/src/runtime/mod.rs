@@ -51,6 +51,7 @@ trait LanguageEngine {
     fn prepare_environment(&mut self, config: &PyRuntimeConfig) -> Result<()>;
     fn load_manifest_packages(&mut self, manifest: &BundleManifest) -> Result<()>;
     fn mount_bundle(&mut self, bundle: &Bundle) -> Result<()>;
+    fn reset_in_place(&mut self, config: &PyRuntimeConfig) -> Result<()>;
     fn set_warm_state(&mut self, _state: Option<WarmState>) {}
 }
 
@@ -569,6 +570,28 @@ impl AardvarkRuntime {
             drop(old);
         }
         self.engine = Some(create_engine(language, &self.config)?);
+        self.warm_restored = false;
+        Ok(())
+    }
+
+    /// Resets the runtime by rebuilding the language engine in place without dropping the isolate.
+    pub fn reset_in_place(&mut self) -> Result<()> {
+        let span = info_span!(
+            target: "aardvark::runtime",
+            "runtime.reset_in_place",
+            runtime_id = self.runtime_id_str()
+        );
+        let _guard = span.enter();
+        let language = self
+            .engine
+            .as_ref()
+            .map(|engine| engine.language())
+            .unwrap_or(self.config.default_language);
+        if let Some(engine) = self.engine.as_mut() {
+            engine.reset_in_place(&self.config)?;
+        } else {
+            self.engine = Some(create_engine(language, &self.config)?);
+        }
         self.warm_restored = false;
         Ok(())
     }

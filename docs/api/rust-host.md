@@ -104,13 +104,12 @@ All payload types are supported: text, JSON, binary, and shared buffers. Use pat
 ## Using the runtime pool
 
 ```rust
-use aardvark_core::{PoolConfig, PyRuntimePool, PyRuntimeConfig};
+use aardvark_core::{PoolConfig, PoolResetMode, PyRuntimePool, PyRuntimeConfig};
 
 fn pool_example() -> anyhow::Result<()> {
-    let pool = PyRuntimePool::new(PoolConfig {
-        max_runtimes: 8,
-        runtime_config: PyRuntimeConfig::default(),
-    })?;
+    let mut config = PoolConfig::new(8, PyRuntimeConfig::default());
+    config.reset_mode = PoolResetMode::InPlace; // reuse isolates between checkouts
+    let pool = PyRuntimePool::new(config)?;
     let mut handle = pool.checkout()?;
     let bundle = Bundle::from_zip_bytes(include_bytes!("../../hello_bundle.zip"))?;
     let session = handle.runtime().prepare_session_with_manifest(bundle)?.0;
@@ -126,6 +125,12 @@ Pool handles implement `Drop`; always let them go out of scope to return the run
 Returned runtimes are marked dirty and scrubbed the next time the pool needs additional capacity. That keeps the hand-off path fast while still ensuring every checkout observes a clean snapshot.
 
 > **Pool Limitation:** resets still run on the thread that performs the next checkout. If the warm snapshot takes ~800 ms to hydrate, the first borrower after a drop still pays that cost.
+
+## Resetting a runtime explicitly
+
+- `reset_to_snapshot()` recreates the language engine from scratch. This is the slow but safest option when you want to reclaim every resource.
+- `reset_in_place()` reuses the existing isolate, wipes the context, and replays the bootstrap assets so the next invocation starts from the warm snapshot without a full teardown.
+- `PoolResetMode::InPlace` lets the pool call `reset_in_place()` automatically when a handle is dropped; use it together with `ResetPolicy::Manual`.
 
 ## Warm Snapshots for Faster Cold Starts
 

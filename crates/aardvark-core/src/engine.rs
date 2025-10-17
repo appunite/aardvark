@@ -321,19 +321,7 @@ impl JsRuntime {
     /// Creates a new isolate with an empty context and basic polyfills.
     pub fn new() -> Result<Self> {
         init_v8();
-        let context_state = Rc::new(RuntimeContext {
-            assets: AssetStore::new(),
-            modules: RefCell::new(HashMap::new()),
-            module_by_hash: RefCell::new(HashMap::new()),
-            module_namespaces: RefCell::new(HashMap::new()),
-            pyodide_instance: RefCell::new(None),
-            stdout_log: RefCell::new(String::new()),
-            stderr_log: RefCell::new(String::new()),
-            network_policy: RwLock::new(NetworkPolicy::default()),
-            network_contacts: RwLock::new(Vec::new()),
-            network_denied: RwLock::new(Vec::new()),
-            filesystem_violations: RwLock::new(Vec::new()),
-        });
+        let context_state = Rc::new(RuntimeContext::new());
         let create_params =
             v8::CreateParams::default().array_buffer_allocator(v8::new_default_allocator());
         let mut isolate = v8::Isolate::new(create_params);
@@ -351,6 +339,25 @@ impl JsRuntime {
         };
         runtime.install_polyfills()?;
         Ok(runtime)
+    }
+
+    /// Reinitializes the isolate in place, keeping the outer runtime alive.
+    pub fn reset(&mut self) -> Result<()> {
+        // Drop the previous context state so any module caches or globals are released.
+        let new_state = Rc::new(RuntimeContext::new());
+        self.context_state = new_state.clone();
+        self.isolate.set_slot(new_state);
+
+        // Hint V8 to reclaim memory from the old context before installing a new one.
+        self.isolate.low_memory_notification();
+
+        let global = {
+            v8::scope!(let scope, &mut self.isolate);
+            let context = v8::Context::new(scope, v8::ContextOptions::default());
+            v8::Global::new(scope, context)
+        };
+        self.context = global;
+        self.install_polyfills()
     }
 
     /// Configures the network allowlist for subsequent native fetches.
@@ -2240,6 +2247,22 @@ fn normalize_specifier(spec: &str) -> String {
 }
 
 impl RuntimeContext {
+    fn new() -> Self {
+        Self {
+            assets: AssetStore::new(),
+            modules: RefCell::new(HashMap::new()),
+            module_by_hash: RefCell::new(HashMap::new()),
+            module_namespaces: RefCell::new(HashMap::new()),
+            pyodide_instance: RefCell::new(None),
+            stdout_log: RefCell::new(String::new()),
+            stderr_log: RefCell::new(String::new()),
+            network_policy: RwLock::new(NetworkPolicy::default()),
+            network_contacts: RwLock::new(Vec::new()),
+            network_denied: RwLock::new(Vec::new()),
+            filesystem_violations: RwLock::new(Vec::new()),
+        }
+    }
+
     fn clear_console(&self) {
         self.stdout_log.borrow_mut().clear();
         self.stderr_log.borrow_mut().clear();

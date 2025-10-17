@@ -127,6 +127,15 @@ impl LanguageEngine for PythonEngine {
         self.js.mount_bundle(bundle, "/app")
     }
 
+    fn reset_in_place(&mut self, config: &PyRuntimeConfig) -> Result<()> {
+        self.js.reset()?;
+        self.snapshot_bytes = load_snapshot_bytes(config)?;
+        self.warm_state = config.warm_state.clone();
+        self.register_core_assets();
+        self.inject_version_globals(config)?;
+        Ok(())
+    }
+
     fn set_warm_state(&mut self, state: Option<WarmState>) {
         self.warm_state = state;
         self.snapshot_bytes = self.warm_state.as_ref().map(|s| s.snapshot());
