@@ -252,7 +252,11 @@ def tempfile_context(module):
 
 @register_before_first_request("tempfile")
 def tempfile_restore_random_name_sequence(tempfile):
-    tempfile._RandomNameSequence = tempfile._orig_RandomNameSequence
+    orig = getattr(tempfile, "_orig_RandomNameSequence", None)
+    if orig is None:
+        # Warm snapshots may already include the restored sequence.
+        return
+    tempfile._RandomNameSequence = orig
     del tempfile._orig_RandomNameSequence
 
 
