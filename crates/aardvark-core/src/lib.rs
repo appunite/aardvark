@@ -62,7 +62,7 @@ pub use bundle_manifest::{
     MANIFEST_BASENAME as BUNDLE_MANIFEST_BASENAME, MANIFEST_SCHEMA as BUNDLE_MANIFEST_SCHEMA,
     MANIFEST_SCHEMA_VERSION as BUNDLE_MANIFEST_SCHEMA_VERSION,
 };
-pub use config::{PyRuntimeConfig, WarmState};
+pub use config::{HostHooks, PyRuntimeConfig, WarmHook, WarmState};
 pub use engine::{ExecutionOutput, OverlayBlob, OverlayExport};
 pub use error::{PyRunnerError, Result};
 pub use host::{FilesystemTelemetry, NetworkTelemetry, SandboxTelemetry};

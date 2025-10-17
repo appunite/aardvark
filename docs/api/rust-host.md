@@ -125,6 +125,8 @@ Pool handles implement `Drop`; always let them go out of scope to return the run
 
 Returned runtimes are marked dirty and scrubbed the next time the pool needs additional capacity. That keeps the hand-off path fast while still ensuring every checkout observes a clean snapshot.
 
+> **Pool Limitation:** resets still run on the thread that performs the next checkout. If the warm snapshot takes ~800 ms to hydrate, the first borrower after a drop still pays that cost.
+
 ## Warm Snapshots for Faster Cold Starts
 
 If you want Cloudflare-style deploy-time hydration, capture a warm snapshot once and reuse it:
@@ -149,6 +151,60 @@ fn host_with_warm_state(warm: WarmState) -> anyhow::Result<PyRuntime> {
 ```
 
 The saved `WarmState` bundles a Pyodide memory snapshot with its overlay. Runtimes constructed with it skip package installation and restore the filesystem/DLLs immediately. Call `config.snapshot.clear_cache()` or set `config.warm_state = None` if you regenerate the warm state at runtime.
+
+### Warm Snapshot Hooks
+
+Hooks let you run custom logic right before a snapshot is captured and immediately after a warm snapshot is applied:
+
+```rust
+use std::sync::Arc;
+use aardvark_core::{Bundle, PyRuntime, PyRuntimeConfig};
+
+let mut config = PyRuntimeConfig::default();
+config.hooks.before_warm_snapshot = Some(Arc::new(|runtime| {
+    // e.g. run a throwaway session to precompile heavy modules
+    let preload = Bundle::from_zip_bytes(include_bytes!("../../prewarm.zip"))?;
+    runtime.prepare_session_with_manifest(preload)?;
+    Ok(())
+}));
+
+config.hooks.after_warm_restore = Some(Arc::new(|runtime| {
+    tracing::info!(runtime = runtime.runtime_id().unwrap_or("<anonymous>"), "warm snapshot ready");
+    Ok(())
+}));
+```
+
+Hooks execute synchronously on the calling thread; keep them fast and deterministic.
+
+#### Flow Diagrams
+
+```mermaid
+sequenceDiagram
+    participant Host
+    participant Runtime
+    participant Pyodide
+    Host->>Runtime: capture_warm_state()
+    Runtime->>Host: before_warm_snapshot hook
+    Runtime->>Pyodide: collect snapshot & export overlay
+    Pyodide-->>Runtime: snapshot bytes + overlay tars
+    Runtime-->>Host: WarmState
+```
+
+```mermaid
+sequenceDiagram
+    participant Host
+    participant Runtime
+    participant Pyodide
+    Host->>Runtime: new PyRuntime (warm_state)
+    Runtime->>Pyodide: load snapshot / import overlay
+    Pyodide-->>Runtime: hydrated runtime
+    Runtime-->>Host: after_warm_restore hook
+    Host->>Runtime: run session
+```
+
+> **Warm Snapshot Limitations**
+> - Warm states are version- and manifest-specific. Changing Pyodide builds or required packages requires capturing a new snapshot; the runtime does not validate mismatches for you.
+> - Hooks and restoration run synchronously; long-running work will block the thread performing the reset.
 
 ## Custom strategies
 

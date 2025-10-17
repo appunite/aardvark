@@ -1,7 +1,9 @@
 //! Runtime configuration options.
 
 use crate::engine::OverlayExport;
+use crate::error::Result;
 use crate::invocation::InvocationLimits;
+use crate::runtime::PyRuntime;
 use crate::runtime_language::RuntimeLanguage;
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -67,6 +69,33 @@ impl fmt::Debug for SnapshotCache {
     }
 }
 
+/// Type alias for host-provided warm snapshot hooks.
+pub type WarmHook = dyn Fn(&mut PyRuntime) -> Result<()> + Send + Sync;
+
+/// Host-configurable hooks for the warm snapshot lifecycle.
+#[derive(Clone, Default)]
+pub struct HostHooks {
+    /// Invoked immediately before a warm snapshot is captured.
+    pub before_warm_snapshot: Option<Arc<WarmHook>>,
+    /// Invoked after a warm snapshot has been applied to a runtime.
+    pub after_warm_restore: Option<Arc<WarmHook>>,
+}
+
+impl fmt::Debug for HostHooks {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HostHooks")
+            .field(
+                "before_warm_snapshot",
+                &self.before_warm_snapshot.as_ref().map(|_| "Some"),
+            )
+            .field(
+                "after_warm_restore",
+                &self.after_warm_restore.as_ref().map(|_| "Some"),
+            )
+            .finish()
+    }
+}
+
 /// Captured warm state containing a Pyodide snapshot and its overlay assets.
 #[derive(Clone)]
 pub struct WarmState {
@@ -112,6 +141,8 @@ pub struct PyRuntimeConfig {
     pub default_language: RuntimeLanguage,
     /// Snapshot-related configuration.
     pub snapshot: SnapshotConfig,
+    /// Host lifecycle hooks executed around warm snapshot capture/restore.
+    pub hooks: HostHooks,
     /// Optional global budget override applied to every session.
     pub budget_override: Option<InvocationLimits>,
     /// Runtime reset behaviour after each invocation.
@@ -128,6 +159,7 @@ impl Default for PyRuntimeConfig {
             pyodide_version: "0.28.2".to_owned(),
             default_language: RuntimeLanguage::Python,
             snapshot: SnapshotConfig::default(),
+            hooks: HostHooks::default(),
             budget_override: None,
             reset_policy: ResetPolicy::Manual,
             host_capabilities: vec!["rawctx_buffers".to_string()],

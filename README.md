@@ -153,6 +153,8 @@ The core library is published as `aardvark-core`. Before cutting any experimenta
 - Network sandboxing is allowlist-based per session; there is no per-request override yet.
 - Filesystem quota enforcement only covers the `/session` tree.
 - Streaming outputs and incremental logs are not available; handlers must return a single payload.
+- Warm snapshots are tied to the Pyodide build and manifest used when you captured them; changing either requires baking a new snapshot.
+- Runtime pool resets still execute synchronously on the thread that next checks out a runtime; there is no background reset worker yet.
 - API stability is not guaranteed; expect breaking changes while the runtime matures.
 
 ## License

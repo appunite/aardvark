@@ -42,6 +42,7 @@ pub struct AardvarkRuntime {
     config: PyRuntimeConfig,
     engine: Option<Box<dyn LanguageEngine>>,
     runtime_id: Option<String>,
+    warm_restored: bool,
 }
 
 trait LanguageEngine {
@@ -111,6 +112,7 @@ impl AardvarkRuntime {
             config,
             engine: Some(engine),
             runtime_id: None,
+            warm_restored: false,
         })
     }
 
@@ -136,9 +138,16 @@ impl AardvarkRuntime {
             let js = self.engine_mut().js_mut();
             js.set_network_policy(&[], true);
         }
+        let using_warm_state = self.config.warm_state.is_some();
         {
             let config = self.config.clone();
             self.engine_mut().prepare_environment(&config)?;
+        }
+        if using_warm_state && !self.warm_restored {
+            if let Some(hook) = self.config.hooks.after_warm_restore.clone() {
+                hook(self)?;
+            }
+            self.warm_restored = true;
         }
         {
             let js = self.engine_mut().js_mut();
@@ -234,6 +243,9 @@ impl AardvarkRuntime {
 
     /// Captures a warm state (snapshot + overlay) after packages are loaded.
     pub fn capture_warm_state(&mut self) -> Result<WarmState> {
+        if let Some(hook) = self.config.hooks.before_warm_snapshot.clone() {
+            hook(self)?;
+        }
         let snapshot_bytes = {
             let bytes = self.engine_mut().js_mut().collect_snapshot()?;
             Arc::<[u8]>::from(bytes.into_boxed_slice())
@@ -242,6 +254,11 @@ impl AardvarkRuntime {
         let state = WarmState::new(snapshot_bytes, overlay);
         self.config.warm_state = Some(state.clone());
         self.engine_mut().set_warm_state(Some(state.clone()));
+        self.config.snapshot.store_cached_bytes(state.snapshot());
+        self.warm_restored = true;
+        if let Some(hook) = self.config.hooks.after_warm_restore.clone() {
+            hook(self)?;
+        }
         Ok(state)
     }
 
@@ -552,6 +569,7 @@ impl AardvarkRuntime {
             drop(old);
         }
         self.engine = Some(create_engine(language, &self.config)?);
+        self.warm_restored = false;
         Ok(())
     }
 
@@ -563,6 +581,7 @@ impl AardvarkRuntime {
             drop(old);
         }
         self.engine = Some(create_engine(language, &self.config)?);
+        self.warm_restored = false;
         Ok(())
     }
 
@@ -843,10 +862,12 @@ fn create_engine(
     language: RuntimeLanguage,
     config: &PyRuntimeConfig,
 ) -> Result<Box<dyn LanguageEngine>> {
-    match language {
-        RuntimeLanguage::Python => Ok(Box::new(PythonEngine::new(config)?)),
-        RuntimeLanguage::JavaScript => Ok(Box::new(JavaScriptEngine::new(config)?)),
-    }
+    let mut engine: Box<dyn LanguageEngine> = match language {
+        RuntimeLanguage::Python => Box::new(PythonEngine::new(config)?),
+        RuntimeLanguage::JavaScript => Box::new(JavaScriptEngine::new(config)?),
+    };
+    engine.set_warm_state(config.warm_state.clone());
+    Ok(engine)
 }
 
 fn normalize_capabilities<'a, I>(caps: I) -> Vec<String>
