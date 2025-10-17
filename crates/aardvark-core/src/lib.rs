@@ -21,7 +21,8 @@
 //!
 //! fn invoke(bytes: &[u8]) -> anyhow::Result<()> {
 //!     let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-//!     let (session, _manifest) = runtime.prepare_session_with_manifest(Bundle::from_zip_bytes(bytes)?)?;
+//!     let bundle = Bundle::from_zip_bytes(bytes)?;
+//!     let (session, _manifest) = runtime.prepare_session_with_manifest(bundle)?;
 //!     let outcome = runtime.run_session(&session)?;
 //!     if let Some(payload) = outcome.payload() {
 //!         println!("payload kind: {}", payload.kind());
@@ -61,7 +62,7 @@ pub use bundle_manifest::{
     MANIFEST_BASENAME as BUNDLE_MANIFEST_BASENAME, MANIFEST_SCHEMA as BUNDLE_MANIFEST_SCHEMA,
     MANIFEST_SCHEMA_VERSION as BUNDLE_MANIFEST_SCHEMA_VERSION,
 };
-pub use config::PyRuntimeConfig;
+pub use config::{HostHooks, PyRuntimeConfig, WarmHook, WarmState};
 pub use engine::{ExecutionOutput, OverlayBlob, OverlayExport};
 pub use error::{PyRunnerError, Result};
 pub use host::{FilesystemTelemetry, NetworkTelemetry, SandboxTelemetry};

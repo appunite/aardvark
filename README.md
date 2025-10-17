@@ -96,13 +96,37 @@ use aardvark_core::{Bundle, PyRuntime, PyRuntimeConfig};
 
 fn execute(bytes: &[u8]) -> anyhow::Result<()> {
     let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-    let (session, _manifest) = runtime.prepare_session_with_manifest(Bundle::from_zip_bytes(bytes)?)?;
+    // Parse once; cloning `Bundle` is cheap because entries are shared internally.
+    let bundle = Bundle::from_zip_bytes(bytes)?;
+    let (session, _manifest) = runtime.prepare_session_with_manifest(bundle)?;
     let outcome = runtime.run_session(&session)?;
     println!("status: {:?}", outcome.status);
     println!("stdout: {}", outcome.diagnostics.stdout);
     Ok(())
 }
 ```
+
+### Warm Snapshots
+
+Capture a fully-initialised Pyodide instance (including packages) and reuse it for future runtimes:
+
+```rust
+use aardvark_core::{Bundle, PyRuntime, PyRuntimeConfig};
+
+fn build_warm_state(bytes: &[u8]) -> anyhow::Result<(PyRuntimeConfig, Bundle)> {
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let bundle = Bundle::from_zip_bytes(bytes)?;
+    let (_session, _manifest) = runtime.prepare_session_with_manifest(bundle.clone())?;
+    // Optional: run warm-up imports or pre-populate globals here.
+    let warm = runtime.capture_warm_state()?;
+
+    let mut config = PyRuntimeConfig::default();
+    config.warm_state = Some(warm);
+    Ok((config, bundle))
+}
+```
+
+Any new runtime (or pool) constructed with that `PyRuntimeConfig` skips the heavy Pyodide bootstrap and restores directly from the warm snapshot.
 
 `docs/api/rust-host.md` expands on pooling, invocation strategies, and telemetry export. For JavaScript bundles, pass `language = "javascript"` in the manifest or descriptor and ship a self-contained bundle produced by your JS build tool.
 
@@ -129,6 +153,8 @@ The core library is published as `aardvark-core`. Before cutting any experimenta
 - Network sandboxing is allowlist-based per session; there is no per-request override yet.
 - Filesystem quota enforcement only covers the `/session` tree.
 - Streaming outputs and incremental logs are not available; handlers must return a single payload.
+- Warm snapshots are tied to the Pyodide build and manifest used when you captured them; changing either requires baking a new snapshot.
+- Runtime pool resets still execute synchronously on the thread that next checks out a runtime; there is no background reset worker yet.
 - API stability is not guaranteed; expect breaking changes while the runtime matures.
 
 ## License
