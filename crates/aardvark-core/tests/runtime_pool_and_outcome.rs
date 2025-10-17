@@ -1,7 +1,7 @@
 use aardvark_core::{
     config::{PyRuntimeConfig, ResetPolicy},
     invocation::{FieldDescriptor, InvocationDescriptor, InvocationLimits},
-    outcome::{FailureKind, OutcomeStatus, ResultPayload},
+    outcome::{FailureKind, OutcomeStatus, ResetMode, ResultPayload},
     pool::{PoolConfig, PoolResetMode},
     strategy::{
         JsonInvocationStrategy, RawCtxBindingBuilder, RawCtxInput, RawCtxInvocationStrategy,
@@ -96,6 +96,13 @@ def main():
         )?;
         assert!(outcome.is_success(), "expected success outcome");
         assert_eq!(payload_text(&outcome), "'fresh'");
+        let reset = outcome
+            .diagnostics
+            .reset
+            .as_ref()
+            .expect("expected reset summary for pooled runtime");
+        assert!(matches!(reset.mode, ResetMode::RecreateEngine));
+        assert!(reset.engine_generation >= 2);
         runtime_id
     };
 
@@ -117,14 +124,17 @@ fn verify_pooled_runtime_in_place_reset() -> Result<()> {
         reset_mode: PoolResetMode::InPlace,
     })?;
 
-    let pointer_before;
-    {
+    let pointer_before = {
         let mut handle = pool.checkout()?;
-        let runtime = handle.runtime();
-        pointer_before = runtime.js_runtime() as *mut _ as usize;
-        let outcome = run_main(
-            runtime,
-            r#"
+        let ptr = {
+            let runtime = handle.runtime();
+            runtime.js_runtime() as *mut _ as usize
+        };
+        let outcome = {
+            let runtime = handle.runtime();
+            run_main(
+                runtime,
+                r#"
 import builtins
 
 def main():
@@ -133,10 +143,13 @@ def main():
     builtins.__pool_marker = "present"
     return "fresh"
 "#,
-        )?;
+            )?
+        };
         assert!(outcome.is_success(), "expected success outcome");
         assert_eq!(payload_text(&outcome), "'fresh'");
-    }
+        drop(handle);
+        ptr
+    };
 
     {
         let mut handle = pool.checkout()?;
@@ -157,6 +170,14 @@ def main():
         )?;
         assert!(outcome.is_success(), "expected success outcome");
         assert_eq!(payload_text(&outcome), "'fresh'");
+        let reset = outcome
+            .diagnostics
+            .reset
+            .as_ref()
+            .expect("expected in-place reset summary after pool reuse");
+        assert!(matches!(reset.mode, ResetMode::InPlace));
+        assert!(reset.engine_generation >= 1);
+        drop(handle);
     }
 
     Ok(())
@@ -207,6 +228,13 @@ def main():
     )?;
     assert!(second.is_success(), "expected success outcome");
     assert_eq!(payload_text(&second), "'fresh'");
+    let reset = second
+        .diagnostics
+        .reset
+        .as_ref()
+        .expect("expected reset telemetry");
+    assert!(matches!(reset.mode, ResetMode::InPlace));
+    assert!(reset.engine_generation >= 1);
     Ok(())
 }
 

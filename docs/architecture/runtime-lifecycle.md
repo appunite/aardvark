@@ -89,6 +89,7 @@ Regardless of success or failure the runtime collects:
 - If `ResetPolicy::Manual` is used (default in the pool), the `Drop` implementation on `PooledRuntime` triggers `reset_to_snapshot` when the handle returns to the pool. Failures drop the runtime from the pool and reduce capacity until a fresh runtime is created.
 - Hosts that want to avoid tearing down the engine can call `PyRuntime::reset_in_place()`. This keeps the underlying isolate alive, wipes the context, and replays the bootstrap assets before the next invocation.
 - `PoolResetMode::InPlace` applies the same in-place reset when a pooled handle drops, trading strict engine recreation for lower latency on reuse.
+- Each reset (manual or in-place) records `mode`, `duration_ms`, and `engine_generation` so the next invocation’s diagnostics expose how the runtime was scrubbed.
 
 ## Failure Modes and Recovery
 

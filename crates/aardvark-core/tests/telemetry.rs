@@ -27,6 +27,7 @@ fn diagnostics_to_telemetry_maps_fields() {
             path: Some("/session/tmp.txt".into()),
             message: "quota exceeded".into(),
         }],
+        reset: None,
     };
 
     let telemetry: SandboxTelemetry = diagnostics.to_telemetry();

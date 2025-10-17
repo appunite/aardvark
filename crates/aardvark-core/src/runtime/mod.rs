@@ -11,7 +11,7 @@ use crate::error::{PyRunnerError, Result};
 use crate::invocation::{InvocationDescriptor, InvocationLimits};
 use crate::outcome::{
     Diagnostics, ExecutionOutcome, FailureKind, FilesystemViolation, NetworkDeniedHost,
-    NetworkHostContact, ResultPayload,
+    NetworkHostContact, ResetMode, ResetSummary, ResultPayload,
 };
 use crate::runtime_language::RuntimeLanguage;
 use crate::session::PySession;
@@ -25,7 +25,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc, Arc,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{info, info_span, warn};
 use v8::{self, PinScope};
 
@@ -43,6 +43,8 @@ pub struct AardvarkRuntime {
     engine: Option<Box<dyn LanguageEngine>>,
     runtime_id: Option<String>,
     warm_restored: bool,
+    engine_generation: u64,
+    pending_reset_summary: Option<ResetSummary>,
 }
 
 trait LanguageEngine {
@@ -103,6 +105,7 @@ struct CollectedDiagnostics {
     network_hosts_contacted: Vec<NetworkHostContact>,
     network_hosts_blocked: Vec<NetworkDeniedHost>,
     filesystem_violations: Vec<FilesystemViolation>,
+    reset_summary: Option<crate::outcome::ResetSummary>,
 }
 
 impl AardvarkRuntime {
@@ -114,6 +117,8 @@ impl AardvarkRuntime {
             engine: Some(engine),
             runtime_id: None,
             warm_restored: false,
+            engine_generation: 1,
+            pending_reset_summary: None,
         })
     }
 
@@ -390,6 +395,7 @@ impl AardvarkRuntime {
             network_hosts_contacted,
             network_hosts_blocked,
             filesystem_violations,
+            reset_summary: self.pending_reset_summary.take(),
         };
 
         Self::emit_diagnostics_events(&collected, self.runtime_id_str(), descriptor.entrypoint());
@@ -550,6 +556,7 @@ impl AardvarkRuntime {
             runtime_id = self.runtime_id_str()
         );
         let _guard = span.enter();
+        let start = Instant::now();
         if let Some(token) = env::var_os("AARDVARK_TEST_FORCE_RESET_FAILURE") {
             env::remove_var("AARDVARK_TEST_FORCE_RESET_FAILURE");
             let label = token
@@ -570,6 +577,21 @@ impl AardvarkRuntime {
             drop(old);
         }
         self.engine = Some(create_engine(language, &self.config)?);
+        self.engine_generation = self.engine_generation.saturating_add(1);
+        let summary = ResetSummary {
+            mode: ResetMode::RecreateEngine,
+            duration_ms: start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+            engine_generation: self.engine_generation,
+        };
+        info!(
+            target: "aardvark::runtime",
+            runtime_id = self.runtime_id_str(),
+            reset.mode = ?summary.mode,
+            reset.duration_ms = summary.duration_ms,
+            reset.engine_generation = summary.engine_generation,
+            "reset recorded"
+        );
+        self.pending_reset_summary = Some(summary);
         self.warm_restored = false;
         Ok(())
     }
@@ -582,6 +604,7 @@ impl AardvarkRuntime {
             runtime_id = self.runtime_id_str()
         );
         let _guard = span.enter();
+        let start = Instant::now();
         let language = self
             .engine
             .as_ref()
@@ -589,8 +612,39 @@ impl AardvarkRuntime {
             .unwrap_or(self.config.default_language);
         if let Some(engine) = self.engine.as_mut() {
             engine.reset_in_place(&self.config)?;
+            let summary = ResetSummary {
+                mode: ResetMode::InPlace,
+                duration_ms: start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                engine_generation: self.engine_generation,
+            };
+            info!(
+                target: "aardvark::runtime",
+                runtime_id = self.runtime_id_str(),
+                reset.mode = ?summary.mode,
+                reset.duration_ms = summary.duration_ms,
+                reset.engine_generation = summary.engine_generation,
+                "reset recorded"
+            );
+            self.pending_reset_summary = Some(summary);
         } else {
             self.engine = Some(create_engine(language, &self.config)?);
+            self.engine_generation = self.engine_generation.saturating_add(1);
+            let summary = ResetSummary {
+                mode: ResetMode::RecreateEngine,
+                duration_ms: start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                engine_generation: self.engine_generation,
+            };
+            info!(
+                target: "aardvark::runtime",
+                runtime_id = self.runtime_id_str(),
+                reset.mode = ?summary.mode,
+                reset.duration_ms = summary.duration_ms,
+                reset.engine_generation = summary.engine_generation,
+                "reset recorded"
+            );
+            self.pending_reset_summary = Some(summary);
+            self.warm_restored = false;
+            return Ok(());
         }
         self.warm_restored = false;
         Ok(())
@@ -600,10 +654,26 @@ impl AardvarkRuntime {
         if self.engine.as_ref().map(|engine| engine.language()) == Some(language) {
             return Ok(());
         }
+        let start = Instant::now();
         if let Some(old) = self.engine.take() {
             drop(old);
         }
         self.engine = Some(create_engine(language, &self.config)?);
+        self.engine_generation = self.engine_generation.saturating_add(1);
+        let summary = ResetSummary {
+            mode: ResetMode::RecreateEngine,
+            duration_ms: start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+            engine_generation: self.engine_generation,
+        };
+        info!(
+            target: "aardvark::runtime",
+            runtime_id = self.runtime_id_str(),
+            reset.mode = ?summary.mode,
+            reset.duration_ms = summary.duration_ms,
+            reset.engine_generation = summary.engine_generation,
+            "reset recorded"
+        );
+        self.pending_reset_summary = Some(summary);
         self.warm_restored = false;
         Ok(())
     }
@@ -819,6 +889,7 @@ impl AardvarkRuntime {
         diagnostics.network_hosts_contacted = collected.network_hosts_contacted.clone();
         diagnostics.network_hosts_blocked = collected.network_hosts_blocked.clone();
         diagnostics.filesystem_violations = collected.filesystem_violations.clone();
+        diagnostics.reset = collected.reset_summary.clone();
         diagnostics
     }
 

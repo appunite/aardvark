@@ -1,6 +1,9 @@
 //! Host-facing helpers for consuming sandbox diagnostics.
 
-use crate::outcome::{Diagnostics, FilesystemViolation, NetworkDeniedHost, NetworkHostContact};
+use crate::outcome::{
+    Diagnostics, FilesystemViolation, NetworkDeniedHost, NetworkHostContact, ResetMode,
+    ResetSummary,
+};
 
 /// Aggregated telemetry derived from [`Diagnostics`] for host integrations.
 #[derive(Clone, Debug, Default)]
@@ -8,6 +11,7 @@ pub struct SandboxTelemetry {
     pub cpu_ms_used: Option<u64>,
     pub filesystem: FilesystemTelemetry,
     pub network: NetworkTelemetry,
+    pub reset: Option<ResetTelemetry>,
 }
 
 /// Filesystem usage and violation details.
@@ -24,6 +28,14 @@ pub struct NetworkTelemetry {
     pub blocked: Vec<NetworkDeniedHost>,
 }
 
+/// Reset data captured prior to invocation.
+#[derive(Clone, Debug)]
+pub struct ResetTelemetry {
+    pub mode: ResetMode,
+    pub duration_ms: u64,
+    pub engine_generation: u64,
+}
+
 impl From<&Diagnostics> for SandboxTelemetry {
     fn from(value: &Diagnostics) -> Self {
         Self {
@@ -36,6 +48,17 @@ impl From<&Diagnostics> for SandboxTelemetry {
                 allowed: value.network_hosts_contacted.clone(),
                 blocked: value.network_hosts_blocked.clone(),
             },
+            reset: value.reset.as_ref().map(ResetTelemetry::from),
+        }
+    }
+}
+
+impl From<&ResetSummary> for ResetTelemetry {
+    fn from(summary: &ResetSummary) -> Self {
+        Self {
+            mode: summary.mode.clone(),
+            duration_ms: summary.duration_ms,
+            engine_generation: summary.engine_generation,
         }
     }
 }

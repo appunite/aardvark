@@ -64,6 +64,8 @@ pub struct Diagnostics {
     pub network_hosts_blocked: Vec<NetworkDeniedHost>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filesystem_violations: Vec<FilesystemViolation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset: Option<ResetSummary>,
 }
 
 impl Diagnostics {
@@ -71,6 +73,21 @@ impl Diagnostics {
     pub fn to_telemetry(&self) -> SandboxTelemetry {
         SandboxTelemetry::from(self)
     }
+}
+
+/// Summary of the reset that prepared the runtime for this invocation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResetSummary {
+    pub mode: ResetMode,
+    pub duration_ms: u64,
+    pub engine_generation: u64,
+}
+
+/// Reset mechanism used before the invocation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ResetMode {
+    RecreateEngine,
+    InPlace,
 }
 
 /// Structured status of the execution.

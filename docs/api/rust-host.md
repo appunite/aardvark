@@ -131,6 +131,7 @@ Returned runtimes are marked dirty and scrubbed the next time the pool needs add
 - `reset_to_snapshot()` recreates the language engine from scratch. This is the slow but safest option when you want to reclaim every resource.
 - `reset_in_place()` reuses the existing isolate, wipes the context, and replays the bootstrap assets so the next invocation starts from the warm snapshot without a full teardown.
 - `PoolResetMode::InPlace` lets the pool call `reset_in_place()` automatically when a handle is dropped; use it together with `ResetPolicy::Manual`.
+- After a reset runs, the next invocation’s diagnostics include `reset.mode`, `reset.duration_ms`, and `reset.engine_generation` so hosts can export per-checkout latency metrics.
 
 ## Warm Snapshots for Faster Cold Starts
 
