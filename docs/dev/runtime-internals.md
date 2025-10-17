@@ -86,3 +86,9 @@ information about the moving parts you are likely to touch.
 5. Add integration tests to prevent regressions.
 
 Following this order keeps host APIs and in-process behaviour aligned.
+
+## Benchmarking Basics
+
+- `cargo run -p aardvark-core --example bench_echo -- [iterations] [payload_len]` exercises a tiny Python echo handler and prints per-phase timings (`prepare`, `run`, `total`).
+- The harness captures a warm snapshot up-front, so in-place resets hit the fast path (overlay already baked into the snapshot).
+- Adjust `payload_len` to explore how return sizes influence the execution phase; the `prepare` measurement stays dominated by warm-restore.

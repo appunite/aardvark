@@ -12,8 +12,8 @@ use aardvark_core::{
 use bytes::Bytes;
 use serde_json::json;
 use std::env;
-use std::path::PathBuf;
 use std::io::Write;
+use std::path::PathBuf;
 use zip::write::FileOptions;
 use zip::CompressionMethod;
 
