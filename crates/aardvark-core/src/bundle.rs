@@ -3,6 +3,7 @@
 use std::fmt;
 use std::io::{Cursor, Read, Seek};
 use std::path::{Component, Path};
+use std::sync::Arc;
 
 use crate::bundle_manifest::{BundleManifest, MANIFEST_BASENAME};
 use crate::error::{PyRunnerError, Result};
@@ -12,8 +13,8 @@ use zip::ZipArchive;
 /// Representation of a file contained in a bundle.
 #[derive(Clone)]
 pub struct BundleEntry {
-    path: String,
-    data: Vec<u8>,
+    path: Arc<str>,
+    data: Arc<[u8]>,
 }
 
 impl BundleEntry {
@@ -38,13 +39,29 @@ impl fmt::Debug for BundleEntry {
 }
 
 /// An in-memory bundle extracted from a ZIP archive.
-#[derive(Debug, Default, Clone)]
+#[derive(Clone, Default)]
 pub struct Bundle {
+    inner: Arc<BundleInner>,
+}
+
+#[derive(Default)]
+struct BundleInner {
     entries: Vec<BundleEntry>,
+}
+
+impl fmt::Debug for Bundle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Bundle")
+            .field("entries", &self.inner.entries)
+            .finish()
+    }
 }
 
 impl Bundle {
     /// Constructs a bundle from a ZIP archive held entirely in memory.
+    ///
+    /// Cloning the resulting `Bundle` is inexpensive; the file data is reference
+    /// counted internally so you can parse once and reuse it across invocations.
     pub fn from_zip_bytes(bytes: impl AsRef<[u8]>) -> Result<Self> {
         let cursor = Cursor::new(bytes.as_ref().to_vec());
         Self::from_reader(cursor)
@@ -67,8 +84,8 @@ impl Bundle {
             })?;
             let data = read_zip_file(file)?;
             entries.push(BundleEntry {
-                path: normalized,
-                data,
+                path: Arc::<str>::from(normalized),
+                data: Arc::<[u8]>::from(data),
             });
         }
         if entries.is_empty() {
@@ -76,20 +93,23 @@ impl Bundle {
                 "bundle did not contain any files".to_owned(),
             ));
         }
-        Ok(Self { entries })
+        Ok(Self {
+            inner: Arc::new(BundleInner { entries }),
+        })
     }
 
     /// Returns all entries in this bundle.
     pub fn entries(&self) -> &[BundleEntry] {
-        &self.entries
+        &self.inner.entries
     }
 
     /// Parses and returns the embedded bundle manifest, if present.
     pub fn manifest(&self) -> Result<Option<BundleManifest>> {
         let entry = self
+            .inner
             .entries
             .iter()
-            .find(|entry| entry.path == MANIFEST_BASENAME);
+            .find(|entry| entry.path.as_ref() == MANIFEST_BASENAME);
         match entry {
             Some(manifest_entry) => {
                 let manifest = BundleManifest::from_bytes(manifest_entry.contents())?;
@@ -101,7 +121,9 @@ impl Bundle {
 
     /// Consumes the bundle and returns its entries.
     pub fn into_entries(self) -> Vec<BundleEntry> {
-        self.entries
+        Arc::try_unwrap(self.inner)
+            .map(|inner| inner.entries)
+            .unwrap_or_else(|inner| inner.entries.clone())
     }
 }
 

@@ -3,28 +3,32 @@
 use crate::assets;
 use crate::bundle::Bundle;
 use crate::bundle_manifest::BundleManifest;
-use crate::config::PyRuntimeConfig;
+use crate::config::{PyRuntimeConfig, WarmState};
 use crate::engine::{JsRuntime, PyodideLoadOptions};
 use crate::error::{PyRunnerError, Result};
 use crate::package_metadata;
 use crate::runtime_language::RuntimeLanguage;
+use std::fs;
+use std::path::Path;
+use std::sync::Arc;
 use v8;
 
 use super::LanguageEngine;
-use std::fs;
-use std::path::Path;
 
 pub struct PythonEngine {
     js: JsRuntime,
-    snapshot_bytes: Option<Vec<u8>>,
+    snapshot_bytes: Option<Arc<[u8]>>,
+    warm_state: Option<WarmState>,
 }
 
 impl PythonEngine {
     pub fn new(config: &PyRuntimeConfig) -> Result<Self> {
         let js = JsRuntime::new()?;
+        let warm_state = config.warm_state.clone();
         let mut engine = Self {
             js,
             snapshot_bytes: load_snapshot_bytes(config)?,
+            warm_state,
         };
         engine.register_core_assets();
         engine.inject_version_globals(config)?;
@@ -93,16 +97,25 @@ impl LanguageEngine for PythonEngine {
         let make_snapshot = config.snapshot.save_to.is_some();
         let snapshot_owned = self.snapshot_bytes.clone();
         let load_opts = PyodideLoadOptions {
-            snapshot: snapshot_owned.as_deref(),
+            snapshot: snapshot_owned.as_ref().map(|arc| arc.as_ref()),
             make_snapshot,
         };
         self.js.load_pyodide(load_opts)?;
         self.snapshot_bytes = None;
+        if let Some(state) = self.warm_state.as_ref() {
+            let overlay = state.overlay();
+            self.js.import_overlay(&overlay.metadata, &overlay.blobs)?;
+            self.js.prepare_dynlibs()?;
+        }
         Ok(())
     }
 
     fn load_manifest_packages(&mut self, manifest: &BundleManifest) -> Result<()> {
         if manifest.packages().is_empty() {
+            return Ok(());
+        }
+        if self.warm_state.is_some() {
+            // Packages already included in the warm snapshot.
             return Ok(());
         }
         self.js.load_packages(manifest.packages())?;
@@ -113,21 +126,34 @@ impl LanguageEngine for PythonEngine {
     fn mount_bundle(&mut self, bundle: &Bundle) -> Result<()> {
         self.js.mount_bundle(bundle, "/app")
     }
-}
 
-fn load_snapshot_bytes(config: &PyRuntimeConfig) -> Result<Option<Vec<u8>>> {
-    if let Some(path) = config.snapshot.load_from.as_ref() {
-        read_snapshot_bytes(path).map(Some)
-    } else {
-        Ok(None)
+    fn set_warm_state(&mut self, state: Option<WarmState>) {
+        self.warm_state = state;
+        self.snapshot_bytes = self.warm_state.as_ref().map(|s| s.snapshot());
     }
 }
 
-fn read_snapshot_bytes(path: &Path) -> Result<Vec<u8>> {
-    fs::read(path).map_err(|err| {
+fn load_snapshot_bytes(config: &PyRuntimeConfig) -> Result<Option<Arc<[u8]>>> {
+    if let Some(state) = config.warm_state.as_ref() {
+        return Ok(Some(state.snapshot()));
+    }
+    if let Some(cached) = config.snapshot.cached_bytes() {
+        return Ok(Some(cached));
+    }
+    let Some(path) = config.snapshot.load_from.as_ref() else {
+        return Ok(None);
+    };
+    let bytes = read_snapshot_bytes(path)?;
+    config.snapshot.store_cached_bytes(bytes.clone());
+    Ok(Some(bytes))
+}
+
+fn read_snapshot_bytes(path: &Path) -> Result<Arc<[u8]>> {
+    let data = fs::read(path).map_err(|err| {
         PyRunnerError::Init(format!(
             "failed to read snapshot from {}: {err}",
             path.display()
         ))
-    })
+    })?;
+    Ok(Arc::<[u8]>::from(data.into_boxed_slice()))
 }

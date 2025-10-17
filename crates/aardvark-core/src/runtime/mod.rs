@@ -5,7 +5,7 @@ mod python;
 
 use crate::bundle::Bundle;
 use crate::bundle_manifest::{BundleManifest, ManifestFilesystemMode, ManifestFilesystemResources};
-use crate::config::{PyRuntimeConfig, ResetPolicy};
+use crate::config::{PyRuntimeConfig, ResetPolicy, WarmState};
 use crate::engine::{ExecutionOutput, FilesystemModeConfig, JsRuntime};
 use crate::error::{PyRunnerError, Result};
 use crate::invocation::{InvocationDescriptor, InvocationLimits};
@@ -50,6 +50,7 @@ trait LanguageEngine {
     fn prepare_environment(&mut self, config: &PyRuntimeConfig) -> Result<()>;
     fn load_manifest_packages(&mut self, manifest: &BundleManifest) -> Result<()>;
     fn mount_bundle(&mut self, bundle: &Bundle) -> Result<()>;
+    fn set_warm_state(&mut self, _state: Option<WarmState>) {}
 }
 
 #[derive(Debug, Clone)]
@@ -229,6 +230,19 @@ impl AardvarkRuntime {
         }
 
         Ok((session, manifest))
+    }
+
+    /// Captures a warm state (snapshot + overlay) after packages are loaded.
+    pub fn capture_warm_state(&mut self) -> Result<WarmState> {
+        let snapshot_bytes = {
+            let bytes = self.engine_mut().js_mut().collect_snapshot()?;
+            Arc::<[u8]>::from(bytes.into_boxed_slice())
+        };
+        let overlay = self.engine_mut().js_mut().export_overlay()?;
+        let state = WarmState::new(snapshot_bytes, overlay);
+        self.config.warm_state = Some(state.clone());
+        self.engine_mut().set_warm_state(Some(state.clone()));
+        Ok(state)
     }
 
     /// Runs a prepared session using the default invocation strategy for the selected language.
