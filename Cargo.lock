@@ -58,6 +58,7 @@ dependencies = [
  "serde",
  "serde_json",
  "structopt",
+ "which 4.4.2",
  "zip",
 ]
 
@@ -2404,7 +2405,7 @@ dependencies = [
  "miniz_oxide",
  "paste",
  "ry_temporal_capi",
- "which",
+ "which 6.0.3",
 ]
 
 [[package]]
@@ -2575,6 +2576,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32b130c0d2d49f8b6889abc456e795e82525204f27c42cf767cf0d7734e089b8"
 dependencies = [
  "rustls-pki-types",
+]
+
+[[package]]
+name = "which"
+version = "4.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87ba24419a2078cd2b0f2ede2691b6c66d8e47836da3b6db8265ebad47afbfc7"
+dependencies = [
+ "either",
+ "home",
+ "once_cell",
+ "rustix 0.38.44",
 ]
 
 [[package]]

@@ -8,6 +8,7 @@ use aardvark_core::{Bundle, PyRuntime, PyRuntimeConfig};
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 use structopt::StructOpt;
+use which::which;
 
 #[derive(StructOpt, Debug)]
 #[structopt(
@@ -154,8 +155,10 @@ fn bench_aardvark(scenario: Scenario, iterations: usize) -> Result<BenchResult> 
 }
 
 fn bench_host(scenario: Scenario, iterations: usize) -> Result<BenchResult> {
-    let script = Path::new("perf/fixtures/run_host.py");
-    let mut cmd = Command::new("uv");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/run_host.py");
+    let uv = which("uv")
+        .context("`uv` command not found on PATH. Install from https://docs.astral.sh/uv/ or ensure it is available before running the perf suite.")?;
+    let mut cmd = Command::new(uv);
     cmd.arg("run");
     cmd.arg(format!("--python={}", host_python_version()));
     for pkg in scenario_packages(scenario) {
