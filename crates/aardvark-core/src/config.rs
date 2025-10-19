@@ -123,7 +123,10 @@ impl WarmState {
         }
     }
 
-    /// Returns a new warm state flagged as overlay-preloaded.
+    /// Flags the warm state as already containing the overlay contents inside the snapshot.
+    ///
+    /// Hosts that assemble a warm state manually can call this to skip the overlay import
+    /// step during `prepare_environment`.
     pub fn into_overlay_preloaded(mut self) -> Self {
         self.overlay_preloaded = true;
         self
@@ -139,7 +142,8 @@ impl WarmState {
         self.overlay.clone()
     }
 
-    /// Indicates whether the overlay contents were baked into the snapshot.
+    /// Indicates whether the overlay contents were baked into the snapshot, allowing
+    /// the runtime to skip `import_overlay` when restoring the warm state.
     pub fn overlay_preloaded(&self) -> bool {
         self.overlay_preloaded
     }

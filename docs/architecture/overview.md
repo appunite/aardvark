@@ -8,6 +8,7 @@ This document introduces Aardvark’s execution model from the host’s point of
 - Allow hosts to preload dependencies (via manifests, overlays, and snapshots) so cold-start cost stays predictable.
 - Enforce resource limits inside the same process: CPU, wall time, heap, filesystem writes, and outbound network access.
 - Keep the host-facing API small enough for Rust, but expose structured diagnostics so other host languages can wrap it later.
+- Surface reset timings and sandbox telemetry so pooling strategies remain observable without tracing every call.
 
 ## Layers at a Glance
 
@@ -39,7 +40,7 @@ graph TD
 4. **Watchdogs** – Wall-clock and CPU watchdogs arm before calling into the guest. Heap usage is checked both before and after execution.
 5. **Sandbox enforcement** – The JS layer enforces network allowlists (HTTPS by default), filesystem mode/quota, and host capability gates for native bridges. Violations are raised back to Rust.
 6. **Outcome synthesis** – Captured stdout/stderr, console messages, payloads, sandbox telemetry, and policy violations are combined into `ExecutionOutcome`.
-7. **Reset** – Depending on `ResetPolicy`, runtimes either reset automatically to the baseline snapshot or rely on the pool handle drop path to do so.
+7. **Reset** – Depending on `ResetPolicy`, runtimes either rebuild the engine (`reset_to_snapshot`) or scrub it in place (`reset_in_place`). Warm states captured inside the runtime bake the overlay into the snapshot, so in-place resets reuse site-packages without rehydrating tarballs.
 
 The same flow is used whether the runtime comes from a pool or is standalone. Pooling only changes lifecycle management around steps 2 and 7.
 
@@ -72,12 +73,13 @@ sequenceDiagram
 - **Descriptor-first contract** – Manifests are optional at runtime. Hosts can provide `InvocationDescriptor`s directly when they need to override limits or use fully dynamic pipelines. Manifests exist to make bundles self-describing for less opinionated hosts.
 - **“Everything is a bundle”** – Packages, manifests, and entrypoints travel together inside a single ZIP. This keeps the host API simple and avoids filesystem mutation outside the sandbox when code is deployed.
 - **Telemetry as a first-class product** – Diagnostics always attach CPU, filesystem, and network telemetry even when the invocation fails. Hosts can surface policy violations without parsing logs.
+- **Reset visibility** – Each invocation records how the runtime was reset (recreate vs in-place), how long it took, and which engine generation served the handler, making pool behaviour observable without diving into logs.
 
 ## Current Limitations
 
 - Only Linux/macOS targets are exercised. Windows builds are untested and expected to fail.
 - Shared buffer handles present zero-copy views backed by the runtime; the host may still materialize owned copies when required.
 - JavaScript bundles must be fully self-contained. Ship pre-bundled modules (e.g., via esbuild/webpack) because the runtime does not resolve npm packages or fetch external scripts.
-- Snapshot overlays assume Pyodide 0.28.2. Future Pyodide upgrades will require regenerating overlay metadata and schema version bumping.
+- Snapshot overlays assume Pyodide 0.28.2. Future Pyodide upgrades will require regenerating overlay metadata and schema version bumping. When hosts build warm states out of band they must flag them as overlay-preloaded to avoid redundant imports.
 - Network sandboxing is allowlist-based per session. There is no per-request override yet, and DNS leakage is not mitigated beyond host matching.
 - Filesystem quota enforcement only tracks writes within the virtual session directory. If code escapes to other WASM-visible mounts it will currently fail closed but without detailed accounting.

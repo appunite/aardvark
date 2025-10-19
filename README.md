@@ -10,10 +10,10 @@ Embedded multi-language runtime for executing sandboxed bundles inside V8, with 
 
 ## Why Aardvark?
 
-- **Snapshot-friendly runtimes** – Reuse warm isolates across requests, preload packages, and capture snapshots to keep cold-starts in check.
+- **Snapshot-friendly runtimes** – Reuse warm isolates across requests, bake overlays into warm snapshots, and keep cold starts predictable.
 - **Deterministic sandboxing** – Enforce per-invocation budgets for wall time, CPU, heap, filesystem writes, and outbound network hosts.
 - **Self-describing bundles** – Ship code, manifest, and dependency hints together as a ZIP; hosts can honour or override the manifest contract at runtime.
-- **First-class telemetry** – Every invocation emits structured diagnostics (stdout/stderr, exceptions, resource usage, policy violations) that hosts can feed into their own observability stack.
+- **First-class telemetry** – Every invocation emits structured diagnostics (stdout/stderr, exceptions, resource usage, policy violations, reset timings) that hosts can feed into their own observability stack.
 - **Runtime pooling** – Amortise startup cost by recycling isolates with predictable reset semantics.
 - **Dual-language engine (preview)** – Run JavaScript bundles alongside Python handlers using the same network/filesystem sandboxing. JavaScript support is read-only for now and expects bring-your-own modules.
 
@@ -126,7 +126,17 @@ fn build_warm_state(bytes: &[u8]) -> anyhow::Result<(PyRuntimeConfig, Bundle)> {
 }
 ```
 
-Any new runtime (or pool) constructed with that `PyRuntimeConfig` skips the heavy Pyodide bootstrap and restores directly from the warm snapshot.
+Any new runtime (or pool) constructed with that `PyRuntimeConfig` skips the heavy Pyodide bootstrap and restores directly from the warm snapshot. Snapshots captured inside the runtime automatically mark their overlays as preloaded so in-place resets avoid re-importing site-packages.
+
+## Benchmarking the runtime
+
+For a quick sanity check of `prepare` versus `run` timings, use the built-in bench example:
+
+```
+cargo run -p aardvark-core --example bench_echo -- 100 1024
+```
+
+Arguments are `[iterations] [payload_len]` (both optional). The harness warms the runtime, captures a warm snapshot, and prints avg/min/max milliseconds for `prepare`, `run`, and `total`. Use it to correlate host-side measurements with the core runtime.
 
 `docs/api/rust-host.md` expands on pooling, invocation strategies, and telemetry export. For JavaScript bundles, pass `language = "javascript"` in the manifest or descriptor and ship a self-contained bundle produced by your JS build tool.
 
@@ -153,7 +163,7 @@ The core library is published as `aardvark-core`. Before cutting any experimenta
 - Network sandboxing is allowlist-based per session; there is no per-request override yet.
 - Filesystem quota enforcement only covers the `/session` tree.
 - Streaming outputs and incremental logs are not available; handlers must return a single payload.
-- Warm snapshots are tied to the Pyodide build and manifest used when you captured them; changing either requires baking a new snapshot.
+- Warm snapshots are tied to the Pyodide build and manifest used when you captured them; changing either requires baking a new snapshot. When you assemble warm states manually, remember to flag them as `overlay_preloaded` so resets avoid redundant imports.
 - Runtime pool resets still execute synchronously on the thread that next checks out a runtime; there is no background reset worker yet.
 - API stability is not guaranteed; expect breaking changes while the runtime matures.
 

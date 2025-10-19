@@ -245,7 +245,17 @@ fn record(outcome: &ExecutionOutcome) {
 }
 ```
 
-`SandboxTelemetry` implements `Clone` so you can send it to background workers without keeping the original outcome alive.
+`SandboxTelemetry` implements `Clone` so you can send it to background workers without keeping the original outcome alive. It mirrors `Diagnostics::reset`, exposing the reset mode, duration, and engine generation so you can correlate pool behaviour with host metrics. Shared buffers arrive as zero-copy handles; prefer `SharedBufferHandle::as_slice()` to keep them zero-copy unless you truly need an owned copy.
+
+## Quick benchmark harness
+
+To compare host-side timings with the core runtime, run the example bench:
+
+```
+cargo run -p aardvark-core --example bench_echo -- 100 1024
+```
+
+Arguments are `[iterations] [payload_len]`. The harness warms the runtime, captures a warm snapshot, and prints avg/min/max for `prepare`, `run`, and `total` so you can verify pooling behaviour in isolation.
 
 ## Known gaps
 
