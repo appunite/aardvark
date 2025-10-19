@@ -29,11 +29,18 @@ runtime. The following steps get you ready to develop locally.
    mise install
    ```
 
-3. Fetch Pyodide assets. The build script expects a cached tarball inside
-   `tmp/`. Use the helper script:
+3. Fetch Pyodide assets. Download the upstream release and copy the contents of
+   the requested variant into `.aardvark/pyodide/<version>` so the runtime can
+   serve wheel requests locally:
 
    ```bash
-   scripts/fetch-pyodide.sh   # downloads the version pinned in assets.rs
+   mkdir -p .aardvark/pyodide/0.28.2
+   curl -L -o pyodide-0.28.2.tar.bz2 \
+     https://github.com/pyodide/pyodide/releases/download/0.28.2/pyodide-0.28.2.tar.bz2
+   echo "31021174e8fdc9556c17e9d435e20d9c07f203ac542d9161ca3b8d9d5d04e7e7  pyodide-0.28.2.tar.bz2" | sha256sum --check
+   tar -xjf pyodide-0.28.2.tar.bz2
+   rsync -a pyodide/pyodide/v0.28.2/full/ .aardvark/pyodide/0.28.2/
+   rm -rf pyodide pyodide-0.28.2.tar.bz2
    ```
 
 4. Build the workspace:

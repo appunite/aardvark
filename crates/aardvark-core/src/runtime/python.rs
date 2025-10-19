@@ -134,6 +134,7 @@ impl LanguageEngine for PythonEngine {
             // Packages already included in the warm snapshot.
             return Ok(());
         }
+        tracing::info!(target: "aardvark::packages", packages = ?manifest.packages(), "loading packages from manifest");
         self.js.load_packages(manifest.packages())?;
         self.js.prepare_dynlibs()?;
         Ok(())

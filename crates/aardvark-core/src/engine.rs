@@ -4,9 +4,10 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::env;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -25,6 +26,7 @@ use v8::{
     FunctionCallbackArguments, Local, Module, ModuleRequest, Object, PinScope, Promise,
     PromiseState, ReturnValue, String as V8String, Uint8Array, Value,
 };
+use walkdir::WalkDir;
 static V8_PLATFORM: OnceCell<v8::SharedRef<v8::Platform>> = OnceCell::new();
 static PACKAGE_ROOT: OnceCell<Option<PathBuf>> = OnceCell::new();
 
@@ -212,7 +214,27 @@ pub struct OverlayExport {
 
 fn package_root_dir() -> Option<&'static Path> {
     PACKAGE_ROOT
-        .get_or_init(|| env::var_os("AARDVARK_PYODIDE_PACKAGE_DIR").map(PathBuf::from))
+        .get_or_init(|| {
+            let value = env::var_os("AARDVARK_PYODIDE_PACKAGE_DIR").map(PathBuf::from);
+            let resolved = value.map(|path| {
+                if path.is_relative() {
+                    match env::current_dir() {
+                        Ok(cwd) => cwd.join(path),
+                        Err(_) => path.into(),
+                    }
+                } else {
+                    path
+                }
+            });
+            if let Some(ref path) = resolved {
+                tracing::debug!(
+                    target = "aardvark::packages",
+                    path = %path.display(),
+                    "initialised package root"
+                );
+            }
+            resolved
+        })
         .as_deref()
 }
 
@@ -233,14 +255,86 @@ fn resolve_local_package_path(url: &str) -> Option<PathBuf> {
         return None;
     }
     let as_path = Path::new(trimmed);
-    let candidate = root.join(as_path);
-    if candidate.exists() {
-        return Some(candidate);
+    let mut attempts: Vec<PathBuf> = Vec::new();
+
+    if let Some(file_name) = as_path.file_name() {
+        push_unique(&mut attempts, root.join(file_name));
+    }
+
+    if let Some(variant_relative) = strip_variant_prefix(as_path) {
+        push_unique(&mut attempts, root.join(&variant_relative));
+        if let Some(last) = variant_relative.file_name() {
+            push_unique(&mut attempts, root.join(last));
+        }
+    }
+
+    push_unique(&mut attempts, root.join(as_path));
+    push_unique(&mut attempts, root.join("pyodide").join(as_path));
+
+    if let Some(file_name) = as_path.file_name() {
+        push_unique(&mut attempts, root.join("full").join(file_name));
+    }
+
+    for candidate in attempts {
+        tracing::debug!(
+            target = "aardvark::packages",
+            path = %candidate.display(),
+            exists = candidate.exists(),
+            "checking local package candidate"
+        );
+        if candidate.exists() {
+            tracing::debug!(
+                target = "aardvark::packages",
+                path = %candidate.display(),
+                "resolved local package path"
+            );
+            return Some(candidate);
+        }
     }
     if let Some(file_name) = as_path.file_name() {
-        let fallback = root.join(file_name);
-        if fallback.exists() {
-            return Some(fallback);
+        if let Some(found) = walk_for_file(root, file_name) {
+            tracing::debug!(
+                target = "aardvark::packages",
+                path = %found.display(),
+                "resolved local package path via search"
+            );
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn strip_variant_prefix(path: &Path) -> Option<PathBuf> {
+    let mut components = path.components();
+    match (components.next()?, components.next(), components.next()) {
+        (
+            Component::Normal(first),
+            Some(Component::Normal(_version)),
+            Some(Component::Normal(_variant)),
+        ) if first == OsStr::new("pyodide") => {
+            let remaining = components.as_path();
+            if remaining.as_os_str().is_empty() {
+                None
+            } else {
+                Some(remaining.to_path_buf())
+            }
+        }
+        _ => None,
+    }
+}
+
+fn push_unique(list: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if !list.iter().any(|existing| existing == &candidate) {
+        list.push(candidate);
+    }
+}
+
+fn walk_for_file(root: &Path, needle: &OsStr) -> Option<PathBuf> {
+    let walker = WalkDir::new(root).into_iter();
+    for entry in walker.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.file_name() == Some(needle) {
+            return Some(path.to_path_buf());
         }
     }
     None

@@ -13,26 +13,26 @@ For crates.io you will depend on the published version instead of the workspace 
 
 ## Preparing Pyodide assets
 
-Before initialising the runtime you need the pinned Pyodide bundle on disk. The recommended path is
+Before initialising the runtime you need the pinned Pyodide bundle on disk.
+Download the upstream archive, extract it, and move the desired variant into a
+flat directory so the runtime can resolve requests such as
+`pyodide/v0.28.2/full/numpy-….whl` from
+`./.aardvark/pyodide/0.28.2/numpy-….whl`:
 
 ```
-cargo aardvark fetch-pyodide --version 0.28.2 --variant core
-```
-
-which creates `./.aardvark/pyodide/0.28.2/core`. Export `AARDVARK_PYODIDE_PACKAGE_DIR` (or configure `PyRuntimeConfig`) to that directory. Use `--variant full` or `--extra static-libraries,xbuildenv` when you need the larger bundles.
-
-Need a shell-only alternative? Download manually:
-
-```
-curl -L -o pyodide-core-0.28.2.tar.bz2 \
-  https://github.com/pyodide/pyodide/releases/download/0.28.2/pyodide-core-0.28.2.tar.bz2
-echo "c9f6dd067d119e50850849f7428e3c636ecbc2684a0d2ff992f3bd48a1062b6c  pyodide-core-0.28.2.tar.bz2" | sha256sum --check
-tar -xjf pyodide-core-0.28.2.tar.bz2
 mkdir -p .aardvark/pyodide/0.28.2
-mv pyodide .aardvark/pyodide/0.28.2/core
+curl -L -o pyodide-0.28.2.tar.bz2 \
+  https://github.com/pyodide/pyodide/releases/download/0.28.2/pyodide-0.28.2.tar.bz2
+echo "31021174e8fdc9556c17e9d435e20d9c07f203ac542d9161ca3b8d9d5d04e7e7  pyodide-0.28.2.tar.bz2" | sha256sum --check
+tar -xjf pyodide-0.28.2.tar.bz2
+rsync -a pyodide/pyodide/v0.28.2/full/ .aardvark/pyodide/0.28.2/
+rm -rf pyodide pyodide-0.28.2.tar.bz2
 ```
 
-Point the environment variable at the resulting directory and mirror the URL/hash when you upgrade Pyodide.
+Export `AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.28.2` (or configure
+`PyRuntimeConfig`) before preparing a session. Swap the archive for the core
+bundle if you do not need the full wheel set, and update the URL/hash whenever
+you bump the pinned version.
 
 ## Creating a runtime
 

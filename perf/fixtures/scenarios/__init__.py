@@ -1,9 +1,23 @@
-from . import echo
-from . import numpy_case
-from . import pandas_case
+def _echo():
+    from . import echo
+
+    return echo.main
+
+
+def _numpy():
+    from . import numpy_case
+
+    return numpy_case.main
+
+
+def _pandas():
+    from . import pandas_case
+
+    return pandas_case.main
+
 
 SCENARIOS = {
-    "echo": echo.main,
-    "numpy": numpy_case.main,
-    "pandas": pandas_case.main,
+    "echo": _echo,
+    "numpy": _numpy,
+    "pandas": _pandas,
 }

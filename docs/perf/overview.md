@@ -28,7 +28,12 @@ mise exec python@3.12 -- python --version
 
 ## Running the Benchmarks
 
-By default the harness expects the curated Pyodide cache checked into `tmp/pyodide` (built against CPython 3.13 to match the Aardvark snapshot). If you maintain your own cache, point `AARDVARK_PYODIDE_PACKAGE_DIR` at it before running the benchmarks.
+The harness reads Pyodide wheels from the directory referenced by
+`AARDVARK_PYODIDE_PACKAGE_DIR` (the `Makefile` forwards `PYODIDE_DIR`, which
+defaults to `./.aardvark/pyodide/0.28.2`). Stage the upstream release and copy
+the contents of `pyodide/v0.28.2/full/` (or `core/`) into that directory so the
+runtime can serve requests like `pyodide/v0.28.2/full/numpy-….whl` from a flat
+layout.
 
 From the repository root:
 
@@ -48,7 +53,6 @@ Sample console output:
 
 The JSON/CSV files contain the same data for further analysis and live under `target/perf/`.
 
-> **Note:** `make pyodide-fetch` pulls the upstream Pyodide release (CPython 3.11). It does **not** match our curated snapshot and is provided only if you need the stock build for other experiments.
 
 ### Single Scenario
 

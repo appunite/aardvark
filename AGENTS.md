@@ -5,7 +5,7 @@
 - `crates/aardvark-cli/`: developer CLI that exercises the core library end to end.
 - `integration-tests/`: slower overlay and pooling scenarios that rely on prepared caches.
 - `docs/`: public architecture/API references and `docs/dev/` for contributor workflow notes.
-- `scripts/` and `tmp/`: helper tooling and cached artifacts (Pyodide wheels, overlays).
+- `scripts/` and `.aardvark/`: helper tooling plus developer-managed caches (Pyodide wheels, overlays). The `.aardvark/pyodide/<version>` directory is ignored by git and should contain the flattened Pyodide release you stage locally.
 
 ## Build, Test, and Development Commands
 - `cargo build -p aardvark-core`: compile the runtime library; run before editing JS shims to confirm bindings.

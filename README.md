@@ -30,7 +30,7 @@ cargo run -p aardvark-cli -- \
 To preload packages, point the runtime at an unpacked Pyodide cache:
 
 ```
-AARDVARK_PYODIDE_PACKAGE_DIR=tmp/pyodide \
+AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.28.2 \
   cargo run -p aardvark-cli -- \
   --bundle example/pandas_numpy_bundle.zip \
   --manifest
@@ -40,54 +40,47 @@ The manifest bundled with the example instructs the runtime to install `numpy` a
 
 ### Preparing Pyodide assets
 
-The runtime expects a local Pyodide cache. Use the helper to download and verify the pinned build:
+The runtime expects a local Pyodide cache and never downloads wheels on demand.
+Stage the upstream release yourself and flatten it into
+`./.aardvark/pyodide/<version>` so every asset sits directly under that
+directory:
 
 ```
-cargo aardvark fetch-pyodide --version 0.28.2 --variant core
-```
-
-Assets land under `./.aardvark/pyodide/0.28.2/core`. Point `AARDVARK_PYODIDE_PACKAGE_DIR` (or `PyRuntimeConfig::pyodide_version`) at that directory before running the runtime. Swap `--variant full` for the full bundle or add extras like `--extra static-libraries,xbuildenv` when you need development tooling.
-
-Only need the downloader? Install it standalone:
-
-```
-cargo install aardvark-cli --no-default-features --features fetcher
-```
-
-Prefer a pure shell workflow? Mirror the helper with `curl` and `tar`:
-
-```
-curl -L -o pyodide-core-0.28.2.tar.bz2 \
-  https://github.com/pyodide/pyodide/releases/download/0.28.2/pyodide-core-0.28.2.tar.bz2
-echo "c9f6dd067d119e50850849f7428e3c636ecbc2684a0d2ff992f3bd48a1062b6c  pyodide-core-0.28.2.tar.bz2" | sha256sum --check
-tar -xjf pyodide-core-0.28.2.tar.bz2
 mkdir -p .aardvark/pyodide/0.28.2
-mv pyodide .aardvark/pyodide/0.28.2/core
+curl -L -o pyodide-0.28.2.tar.bz2 \
+  https://github.com/pyodide/pyodide/releases/download/0.28.2/pyodide-0.28.2.tar.bz2
+echo "31021174e8fdc9556c17e9d435e20d9c07f203ac542d9161ca3b8d9d5d04e7e7  pyodide-0.28.2.tar.bz2" | sha256sum --check
+tar -xjf pyodide-0.28.2.tar.bz2
+rsync -a pyodide/pyodide/v0.28.2/full/ .aardvark/pyodide/0.28.2/
+rm -rf pyodide pyodide-0.28.2.tar.bz2
 ```
 
-Adjust the URL and checksum if you pin a different version.
+Swap the archive name for `pyodide-core-0.28.2.tar.bz2` if you only need the
+core subset. Once the files are in place, set
+`AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.28.2` (or configure
+`PyRuntimeConfig::pyodide_version`). When Pyodide requests
+`pyodide/v0.28.2/full/numpy-*.whl`, the runtime will serve
+`.aardvark/pyodide/0.28.2/numpy-*.whl` straight from disk.
 
 ### Building CLI release binaries
 
-Use the workspace task runner to produce release artefacts for both CLI variants:
+Use the workspace task runner to produce release artefacts for the CLI:
 
     cargo install cross
     cargo run -p xtask -- release-cli
 
-The task ensures the required Rust targets are installed (`rustup target add …`) before building.
-
-The command writes binaries into `./dist/`, building the full runtime CLI (`aardvark-cli`) and the downloader-only helper (`cargo-aardvark`) for the default targets (`x86_64-apple-darwin` and `x86_64-unknown-linux-gnu`).
+The task ensures the required Rust targets are installed (`rustup target add …`)
+before building. Binaries land in `./dist/` (default targets:
+`x86_64-apple-darwin` and `x86_64-unknown-linux-gnu`).
 
 Useful flags:
 
 - `--targets <triple[,triple]>` – override the target list.
-- `--skip-full` / `--skip-fetcher` – build only one variant.
 - `--out-dir <path>` – choose a different output directory.
 
 Prefer to run the underlying cross-compiles yourself?
 
     cross build -p aardvark-cli --release --target x86_64-unknown-linux-gnu
-    cross build -p aardvark-cli --release --no-default-features --features fetcher --target x86_64-unknown-linux-gnu
 
 ## Embedding in Rust
 
@@ -146,7 +139,9 @@ Arguments are `[iterations] [payload_len]` (both optional). The harness warms th
 - API reference under `docs/api/` covers the manifest schema, host integration, handler contracts, and diagnostics handling with examples.
 - Developer onboarding material is available in `docs/dev/` for contributors extending the project.
 - Performance notes and benchmark workflow live in `docs/perf/overview.md`.
-- The included `Makefile` has helpers (`make perf-all`, `make perf-md`). By default it uses the curated Pyodide cache under `tmp/pyodide`; use `make pyodide-fetch` if you need the upstream release.
+- The included `Makefile` has helpers (`make perf-all`, `make perf-md`). It
+  honours `PYODIDE_DIR` (default `./.aardvark/pyodide/0.28.2`) when wiring up
+  the perf harness.
 
 ## Publishing Notes
 

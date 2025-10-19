@@ -1597,7 +1597,7 @@ function ensureSessionSitePackagesOnSysPath(Module, publicApi = null) {
   if (!sessionPath) {
     return;
   }
-  const script = `import os\nimport sys\n_path = os.path.normpath("${sessionPath}")\nif _path not in sys.path:\n    sys.path.insert(0, _path)\ndel os, sys, _path`;
+  const script = `import os\nimport sys\nimport importlib\n_path = os.path.normpath("${sessionPath}")\nif _path not in sys.path:\n    sys.path.insert(0, _path)\nsys.path_importer_cache.pop(_path, None)\nimportlib.invalidate_caches()\ndel os, sys, importlib, _path`;
   if (publicApi && typeof publicApi.runPython === "function") {
     try {
       publicApi.runPython(script);
@@ -3095,7 +3095,7 @@ globalThis.__aardvarkRegisterInputBuffer = function (name, buffer, metadata) {
         console.warn("[overlay] invalidate caches failed", err);
       }
       try {
-        const ensureSysPathCode = `import sys\npath = "${module.FS.sessionSitePackages}"\nif path not in sys.path:\n    sys.path.insert(0, path)\ndel sys, path`;
+        const ensureSysPathCode = `import sys\nimport importlib\npath = "${module.FS.sessionSitePackages}"\nif path not in sys.path:\n    sys.path.insert(0, path)\nsys.path_importer_cache.pop(path, None)\nimportlib.invalidate_caches()\ndel sys, importlib, path`;
         simpleRunPython(module, ensureSysPathCode);
       } catch (err) {
         nativeLog?.(`[overlay] failed to patch sys.path: ${String(err)}`);

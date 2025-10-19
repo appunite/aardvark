@@ -26,7 +26,7 @@ def main() -> None:
 
     scenario = args.scenario.lower()
     try:
-        handler = SCENARIOS[scenario]
+        handler = SCENARIOS[scenario]()
     except KeyError as exc:
         raise SystemExit(f"unknown scenario: {scenario}") from exc
 

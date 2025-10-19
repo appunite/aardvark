@@ -21,7 +21,7 @@ graph TD
 ## Manifest-driven packages
 
 - The manifest’s `packages` field lists Pyodide packages to preload. Names are normalised (trimmed, deduplicated, lowercase for comparisons).
-- During session preparation the JS bootstrap resolves dependencies using Pyodide’s lockfile and installs wheels from the local cache referenced by `AARDVARK_PYODIDE_PACKAGE_DIR`.
+- During session preparation the JS bootstrap resolves dependencies using Pyodide’s lockfile and installs wheels from the local cache referenced by `AARDVARK_PYODIDE_PACKAGE_DIR`. The cache should contain the flattened contents of `pyodide/v0.28.2/<variant>/` so requests like `pyodide/v0.28.2/full/numpy-….whl` resolve to `<cache>/numpy-….whl`.
 - Dynamic libraries required by those packages are preloaded immediately after installation so they remain available during snapshot capture and execution.
 
 ```mermaid
