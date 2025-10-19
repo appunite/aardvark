@@ -4,8 +4,8 @@ This suite measures a few representative workloads across the Aardvark runtime
 and a native CPython interpreter:
 
 - **Echo** – returns a fixed 1 KB string.
-- **NumPy** – multiplies two 200×200 matrices using `numpy`.
-- **Pandas** – aggregates a 50 000‑row DataFrame.
+- **NumPy** – applies deterministic sine transforms and matrix multiplies across 200×200 arrays.
+- **Pandas** – aggregates a 50 000‑row deterministic DataFrame.
 
 Each workload is executed through Aardvark (warm snapshot, in-place resets) and
 through the host Python interpreter. The harness records average/min/max
@@ -34,6 +34,10 @@ defaults to `./.aardvark/pyodide/0.28.2`). Stage the upstream release and copy
 the contents of `pyodide/v0.28.2/full/` (or `core/`) into that directory so the
 runtime can serve requests like `pyodide/v0.28.2/full/numpy-….whl` from a flat
 layout.
+
+Each iteration spins up a fresh runtime, installs the requested packages from
+the local cache, prepares the bundle, and executes the entrypoint. The reported
+timings therefore capture end-to-end cold preparation plus handler runtime.
 
 From the repository root:
 

@@ -105,7 +105,8 @@ impl LanguageEngine for PythonEngine {
         self.snapshot_bytes = None;
         if let Some(state) = self.warm_state.as_ref() {
             if state.overlay_preloaded() {
-                // Overlay already baked into the snapshot; no additional work required.
+                // Overlay already baked into the snapshot; refresh dynlibs to keep loaders in sync.
+                self.js.prepare_dynlibs()?;
             } else {
                 if let Some(token) = env::var_os("AARDVARK_TEST_FORCE_OVERLAY_IMPORT_FAILURE") {
                     env::remove_var("AARDVARK_TEST_FORCE_OVERLAY_IMPORT_FAILURE");

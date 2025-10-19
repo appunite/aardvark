@@ -108,27 +108,12 @@ fn bench_aardvark(scenario: Scenario, iterations: usize) -> Result<BenchResult> 
     let manifest = scenario_manifest(scenario);
     let bundle = build_bundle(python_source, manifest.as_bytes())?;
 
-    let snapshot_path = bundle_snapshot_path(scenario)?;
-    let mut config = PyRuntimeConfig::default();
-    if snapshot_path.exists() {
-        config.snapshot.load_from = Some(snapshot_path.clone());
-    }
-    config.snapshot.save_to = Some(snapshot_path);
-
-    let mut runtime = PyRuntime::new(config)?;
-
-    // Warm-up run to install packages and capture warm state.
-    let (session, _) = runtime.prepare_session_with_manifest(bundle.clone())?;
-    runtime.run_session(&session)?;
-    runtime.capture_warm_state()?;
-    runtime.reset_in_place()?;
-
     let mut prepare = Vec::with_capacity(iterations);
     let mut run = Vec::with_capacity(iterations);
     let mut total = Vec::with_capacity(iterations);
 
     for _ in 0..iterations {
-        runtime.reset_in_place()?;
+        let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
         let prep_start = std::time::Instant::now();
         let (session, _) = runtime.prepare_session_with_manifest(bundle.clone())?;
         let prep_elapsed = prep_start.elapsed();
@@ -258,6 +243,10 @@ fn timing_stats(samples: &[Duration]) -> TimingStats {
 }
 
 fn write_json(path: &Path, results: &[BenchResult]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
     let mut file =
         File::create(path).with_context(|| format!("failed to write {}", path.display()))?;
     file.write_all(serde_json::to_string_pretty(results)?.as_bytes())?;
@@ -265,6 +254,10 @@ fn write_json(path: &Path, results: &[BenchResult]) -> Result<()> {
 }
 
 fn write_csv(path: &Path, results: &[BenchResult]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
     let mut file =
         File::create(path).with_context(|| format!("failed to write {}", path.display()))?;
     writeln!(
@@ -313,14 +306,6 @@ fn print_summary(results: &[BenchResult]) {
             r.rss_kib.unwrap_or_default()
         );
     }
-}
-
-fn bundle_snapshot_path(scenario: Scenario) -> Result<PathBuf> {
-    let dir = PathBuf::from("target/perf_snapshots");
-    std::fs::create_dir_all(&dir)?;
-    let mut path = dir;
-    path.push(format!("{}.bin", scenario.name()));
-    Ok(path)
 }
 
 fn host_python_version() -> &'static str {
