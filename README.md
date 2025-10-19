@@ -145,6 +145,7 @@ Arguments are `[iterations] [payload_len]` (both optional). The harness warms th
 - Architecture guidance lives under `docs/architecture/`. Start with `overview.md` for a top-down explanation, then branch into resource-limits, sandbox internals, and telemetry.
 - API reference under `docs/api/` covers the manifest schema, host integration, handler contracts, and diagnostics handling with examples.
 - Developer onboarding material is available in `docs/dev/` for contributors extending the project.
+- Performance notes and benchmark workflow live in `docs/perf/overview.md`.
 
 ## Publishing Notes
 

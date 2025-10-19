@@ -1,0 +1,20 @@
+[package]
+name = "aardvark-perf"
+edition = "2021"
+version = "0.1.0"
+license = "Apache-2.0"
+authors = ["Aardvark Labs <dev@aardvark.example>"]
+description = "Performance harness for Aardvark runtime"
+
+[dependencies]
+aardvark-core = { path = "../../crates/aardvark-core" }
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+structopt = { version = "0.3", features = ["color"] }
+
+[dependencies.zip]
+workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
