@@ -146,7 +146,7 @@ Arguments are `[iterations] [payload_len]` (both optional). The harness warms th
 - API reference under `docs/api/` covers the manifest schema, host integration, handler contracts, and diagnostics handling with examples.
 - Developer onboarding material is available in `docs/dev/` for contributors extending the project.
 - Performance notes and benchmark workflow live in `docs/perf/overview.md`.
-- The included `Makefile` has helpers (`make pyodide-full`, `make perf-all`) to fetch Pyodide assets and run the perf suite.
+- The included `Makefile` has helpers (`make perf-all`, `make perf-md`). By default it uses the curated Pyodide cache under `tmp/pyodide`; use `make pyodide-fetch` if you need the upstream release.
 
 ## Publishing Notes
 
