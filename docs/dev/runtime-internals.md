@@ -92,3 +92,28 @@ Following this order keeps host APIs and in-process behaviour aligned.
 - `cargo run -p aardvark-core --example bench_echo -- [iterations] [payload_len]` exercises a tiny Python echo handler and prints per-phase timings (`prepare`, `run`, `total`).
 - The harness captures a warm snapshot up-front, so in-place resets hit the fast path (overlay already baked into the snapshot).
 - Adjust `payload_len` to explore how return sizes influence the execution phase; the `prepare` measurement stays dominated by warm-restore.
+
+## Threading & Pooling Model
+
+- **Single-threaded core.** `JsRuntime` owns a V8 isolate; every call into the engine must happen on the same OS thread that created it. The runtime is not `Send`/`Sync`, and `v8::Locker` guards the isolate.
+- **Host-driven parallelism.** To run handlers concurrently, hosts create or pool multiple runtimes—one per worker thread (or process). Each checkout stays on the borrowing thread until it is dropped.
+- **Pooling vs. manual reuse.** If you only run sequential invocations, holding a `PyRuntime` and calling `reset_in_place()` yourself is equivalent to pooling. Pools add value when you need lifecycle isolation (drop tainted runtimes) or multiple threads sharing a limited set of isolates.
+- **No implicit async.** Aardvark does not spawn worker threads or background reset tasks; everything is synchronous. If you wrap it in async code, use `spawn_blocking` or your own thread pool.
+
+```mermaid
+graph LR
+  T1[Host Thread 1] -->|checkout| Pool
+  T2[Host Thread 2] -->|checkout| Pool
+  Pool -->|runtime A| RuntimeA
+  Pool -->|runtime B| RuntimeB
+  RuntimeA --> T1
+  RuntimeB --> T2
+  T1 -->|drop| Pool
+  T2 -->|drop| Pool
+```
+
+1. Host threads check out runtimes when they need to execute a bundle. If none are available, they block.
+2. The runtime is used entirely on that thread (`prepare_session`, `run_session`). Moving it to another thread is undefined behaviour.
+3. Dropping the handle returns it to the pool, which performs the configured reset (in-place or full rebuild) before making it available again.
+
+🚫 **Do not** move `PyRuntime` or `PooledRuntime` values across threads. Need cross-thread execution? Spawn a dedicated worker thread per runtime and communicate via channels in your host layer.
