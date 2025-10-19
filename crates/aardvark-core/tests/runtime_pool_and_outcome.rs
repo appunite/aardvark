@@ -240,6 +240,7 @@ def main():
     Ok(())
 }
 
+#[allow(clippy::field_reassign_with_default)]
 fn verify_warm_state_skips_overlay_import() -> Result<()> {
     let mut config = PyRuntimeConfig::default();
     config.snapshot.save_to = Some(PathBuf::from("target/warm-state.snapshot"));
