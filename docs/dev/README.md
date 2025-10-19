@@ -11,8 +11,6 @@ organised so you can jump straight to the task at hand:
   bridge, Pyodide boot sequence, and sandbox shims.
 - [`release.md`](release.md) – tagging, changelog hygiene, and crates.io publish
   checklist.
-- [`triage.md`](triage.md) – how we track issues, prioritise bugs, and decide
-  what lands next.
 
 These documents mirror the public architecture notes but focus on *how* to make
 changes safely, not just on what the runtime does.
