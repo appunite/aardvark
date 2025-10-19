@@ -7,7 +7,7 @@ use aardvark_core::{
         JsonInvocationStrategy, RawCtxBindingBuilder, RawCtxInput, RawCtxInvocationStrategy,
         RawCtxMetadata, RawCtxPublishBuilder, RawCtxTableColumnBuilder, RawCtxTableSpecBuilder,
     },
-    Bundle, ExecutionOutcome, PyRuntime, PyRuntimePool, Result, RuntimeLanguage,
+    Bundle, ExecutionOutcome, PyRunnerError, PyRuntime, PyRuntimePool, Result, RuntimeLanguage,
 };
 use bytes::Bytes;
 use serde_json::json;
@@ -22,7 +22,7 @@ fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_pooled_runtime_manual_reset()?;
     verify_pooled_runtime_in_place_reset()?;
     verify_runtime_reset_in_place()?;
-    verify_warm_state_skips_overlay_import()?;
+    verify_warm_state_imports_overlay()?;
     verify_after_invocation_reset_policy()?;
     verify_python_exception_outcome()?;
     verify_timeout_failure()?;
@@ -241,7 +241,7 @@ def main():
 }
 
 #[allow(clippy::field_reassign_with_default)]
-fn verify_warm_state_skips_overlay_import() -> Result<()> {
+fn verify_warm_state_imports_overlay() -> Result<()> {
     let mut config = PyRuntimeConfig::default();
     config.snapshot.save_to = Some(PathBuf::from("target/warm-state.snapshot"));
     let mut runtime = PyRuntime::new(config)?;
@@ -250,19 +250,30 @@ fn verify_warm_state_skips_overlay_import() -> Result<()> {
 
     let warm_state = runtime.capture_warm_state()?;
     assert!(
-        warm_state.overlay_preloaded(),
-        "warm state should mark overlay as preloaded"
+        !warm_state.overlay_preloaded(),
+        "warm state should require overlay import to restore packages"
     );
 
     let mut config = PyRuntimeConfig::default();
-    config.warm_state = Some(warm_state);
-    let mut runtime = PyRuntime::new(config)?;
+    config.warm_state = Some(warm_state.clone());
+    let mut runtime = PyRuntime::new(config.clone())?;
     env::set_var("AARDVARK_TEST_FORCE_OVERLAY_IMPORT_FAILURE", "1");
-    let outcome = run_main(&mut runtime, SIMPLE_SUCCESS)?;
+    let err = run_main(&mut runtime, SIMPLE_SUCCESS)
+        .expect_err("overlay import failure should bubble out when forced");
     env::remove_var("AARDVARK_TEST_FORCE_OVERLAY_IMPORT_FAILURE");
+
+    match err {
+        PyRunnerError::Init(message) => {
+            assert!(message.contains("forced overlay import failure"));
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
+
+    let mut runtime = PyRuntime::new(config)?;
+    let outcome = run_main(&mut runtime, SIMPLE_SUCCESS)?;
     assert!(
         outcome.is_success(),
-        "expected success outcome with preloaded overlay"
+        "expected success outcome after reload"
     );
     Ok(())
 }

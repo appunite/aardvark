@@ -2,11 +2,20 @@ use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use aardvark_core::{Bundle, PyRuntime, PyRuntimeConfig};
+use aardvark_core::{
+    config::{PyRuntimeConfig, ResetPolicy, WarmState},
+    invocation::{FieldDescriptor, InvocationDescriptor},
+    outcome::{OutcomeStatus, ResultPayload},
+    pool::{PoolConfig, PoolResetMode, PyRuntimePool},
+    strategy::{RawCtxInvocationStrategy, RawCtxPublishBuilder},
+    Bundle, PyRuntime, PySession,
+};
 use anyhow::{anyhow, Context, Result};
+use comfy_table::{presets::UTF8_FULL_CONDENSED, Cell, Table};
 use serde::Serialize;
+use serde_json::json;
 use structopt::StructOpt;
 use which::which;
 
@@ -44,20 +53,115 @@ enum Scenario {
 }
 
 #[derive(Copy, Clone, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum InvocationKind {
+    Json,
+    RawCtx,
+}
+
+#[derive(Copy, Clone, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum PathKind {
+    Cold,
+    Warm,
+    ResetInPlace,
+}
+
+#[derive(Copy, Clone, Debug, Serialize)]
 enum Mode {
-    Aardvark,
+    AardvarkJsonCold,
+    AardvarkJsonWarm,
+    AardvarkJsonResetInPlace,
+    AardvarkRawCtxCold,
+    AardvarkRawCtxWarm,
+    AardvarkRawCtxResetInPlace,
     HostPython,
+}
+
+impl Mode {
+    const VARIANTS: &'static [&'static str] = &[
+        "aardvark-json-cold",
+        "aardvark-json-warm",
+        "aardvark-json-reset-in-place",
+        "aardvark-rawctx-cold",
+        "aardvark-rawctx-warm",
+        "aardvark-rawctx-reset-in-place",
+        "host-python",
+    ];
+
+    fn name(&self) -> &'static str {
+        match self {
+            Mode::AardvarkJsonCold => "aardvark-json-cold",
+            Mode::AardvarkJsonWarm => "aardvark-json-warm",
+            Mode::AardvarkJsonResetInPlace => "aardvark-json-reset-in-place",
+            Mode::AardvarkRawCtxCold => "aardvark-rawctx-cold",
+            Mode::AardvarkRawCtxWarm => "aardvark-rawctx-warm",
+            Mode::AardvarkRawCtxResetInPlace => "aardvark-rawctx-reset-in-place",
+            Mode::HostPython => "host-python",
+        }
+    }
+
+    fn invocation_kind(self) -> Option<InvocationKind> {
+        match self {
+            Mode::AardvarkJsonCold | Mode::AardvarkJsonWarm | Mode::AardvarkJsonResetInPlace => {
+                Some(InvocationKind::Json)
+            }
+            Mode::AardvarkRawCtxCold
+            | Mode::AardvarkRawCtxWarm
+            | Mode::AardvarkRawCtxResetInPlace => Some(InvocationKind::RawCtx),
+            Mode::HostPython => None,
+        }
+    }
+
+    fn path_kind(self) -> Option<PathKind> {
+        match self {
+            Mode::AardvarkJsonCold | Mode::AardvarkRawCtxCold => Some(PathKind::Cold),
+            Mode::AardvarkJsonWarm | Mode::AardvarkRawCtxWarm => Some(PathKind::Warm),
+            Mode::AardvarkJsonResetInPlace | Mode::AardvarkRawCtxResetInPlace => {
+                Some(PathKind::ResetInPlace)
+            }
+            Mode::HostPython => None,
+        }
+    }
+
+    fn aardvark_modes() -> &'static [Mode] {
+        &[
+            Mode::AardvarkJsonCold,
+            Mode::AardvarkJsonWarm,
+            Mode::AardvarkJsonResetInPlace,
+            Mode::AardvarkRawCtxCold,
+            Mode::AardvarkRawCtxWarm,
+            Mode::AardvarkRawCtxResetInPlace,
+        ]
+    }
+
+    fn is_aardvark(self) -> bool {
+        self.invocation_kind().is_some()
+    }
 }
 
 #[derive(Serialize)]
 struct BenchResult {
     scenario: Scenario,
     mode: Mode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invocation: Option<InvocationKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<PathKind>,
     iterations: usize,
     total: TimingStats,
+    #[serde(skip_serializing_if = "Option::is_none")]
     prepare: Option<TimingStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     run: Option<TimingStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     rss_kib: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cold_total: Option<TimingStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cold_prepare: Option<TimingStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cold_run: Option<TimingStats>,
 }
 
 #[derive(Serialize, serde::Deserialize, Default, Clone)]
@@ -65,6 +169,12 @@ struct TimingStats {
     avg_ms: f64,
     min_ms: f64,
     max_ms: f64,
+}
+
+struct TimingBuckets<'a> {
+    prepare: &'a mut Vec<Duration>,
+    run: &'a mut Vec<Duration>,
+    total: &'a mut Vec<Duration>,
 }
 
 fn main() -> Result<()> {
@@ -77,7 +187,9 @@ fn main() -> Result<()> {
         } => {
             let mut results = Vec::new();
             for scenario in [Scenario::Echo, Scenario::Numpy, Scenario::Pandas] {
-                results.push(bench_aardvark(scenario, iterations)?);
+                for mode in Mode::aardvark_modes() {
+                    results.push(bench_aardvark(scenario, *mode, iterations)?);
+                }
                 results.push(bench_host(scenario, iterations)?);
             }
             if let Some(path) = json {
@@ -93,9 +205,10 @@ fn main() -> Result<()> {
             mode,
             iterations,
         } => {
-            let result = match mode {
-                Mode::Aardvark => bench_aardvark(scenario, iterations)?,
-                Mode::HostPython => bench_host(scenario, iterations)?,
+            let result = if mode.is_aardvark() {
+                bench_aardvark(scenario, mode, iterations)?
+            } else {
+                bench_host(scenario, iterations)?
             };
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
@@ -103,40 +216,227 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn bench_aardvark(scenario: Scenario, iterations: usize) -> Result<BenchResult> {
-    let python_source = scenario_source(scenario);
-    let manifest = scenario_manifest(scenario);
+fn bench_aardvark(scenario: Scenario, mode: Mode, iterations: usize) -> Result<BenchResult> {
+    let invocation = mode
+        .invocation_kind()
+        .ok_or_else(|| anyhow!("mode '{}' is not an Aardvark variant", mode.name()))?;
+    let path = mode
+        .path_kind()
+        .ok_or_else(|| anyhow!("mode '{}' is missing a path kind", mode.name()))?;
+
+    let python_source = scenario_source(scenario, invocation);
+    let manifest = scenario_manifest(scenario, invocation);
     let bundle = build_bundle(python_source, manifest.as_bytes())?;
+    let descriptor = descriptor_for(scenario, invocation);
 
     let mut prepare = Vec::with_capacity(iterations);
     let mut run = Vec::with_capacity(iterations);
     let mut total = Vec::with_capacity(iterations);
+    let mut cold_total_stats: Option<TimingStats> = None;
+    let mut cold_prepare_stats: Option<TimingStats> = None;
+    let mut cold_run_stats: Option<TimingStats> = None;
 
-    for _ in 0..iterations {
-        let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-        let prep_start = std::time::Instant::now();
-        let (session, _) = runtime.prepare_session_with_manifest(bundle.clone())?;
-        let prep_elapsed = prep_start.elapsed();
-
-        let run_start = std::time::Instant::now();
-        let outcome = runtime.run_session(&session)?;
-        assert!(outcome.is_success(), "handler failed: {:?}", outcome.status);
-        let run_elapsed = run_start.elapsed();
-
-        prepare.push(prep_elapsed);
-        run.push(run_elapsed);
-        total.push(prep_elapsed + run_elapsed);
+    match path {
+        PathKind::Cold => {
+            for _ in 0..iterations {
+                let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+                let mut buckets = TimingBuckets {
+                    prepare: &mut prepare,
+                    run: &mut run,
+                    total: &mut total,
+                };
+                execute_iteration(
+                    &mut runtime,
+                    scenario,
+                    invocation,
+                    descriptor.as_ref(),
+                    &bundle,
+                    &mut buckets,
+                )?;
+            }
+        }
+        PathKind::Warm => {
+            let (warm_state, cold_total, cold_prepare, cold_run) =
+                capture_warm_state(scenario, invocation, &bundle, descriptor.as_ref())?;
+            cold_total_stats = Some(cold_total);
+            cold_prepare_stats = Some(cold_prepare);
+            cold_run_stats = Some(cold_run);
+            let config = PyRuntimeConfig {
+                warm_state: Some(warm_state),
+                ..PyRuntimeConfig::default()
+            };
+            for _ in 0..iterations {
+                let mut runtime = PyRuntime::new(config.clone())?;
+                let mut buckets = TimingBuckets {
+                    prepare: &mut prepare,
+                    run: &mut run,
+                    total: &mut total,
+                };
+                execute_iteration(
+                    &mut runtime,
+                    scenario,
+                    invocation,
+                    descriptor.as_ref(),
+                    &bundle,
+                    &mut buckets,
+                )?;
+            }
+        }
+        PathKind::ResetInPlace => {
+            let (warm_state, cold_total, cold_prepare, cold_run) =
+                capture_warm_state(scenario, invocation, &bundle, descriptor.as_ref())?;
+            cold_total_stats = Some(cold_total);
+            cold_prepare_stats = Some(cold_prepare);
+            cold_run_stats = Some(cold_run);
+            let runtime_config = PyRuntimeConfig {
+                warm_state: Some(warm_state),
+                reset_policy: ResetPolicy::Manual,
+                ..PyRuntimeConfig::default()
+            };
+            let pool = PyRuntimePool::new(PoolConfig {
+                max_runtimes: 1,
+                runtime_config,
+                reset_mode: PoolResetMode::InPlace,
+            })?;
+            for _ in 0..iterations {
+                let mut handle = pool.checkout()?;
+                {
+                    let runtime = handle.runtime();
+                    let mut buckets = TimingBuckets {
+                        prepare: &mut prepare,
+                        run: &mut run,
+                        total: &mut total,
+                    };
+                    execute_iteration(
+                        runtime,
+                        scenario,
+                        invocation,
+                        descriptor.as_ref(),
+                        &bundle,
+                        &mut buckets,
+                    )?;
+                }
+                drop(handle);
+            }
+        }
     }
 
     Ok(BenchResult {
         scenario,
-        mode: Mode::Aardvark,
+        mode,
+        invocation: Some(invocation),
+        path: Some(path),
         iterations,
         total: timing_stats(&total),
         prepare: Some(timing_stats(&prepare)),
         run: Some(timing_stats(&run)),
         rss_kib: max_rss_kib(),
+        cold_total: cold_total_stats,
+        cold_prepare: cold_prepare_stats,
+        cold_run: cold_run_stats,
     })
+}
+
+fn execute_iteration(
+    runtime: &mut PyRuntime,
+    scenario: Scenario,
+    invocation: InvocationKind,
+    descriptor: Option<&InvocationDescriptor>,
+    bundle: &Bundle,
+    timings: &mut TimingBuckets<'_>,
+) -> Result<()> {
+    let prep_start = Instant::now();
+    let (session, _) = match descriptor {
+        Some(desc) => {
+            runtime.prepare_session_with_manifest_and_descriptor(bundle.clone(), desc.clone())?
+        }
+        None => runtime.prepare_session_with_manifest(bundle.clone())?,
+    };
+    let prep_elapsed = prep_start.elapsed();
+
+    let run_start = Instant::now();
+    run_invocation(runtime, &session, invocation, scenario)?;
+    let run_elapsed = run_start.elapsed();
+
+    timings.prepare.push(prep_elapsed);
+    timings.run.push(run_elapsed);
+    timings.total.push(prep_elapsed + run_elapsed);
+
+    Ok(())
+}
+
+fn run_invocation(
+    runtime: &mut PyRuntime,
+    session: &PySession,
+    invocation: InvocationKind,
+    _scenario: Scenario,
+) -> Result<()> {
+    let outcome = match invocation {
+        InvocationKind::Json => runtime.run_session(session)?,
+        InvocationKind::RawCtx => {
+            let mut strategy = RawCtxInvocationStrategy::default();
+            runtime.run_session_with_strategy(session, &mut strategy)?
+        }
+    };
+
+    if !outcome.is_success() {
+        return Err(anyhow!("handler failed: {:?}", outcome.status));
+    }
+
+    if matches!(invocation, InvocationKind::RawCtx)
+        && !matches!(
+            outcome.status,
+            OutcomeStatus::Success(ResultPayload::SharedBuffers(_))
+        )
+    {
+        return Err(anyhow!("rawctx run did not return shared buffers"));
+    }
+
+    Ok(())
+}
+
+fn capture_warm_state(
+    scenario: Scenario,
+    invocation: InvocationKind,
+    bundle: &Bundle,
+    descriptor: Option<&InvocationDescriptor>,
+) -> Result<(WarmState, TimingStats, TimingStats, TimingStats)> {
+    let mut baseline_runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let mut cold_prepare = Vec::with_capacity(1);
+    let mut cold_run = Vec::with_capacity(1);
+    let mut cold_total = Vec::with_capacity(1);
+    {
+        let mut buckets = TimingBuckets {
+            prepare: &mut cold_prepare,
+            run: &mut cold_run,
+            total: &mut cold_total,
+        };
+        execute_iteration(
+            &mut baseline_runtime,
+            scenario,
+            invocation,
+            descriptor,
+            bundle,
+            &mut buckets,
+        )?;
+    }
+    drop(baseline_runtime);
+
+    let mut warm_config = PyRuntimeConfig::default();
+    warm_config.snapshot.save_to = Some(PathBuf::from("target/perf/bench_warm_snapshot.bin"));
+    let mut runtime = PyRuntime::new(warm_config)?;
+    if let Some(desc) = descriptor {
+        runtime.prepare_session_with_manifest_and_descriptor(bundle.clone(), desc.clone())?;
+    } else {
+        runtime.prepare_session_with_manifest(bundle.clone())?;
+    }
+    let warm_state = runtime.capture_warm_state()?;
+    Ok((
+        warm_state,
+        timing_stats(&cold_total),
+        timing_stats(&cold_prepare),
+        timing_stats(&cold_run),
+    ))
 }
 
 fn bench_host(scenario: Scenario, iterations: usize) -> Result<BenchResult> {
@@ -170,30 +470,84 @@ fn bench_host(scenario: Scenario, iterations: usize) -> Result<BenchResult> {
     Ok(BenchResult {
         scenario,
         mode: Mode::HostPython,
+        invocation: None,
+        path: None,
         iterations,
         total: result.total,
         prepare: None,
         run: None,
         rss_kib: Some(result.rss_kib),
+        cold_total: None,
+        cold_prepare: None,
+        cold_run: None,
     })
 }
 
-fn scenario_source(scenario: Scenario) -> &'static str {
-    match scenario {
-        Scenario::Echo => include_str!("../../fixtures/scenarios/echo.py"),
-        Scenario::Numpy => include_str!("../../fixtures/scenarios/numpy_case.py"),
-        Scenario::Pandas => include_str!("../../fixtures/scenarios/pandas_case.py"),
+fn scenario_source(scenario: Scenario, invocation: InvocationKind) -> &'static str {
+    match (scenario, invocation) {
+        (Scenario::Echo, InvocationKind::Json) => {
+            include_str!("../../fixtures/scenarios/echo.py")
+        }
+        (Scenario::Echo, InvocationKind::RawCtx) => {
+            include_str!("../../fixtures/scenarios/echo_rawctx.py")
+        }
+        (Scenario::Numpy, InvocationKind::Json) => {
+            include_str!("../../fixtures/scenarios/numpy_case.py")
+        }
+        (Scenario::Numpy, InvocationKind::RawCtx) => {
+            include_str!("../../fixtures/scenarios/numpy_rawctx.py")
+        }
+        (Scenario::Pandas, InvocationKind::Json) => {
+            include_str!("../../fixtures/scenarios/pandas_case.py")
+        }
+        (Scenario::Pandas, InvocationKind::RawCtx) => {
+            include_str!("../../fixtures/scenarios/pandas_rawctx.py")
+        }
     }
 }
 
-fn scenario_manifest(scenario: Scenario) -> String {
+fn scenario_manifest(scenario: Scenario, invocation: InvocationKind) -> String {
     let packages = scenario_packages(scenario);
-    serde_json::json!({
+    let mut manifest = json!({
         "schemaVersion": "1.0",
         "entrypoint": "main:main",
         "packages": packages,
-    })
-    .to_string()
+    });
+    if matches!(invocation, InvocationKind::RawCtx) {
+        manifest["resources"] = json!({
+            "hostCapabilities": ["rawctx_buffers"],
+        });
+    }
+    manifest.to_string()
+}
+
+fn descriptor_for(scenario: Scenario, invocation: InvocationKind) -> Option<InvocationDescriptor> {
+    match invocation {
+        InvocationKind::Json => None,
+        InvocationKind::RawCtx => {
+            let mut descriptor = InvocationDescriptor::new("main:main");
+            let metadata = match scenario {
+                Scenario::Echo => RawCtxPublishBuilder::new("echo-output")
+                    .transform("memoryview")
+                    .metadata(json!({"kind": "echo"}))
+                    .build(),
+                Scenario::Numpy => RawCtxPublishBuilder::new("numpy-output")
+                    .transform("memoryview")
+                    .metadata(json!({"dtype": "float64_le"}))
+                    .build(),
+                Scenario::Pandas => RawCtxPublishBuilder::new("pandas-output")
+                    .transform("memoryview")
+                    .metadata(json!({"encoding": "utf8"}))
+                    .build(),
+            };
+            descriptor.outputs.push(FieldDescriptor {
+                name: "result".to_owned(),
+                type_tag: None,
+                metadata: Some(metadata),
+            });
+            Some(descriptor)
+        }
+    }
 }
 
 fn scenario_packages(scenario: Scenario) -> &'static [&'static str] {
@@ -262,7 +616,7 @@ fn write_csv(path: &Path, results: &[BenchResult]) -> Result<()> {
         File::create(path).with_context(|| format!("failed to write {}", path.display()))?;
     writeln!(
         file,
-        "scenario,mode,iterations,avg_ms,min_ms,max_ms,rss_kib,prepare_avg_ms,run_avg_ms"
+        "scenario,mode,invocation,path,iterations,avg_ms,min_ms,max_ms,rss_kib,prepare_avg_ms,run_avg_ms,cold_avg_ms,cold_prepare_avg_ms,cold_run_avg_ms"
     )?;
     for result in results {
         let prepare_avg = result
@@ -275,11 +629,41 @@ fn write_csv(path: &Path, results: &[BenchResult]) -> Result<()> {
             .as_ref()
             .map(|s| format!("{:.2}", s.avg_ms))
             .unwrap_or_default();
+        let cold_avg = result
+            .cold_total
+            .as_ref()
+            .map(|s| format!("{:.2}", s.avg_ms))
+            .unwrap_or_default();
+        let cold_prepare_avg = result
+            .cold_prepare
+            .as_ref()
+            .map(|s| format!("{:.2}", s.avg_ms))
+            .unwrap_or_default();
+        let cold_run_avg = result
+            .cold_run
+            .as_ref()
+            .map(|s| format!("{:.2}", s.avg_ms))
+            .unwrap_or_default();
         writeln!(
             file,
-            "{},{},{},{:.2},{:.2},{:.2},{},{},{}",
+            "{},{},{},{},{},{:.2},{:.2},{:.2},{},{},{},{},{},{}",
             result.scenario.name(),
             result.mode.name(),
+            result
+                .invocation
+                .map(|kind| match kind {
+                    InvocationKind::Json => "json",
+                    InvocationKind::RawCtx => "rawctx",
+                })
+                .unwrap_or("-"),
+            result
+                .path
+                .map(|mode| match mode {
+                    PathKind::Cold => "cold",
+                    PathKind::Warm => "warm",
+                    PathKind::ResetInPlace => "reset-in-place",
+                })
+                .unwrap_or("-"),
             result.iterations,
             result.total.avg_ms,
             result.total.min_ms,
@@ -287,25 +671,70 @@ fn write_csv(path: &Path, results: &[BenchResult]) -> Result<()> {
             result.rss_kib.unwrap_or_default(),
             prepare_avg,
             run_avg,
+            cold_avg,
+            cold_prepare_avg,
+            cold_run_avg,
         )?;
     }
     Ok(())
 }
 
 fn print_summary(results: &[BenchResult]) {
-    println!("| Scenario | Mode | Avg ms | Min ms | Max ms | RSS (KiB) |");
-    println!("|----------|------|--------|--------|--------|-----------|");
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL_CONDENSED);
+    table.set_header([
+        "Scenario",
+        "Mode",
+        "Invocation",
+        "Path",
+        "Avg ms",
+        "Min ms",
+        "Max ms",
+        "RSS (KiB)",
+        "Cold Avg ms",
+    ]);
+
     for r in results {
-        println!(
-            "| {} | {} | {:.2} | {:.2} | {:.2} | {} |",
-            r.scenario.name(),
-            r.mode.name(),
-            r.total.avg_ms,
-            r.total.min_ms,
-            r.total.max_ms,
-            r.rss_kib.unwrap_or_default()
-        );
+        let invocation = r
+            .invocation
+            .map(|kind| match kind {
+                InvocationKind::Json => "json",
+                InvocationKind::RawCtx => "rawctx",
+            })
+            .unwrap_or("-");
+        let path = r
+            .path
+            .map(|kind| match kind {
+                PathKind::Cold => "cold",
+                PathKind::Warm => "warm",
+                PathKind::ResetInPlace => "reset-in-place",
+            })
+            .unwrap_or("-");
+
+        let rss = r
+            .rss_kib
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string());
+
+        table.add_row(vec![
+            Cell::new(r.scenario.name()),
+            Cell::new(r.mode.name()),
+            Cell::new(invocation),
+            Cell::new(path),
+            Cell::new(format!("{:.2}", r.total.avg_ms)),
+            Cell::new(format!("{:.2}", r.total.min_ms)),
+            Cell::new(format!("{:.2}", r.total.max_ms)),
+            Cell::new(rss.clone()),
+            Cell::new(
+                r.cold_total
+                    .as_ref()
+                    .map(|stats| format!("{:.2}", stats.avg_ms))
+                    .unwrap_or_else(|| "-".to_string()),
+            ),
+        ]);
     }
+
+    println!("{}", table);
 }
 
 fn host_python_version() -> &'static str {
@@ -349,25 +778,17 @@ impl std::str::FromStr for Scenario {
     }
 }
 
-impl Mode {
-    fn name(&self) -> &'static str {
-        match self {
-            Mode::Aardvark => "aardvark",
-            Mode::HostPython => "host-python",
-        }
-    }
-}
-
-impl Mode {
-    const VARIANTS: &'static [&'static str] = &["aardvark", "host-python"];
-}
-
 impl std::str::FromStr for Mode {
     type Err = String;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
-            "aardvark" => Ok(Mode::Aardvark),
+            "aardvark-json-cold" => Ok(Mode::AardvarkJsonCold),
+            "aardvark-json-warm" => Ok(Mode::AardvarkJsonWarm),
+            "aardvark-json-reset-in-place" => Ok(Mode::AardvarkJsonResetInPlace),
+            "aardvark-rawctx-cold" => Ok(Mode::AardvarkRawCtxCold),
+            "aardvark-rawctx-warm" => Ok(Mode::AardvarkRawCtxWarm),
+            "aardvark-rawctx-reset-in-place" => Ok(Mode::AardvarkRawCtxResetInPlace),
             "host-python" | "host" | "python" => Ok(Mode::HostPython),
             other => Err(format!("unknown mode '{other}'")),
         }

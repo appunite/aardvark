@@ -186,19 +186,45 @@ impl AardvarkRuntime {
         &mut self,
         bundle: Bundle,
     ) -> Result<(PySession, Option<BundleManifest>)> {
+        self.prepare_session_with_manifest_internal(bundle, None)
+    }
+
+    /// Prepares a session by combining manifest metadata with a custom descriptor.
+    pub fn prepare_session_with_manifest_and_descriptor(
+        &mut self,
+        bundle: Bundle,
+        descriptor: InvocationDescriptor,
+    ) -> Result<(PySession, Option<BundleManifest>)> {
+        self.prepare_session_with_manifest_internal(bundle, Some(descriptor))
+    }
+
+    fn prepare_session_with_manifest_internal(
+        &mut self,
+        bundle: Bundle,
+        descriptor_override: Option<InvocationDescriptor>,
+    ) -> Result<(PySession, Option<BundleManifest>)> {
         let manifest = bundle.manifest()?;
         let entrypoint = manifest
             .as_ref()
             .map(|m| m.entrypoint().to_owned())
             .unwrap_or_else(|| "main:handler".to_string());
 
-        let mut descriptor = InvocationDescriptor::new(entrypoint);
-        if let Some(runtime) = manifest
-            .as_ref()
-            .and_then(|m| m.runtime.as_ref())
-            .and_then(|rt| rt.language)
-        {
-            descriptor.language = Some(runtime);
+        let mut descriptor = match descriptor_override {
+            Some(desc) if desc.entrypoint().trim().is_empty() => {
+                InvocationDescriptor::new(entrypoint.clone())
+            }
+            Some(desc) => desc,
+            None => InvocationDescriptor::new(entrypoint.clone()),
+        };
+
+        if descriptor.language.is_none() {
+            if let Some(runtime) = manifest
+                .as_ref()
+                .and_then(|m| m.runtime.as_ref())
+                .and_then(|rt| rt.language)
+            {
+                descriptor.language = Some(runtime);
+            }
         }
 
         let mut filesystem_policy = FilesystemPolicy::default();
@@ -257,7 +283,7 @@ impl AardvarkRuntime {
             Arc::<[u8]>::from(bytes.into_boxed_slice())
         };
         let overlay = self.engine_mut().js_mut().export_overlay()?;
-        let state = WarmState::with_overlay_preloaded(snapshot_bytes, overlay);
+        let state = WarmState::new(snapshot_bytes, overlay);
         self.config.warm_state = Some(state.clone());
         self.engine_mut().set_warm_state(Some(state.clone()));
         self.config.snapshot.store_cached_bytes(state.snapshot());

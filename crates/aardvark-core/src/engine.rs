@@ -220,7 +220,7 @@ fn package_root_dir() -> Option<&'static Path> {
                 if path.is_relative() {
                     match env::current_dir() {
                         Ok(cwd) => cwd.join(path),
-                        Err(_) => path.into(),
+                        Err(_) => path,
                     }
                 } else {
                     path
