@@ -31,9 +31,7 @@ mise exec python@3.12 -- python --version
 From the repository root:
 
 ```sh
-cargo run -p aardvark-perf -- all --iterations 25 \
-  --json target/perf/results.json \
-  --csv target/perf/results.csv
+make perf-all ITERATIONS=25
 ```
 
 Sample console output:
@@ -46,7 +44,7 @@ Sample console output:
 ...
 ```
 
-The JSON/CSV files contain the same data for further analysis.
+The JSON/CSV files contain the same data for further analysis and live under `target/perf/`.
 
 ### Single Scenario
 
@@ -77,6 +75,12 @@ A helper script converts the JSON output into a Markdown table for reports:
 
 ```sh
 python perf/scripts/render_markdown.py target/perf/results.json > target/perf/results.md
+```
+
+Or, if you prefer the Makefile wrapper:
+
+```sh
+make perf-md
 ```
 
 The script reads the JSON emitted by `aardvark-perf` and prints a table grouped
