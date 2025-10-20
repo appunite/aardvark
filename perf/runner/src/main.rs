@@ -260,7 +260,7 @@ struct BenchResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     run: Option<TimingStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    rss_kib: Option<u64>,
+    rss_mib: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cold_total: Option<TimingStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -274,6 +274,10 @@ struct TimingStats {
     avg_ms: f64,
     min_ms: f64,
     max_ms: f64,
+    std_ms: f64,
+    p50_ms: f64,
+    p95_ms: f64,
+    p99_ms: f64,
 }
 
 struct TimingBuckets<'a> {
@@ -537,7 +541,7 @@ fn bench_aardvark(
         total: timing_stats(&total),
         prepare: Some(timing_stats(&prepare)),
         run: Some(timing_stats(&run)),
-        rss_kib: max_rss_kib(),
+        rss_mib: max_rss_mib(),
         cold_total: cold_total_stats,
         cold_prepare: cold_prepare_stats,
         cold_run: cold_run_stats,
@@ -682,7 +686,7 @@ fn bench_host(scenario: Scenario, iterations: usize, profile: LoadProfile) -> Re
         total: result.total,
         prepare: None,
         run: None,
-        rss_kib: Some(result.rss_kib),
+        rss_mib: Some(result.rss_mib),
         cold_total: None,
         cold_prepare: None,
         cold_run: None,
@@ -799,20 +803,43 @@ fn timing_stats(samples: &[Duration]) -> TimingStats {
     if samples.is_empty() {
         return TimingStats::default();
     }
-    let min = samples
+    let mut ms: Vec<f64> = samples.iter().map(|d| d.as_secs_f64() * 1000.0).collect();
+    let avg_ms = ms.iter().sum::<f64>() / ms.len() as f64;
+    let min_ms = ms.iter().fold(f64::INFINITY, |acc, &val| acc.min(val));
+    let max_ms = ms.iter().fold(f64::NEG_INFINITY, |acc, &val| acc.max(val));
+    let variance = ms
         .iter()
-        .map(|d| d.as_secs_f64())
-        .fold(f64::INFINITY, f64::min);
-    let max = samples
-        .iter()
-        .map(|d| d.as_secs_f64())
-        .fold(f64::NEG_INFINITY, f64::max);
-    let sum: f64 = samples.iter().map(|d| d.as_secs_f64()).sum();
-    let avg = sum / samples.len() as f64;
+        .map(|value| {
+            let diff = value - avg_ms;
+            diff * diff
+        })
+        .sum::<f64>()
+        / ms.len() as f64;
+    ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    let percentile = |pct: f64| -> f64 {
+        if ms.len() == 1 {
+            return ms[0];
+        }
+        let position = pct * (ms.len() as f64 - 1.0);
+        let lower = position.floor() as usize;
+        let upper = position.ceil() as usize;
+        if lower == upper {
+            ms[lower]
+        } else {
+            let weight = position - lower as f64;
+            ms[lower] * (1.0 - weight) + ms[upper] * weight
+        }
+    };
+
     TimingStats {
-        avg_ms: avg * 1000.0,
-        min_ms: min * 1000.0,
-        max_ms: max * 1000.0,
+        avg_ms,
+        min_ms,
+        max_ms,
+        std_ms: variance.sqrt(),
+        p50_ms: percentile(0.50),
+        p95_ms: percentile(0.95),
+        p99_ms: percentile(0.99),
     }
 }
 
@@ -863,7 +890,7 @@ fn write_csv(path: &Path, results: &[BenchResult]) -> Result<()> {
         File::create(path).with_context(|| format!("failed to write {}", path.display()))?;
     writeln!(
         file,
-        "scenario,profile,mode,invocation,path,cleanup,iterations,avg_ms,min_ms,max_ms,rss_kib,prepare_avg_ms,run_avg_ms"
+        "scenario,profile,mode,invocation,path,cleanup,iterations,avg_ms,min_ms,max_ms,std_ms,p50_ms,p95_ms,p99_ms,rss_mib,prepare_avg_ms,run_avg_ms"
     )?;
     for result in results {
         let prepare_avg = result
@@ -889,7 +916,7 @@ fn write_csv(path: &Path, results: &[BenchResult]) -> Result<()> {
         let cleanup = result.cleanup.map(|kind| kind.label()).unwrap_or("-");
         writeln!(
             file,
-            "{},{},{},{},{},{},{},{:.2},{:.2},{:.2},{},{},{}",
+            "{},{},{},{},{},{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{}",
             result.scenario.name(),
             result.profile.name(),
             result.mode.name(),
@@ -906,7 +933,11 @@ fn write_csv(path: &Path, results: &[BenchResult]) -> Result<()> {
             result.total.avg_ms,
             result.total.min_ms,
             result.total.max_ms,
-            result.rss_kib.unwrap_or_default(),
+            result.total.std_ms,
+            result.total.p50_ms,
+            result.total.p95_ms,
+            result.total.p99_ms,
+            result.rss_mib.unwrap_or_default(),
             prepare_avg,
             run_avg,
         )?;
@@ -928,7 +959,11 @@ fn print_summary(results: &[BenchResult]) {
         "Avg ms",
         "Min ms",
         "Max ms",
-        "RSS (KiB)",
+        "Std ms",
+        "P50 ms",
+        "P95 ms",
+        "P99 ms",
+        "RSS (MiB)",
     ]);
 
     for r in results {
@@ -955,8 +990,8 @@ fn print_summary(results: &[BenchResult]) {
             .unwrap_or_else(|| "-".to_string());
 
         let rss = r
-            .rss_kib
-            .map(|value| value.to_string())
+            .rss_mib
+            .map(|value| format!("{value:.2}"))
             .unwrap_or_else(|| "-".to_string());
 
         table.add_row(vec![
@@ -970,6 +1005,10 @@ fn print_summary(results: &[BenchResult]) {
             Cell::new(format!("{:.2}", r.total.avg_ms)),
             Cell::new(format!("{:.2}", r.total.min_ms)),
             Cell::new(format!("{:.2}", r.total.max_ms)),
+            Cell::new(format!("{:.2}", r.total.std_ms)),
+            Cell::new(format!("{:.2}", r.total.p50_ms)),
+            Cell::new(format!("{:.2}", r.total.p95_ms)),
+            Cell::new(format!("{:.2}", r.total.p99_ms)),
             Cell::new(rss.clone()),
         ]);
     }
@@ -984,7 +1023,7 @@ fn host_python_version() -> &'static str {
 #[derive(Serialize, serde::Deserialize)]
 struct HostResult {
     total: TimingStats,
-    rss_kib: u64,
+    rss_mib: f64,
 }
 
 trait ScenarioExt {
@@ -1139,7 +1178,7 @@ impl std::str::FromStr for Mode {
 }
 
 #[cfg(unix)]
-fn max_rss_kib() -> Option<u64> {
+fn max_rss_mib() -> Option<f64> {
     unsafe {
         let mut usage: libc::rusage = std::mem::zeroed();
         if libc::getrusage(libc::RUSAGE_SELF, &mut usage) != 0 {
@@ -1147,16 +1186,16 @@ fn max_rss_kib() -> Option<u64> {
         }
         #[cfg(target_os = "macos")]
         {
-            Some((usage.ru_maxrss as u64) / 1024)
+            Some((usage.ru_maxrss as f64) / (1024.0 * 1024.0))
         }
         #[cfg(not(target_os = "macos"))]
         {
-            Some(usage.ru_maxrss as u64)
+            Some((usage.ru_maxrss as f64) / 1024.0)
         }
     }
 }
 
 #[cfg(not(unix))]
-fn max_rss_kib() -> Option<u64> {
+fn max_rss_mib() -> Option<f64> {
     None
 }

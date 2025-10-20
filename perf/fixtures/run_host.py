@@ -69,7 +69,24 @@ def timing_stats(samples):
         "avg_ms": avg * 1000.0,
         "min_ms": min(samples) * 1000.0,
         "max_ms": max(samples) * 1000.0,
+        "std_ms": (sum((x - avg) ** 2 for x in samples) / len(samples)) ** 0.5 * 1000.0,
+        "p50_ms": _percentile(samples, 0.50) * 1000.0,
+        "p95_ms": _percentile(samples, 0.95) * 1000.0,
+        "p99_ms": _percentile(samples, 0.99) * 1000.0,
     }
+
+
+def _percentile(samples, fraction):
+    if not samples:
+        return 0.0
+    ordered = sorted(samples)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = fraction * (len(ordered) - 1)
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
 def main() -> None:
@@ -111,7 +128,7 @@ def main() -> None:
         "scenario": scenario,
         "iterations": args.iterations,
         "total": timing_stats(samples),
-        "rss_kib": int(rss_kib),
+        "rss_mib": float(rss_kib) / 1024.0,
         "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         "profile": args.profile,
     }
