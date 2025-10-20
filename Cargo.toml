@@ -34,6 +34,7 @@ url = "2.5"
 walkdir = "2.5"
 libc = "0.2"
 blake3 = "1.5"
+hdrhistogram = "7.5"
 
 [profile.release]
 opt-level = "z"

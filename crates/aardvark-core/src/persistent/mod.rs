@@ -4,4 +4,7 @@ mod pool;
 
 pub use artifact::BundleArtifact;
 pub use isolate::{BundleHandle, CleanupMode, HandlerSession, IsolateConfig, PythonIsolate};
-pub use pool::{BundlePool, PoolOptions, PoolStats, QueueMode};
+pub use pool::{
+    BundlePool, CallContext, CallOutcome, IsolateId, LifecycleHooks, PoolOptions, PoolStats,
+    QueueMode,
+};

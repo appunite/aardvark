@@ -12,7 +12,7 @@ This document introduces Aardvark’s execution model from the host’s point of
 
 ## Layers at a Glance
 
-1. **Host integration (`aardvark-core`)** – public Rust API exposing persistent isolates (`PythonIsolate`), the serial pool (`BundlePool`), and low-level access to `PyRuntime`.
+1. **Host integration (`aardvark-core`)** – public Rust API exposing persistent isolates (`PythonIsolate`), the pooled execution surface (`BundlePool`), and low-level access to `PyRuntime`.
 2. **Runtime coordinator (`runtime.rs`)** – orchestrates session preparation, policy wiring, invocation strategies, and telemetry collection.
 3. **Language engines (`runtime/python.rs`, `runtime/javascript.rs`)** – embed V8, load language-specific bootstraps, manage network/filesystem shims, and emit low-level traces.
 4. **Guest bootstraps (`pyodide_bootstrap.js`, `js_runtime_bootstrap.js`)** – configure the interpreter, install packages (Python only), and enforce sandbox rules inside the WASM VM.
@@ -40,7 +40,7 @@ graph TD
 4. **Watchdogs** – Wall-clock and CPU watchdogs arm before calling into the guest. Heap usage is checked both before and after execution.
 5. **Sandbox enforcement** – The JS layer enforces network allowlists (HTTPS by default), filesystem mode/quota, and host capability gates for native bridges. Violations are raised back to Rust.
 6. **Outcome synthesis** – Captured stdout/stderr, console messages, payloads, sandbox telemetry, and policy violations are combined into `ExecutionOutcome`.
-7. **Reset** – Depending on `ResetPolicy`, runtimes either rebuild the engine (`reset_to_snapshot`) or scrub it in place (`reset_in_place`). Warm states captured inside the runtime bake the overlay into the snapshot, so in-place resets reuse site-packages without rehydrating tarballs. `BundlePool` currently processes calls serially, so resets happen synchronously when the pool guard drops.
+7. **Reset** – Depending on `ResetPolicy`, runtimes either rebuild the engine (`reset_to_snapshot`) or scrub it in place (`reset_in_place`). Warm states captured inside the runtime bake the overlay into the snapshot, so in-place resets reuse site-packages without rehydrating tarballs. `BundlePool` queues calls, fans them out across isolates, and hides resets behind the queue wait time.
 
 The same flow is used whether the runtime comes from a pool or is standalone. Pooling only changes lifecycle management around steps 2 and 7.
 
@@ -83,4 +83,4 @@ sequenceDiagram
 - Snapshot overlays assume Pyodide 0.28.2. Future Pyodide upgrades will require regenerating overlay metadata and schema version bumping. When hosts build warm states out of band they must flag them as overlay-preloaded to avoid redundant imports.
 - Network sandboxing is allowlist-based per session. There is no per-request override yet, and DNS leakage is not mitigated beyond host matching.
 - Filesystem quota enforcement only tracks writes within the virtual session directory. If code escapes to other WASM-visible mounts it will currently fail closed but without detailed accounting.
-- `BundlePool` is single-isolate for now. Use it for serial reuse and telemetry, but do not rely on it for parallelism until the multi-isolate design lands.
+- `BundlePool` enforces memory guard rails per isolate. If Python heap or RSS usage exceeds the configured limit the pool quarantines the isolate and spins up a replacement.

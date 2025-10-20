@@ -80,9 +80,9 @@ Regardless of success or failure the runtime collects:
 - CPU milliseconds used (if available from the platform),
 - filesystem bytes written and violations emitted by the JS shim,
 - allowed and denied network contacts,
-- queue wait duration (populated by `BundlePool`),
+- queue wait duration (populated by `BundlePool`) and queue wait distribution percentiles (P50, P95),
 - `prepare_ms` / `cleanup_ms` timings, and
-- the Python heap size in KiB (`py_heap_kib`).
+- the Python heap size in KiB (`py_heap_kib`) plus RSS snapshots when the platform reports them.
 
 `ExecutionOutcome::sandbox_telemetry()` converts these into host-facing `SandboxTelemetry` objects so hosts can record metrics or trigger alerts.
 
@@ -90,7 +90,7 @@ Regardless of success or failure the runtime collects:
 
 - If `ResetPolicy::AfterInvocation` is configured, the runtime automatically rolls back to the warm snapshot before returning from `run_session`.
 - If `ResetPolicy::Manual` is used (the pooling-friendly default), callers decide when to invoke `reset_to_snapshot`/`reset_in_place`.
-- `BundlePool` currently serialises invocations through a single isolate, so resets happen synchronously when the guard drops. Future revisions will support multi-isolate pools.
+- `BundlePool` fans out requests across a configurable number of isolates. Calls waiting on the queue resume as soon as an isolate becomes idle, keeping resets transparent to the host.
 - Each reset (manual or in-place) records `mode`, `duration_ms`, and `engine_generation` so the next invocation’s diagnostics expose how the runtime was scrubbed.
 - Warm states captured inside the runtime mark their overlays as preloaded, allowing in-place resets to skip the expensive overlay import entirely.
 
@@ -99,9 +99,10 @@ Regardless of success or failure the runtime collects:
 - **Bootstrap failures** (bad manifests, missing entrypoints, package installation errors) surface as `PyRunnerError` during session preparation. Hosts should treat them as deployment-time failures.
 - **Policy violations** (network deny, filesystem errors) are recorded and returned in diagnostics; the Python code may still succeed unless the violation caused the call to abort.
 - **Runtime panics** in JS/V8 propagate as `PyRunnerError::Internal` and should be treated as fatal; the runtime instance should be discarded.
+- **Memory guard rails** quarantine isolates that exceed the configured heap or RSS limits. Quarantined isolates are dropped and replaced automatically.
 
 ## Outstanding Gaps
 
 - Wall-clock watchdog relies on cooperative interruption by Pyodide; heavy native extensions may not obey it.
 - CPU accounting uses per-thread timers which some targets disable. When absent the runtime skips enforcement and reports `None` for `cpu_ms_used`.
-- The pool has no eviction policy beyond reset failures and is currently single-isolate. Long-lived pools should layer external monitoring to recycle runtimes with abnormal memory growth.
+- Guard rail telemetry for RSS depends on platform support (currently only Linux exports `/proc/self/statm`).

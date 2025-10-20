@@ -117,24 +117,53 @@ fn execute(bundle_bytes: &[u8]) -> anyhow::Result<String> {
 
 `HandlerSession` exposes `invoke`, `invoke_json`, `invoke_rawctx`, and `invoke_async` adapters. `PythonIsolate` also provides `run_inline_python` for one-off scripts and exposes the underlying `PyRuntime` when you need low-level control.
 
-### Serial pooling with `BundlePool`
+### Pooling with `BundlePool`
 
 ```rust
-use aardvark_core::persistent::{BundleArtifact, BundlePool, PoolOptions};
+use std::sync::Arc;
+
+use aardvark_core::persistent::{
+    BundleArtifact, BundlePool, LifecycleHooks, PoolOptions, QueueMode,
+};
 
 fn pool_example(bundle_bytes: &[u8]) -> anyhow::Result<()> {
     let artifact = BundleArtifact::from_bytes(bundle_bytes)?;
-    let pool = BundlePool::from_artifact(artifact.clone(), PoolOptions::default())?;
+    let pool = BundlePool::from_artifact(
+        artifact.clone(),
+        PoolOptions {
+            desired_size: 2,
+            max_size: 4,
+            queue_mode: QueueMode::Block,
+            heap_limit_kib: Some(256 * 1024),
+            memory_limit_kib: Some(512 * 1024),
+            lifecycle_hooks: Some(LifecycleHooks {
+                on_isolate_started: Some(Arc::new(|id| tracing::debug!(isolate_id = id, "started"))),
+                ..Default::default()
+            }),
+            ..PoolOptions::default()
+        },
+    )?;
+
     let handle = pool.handle();
     let handler = handle.prepare_default_handler();
 
     let outcome = pool.call_default(&handler)?;
-    tracing::info!(queue_wait_ms = ?outcome.diagnostics.queue_wait_ms);
+    tracing::info!(
+        queue_wait_ms = outcome.diagnostics.queue_wait_ms,
+        heap_kib = outcome.diagnostics.py_heap_kib,
+    );
+
+    let stats = pool.stats();
+    tracing::info!(
+        invocations = stats.invocations,
+        avg_wait_ms = stats.average_queue_wait_ms,
+        p95_wait_ms = stats.queue_wait_p95_ms,
+    );
     Ok(())
 }
 ```
 
-`BundlePool` currently serialises invocations through a single isolate while retaining queue-wait telemetry (future versions will grow configurable concurrency).
+The pool now manages multiple isolates, exposes queue behaviour (`QueueMode` + `max_queue`), and enforces per-isolate heap/RSS guard rails. Lifecycle hooks let hosts observe isolate churn and per-call outcomes without instrumenting the runtime directly.
 
 ### Still need the raw runtime?
 

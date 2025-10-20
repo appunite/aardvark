@@ -26,6 +26,7 @@ libc.workspace = true
 url.workspace = true
 walkdir.workspace = true
 blake3.workspace = true
+hdrhistogram.workspace = true
 
 [build-dependencies]
 anyhow = "1.0"

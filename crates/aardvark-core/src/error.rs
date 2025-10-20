@@ -19,6 +19,12 @@ pub enum PyRunnerError {
     Execution(String),
     #[error("internal error: {0}")]
     Internal(String),
+    #[error("bundle pool queue is full (queue length {queue_length}, limit {limit})")]
+    PoolQueueFull { queue_length: usize, limit: usize },
+    #[error("bundle pool is at capacity (active {active}, max {max_size})")]
+    PoolAtCapacity { active: usize, max_size: usize },
+    #[error("bundle pool is shutting down")]
+    PoolShuttingDown,
     #[error("execution timed out after {requested_ms}ms")]
     TimeoutExceeded { requested_ms: u64 },
     #[error("execution exceeded heap budget (limit {requested_mb} MiB)")]

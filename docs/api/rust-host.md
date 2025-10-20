@@ -85,26 +85,63 @@ assert_eq!(outcome.payload().unwrap().kind(), "text");
 
 The helper wraps the snippet into an ephemeral bundle (stored entirely in memory) so you can run smoke tests or templated code without touching the bundler.
 
-## Serial pooling (`BundlePool`)
+## Pooling (`BundlePool`)
 
 ```rust
-use aardvark_core::persistent::{BundleArtifact, BundlePool, PoolOptions};
+use std::sync::Arc;
+
+use aardvark_core::persistent::{
+    BundleArtifact, BundlePool, LifecycleHooks, PoolOptions, QueueMode,
+};
 
 fn pooled_calls(bytes: &[u8]) -> anyhow::Result<()> {
     let artifact = BundleArtifact::from_bytes(bytes)?;
-    let pool = BundlePool::from_artifact(artifact.clone(), PoolOptions::default())?;
+    let pool = BundlePool::from_artifact(
+        artifact.clone(),
+        PoolOptions {
+            desired_size: 2,
+            max_size: 4,
+            max_queue: Some(32),
+            queue_mode: QueueMode::Block,
+            heap_limit_kib: Some(256 * 1024),
+            memory_limit_kib: Some(512 * 1024),
+            lifecycle_hooks: Some(LifecycleHooks {
+                on_isolate_started: Some(Arc::new(|id| tracing::debug!(isolate_id = id, "started"))),
+                ..Default::default()
+            }),
+            ..PoolOptions::default()
+        },
+    )?;
+
     let handle = pool.handle();
     let handler = handle.prepare_default_handler();
 
     for _ in 0..4 {
         let outcome = pool.call_default(&handler)?;
-        tracing::info!(queue_wait_ms = ?outcome.diagnostics.queue_wait_ms);
+        tracing::info!(
+            queue_wait_ms = outcome.diagnostics.queue_wait_ms,
+            heap_kib = outcome.diagnostics.py_heap_kib,
+        );
     }
+
+    let stats = pool.stats();
+    tracing::info!(
+        invocations = stats.invocations,
+        avg_ms = stats.average_queue_wait_ms,
+        p95_ms = stats.queue_wait_p95_ms,
+    );
     Ok(())
 }
 ```
 
-The pool currently serialises invocations through one isolate while tracking queue-wait telemetry and aggregate counts (`PoolStats::invocations`, `average_queue_wait_ms`). Future revisions will expose configurable concurrency; avoid relying on the single-isolate behaviour.
+Key `PoolOptions` knobs:
+
+- **Concurrency** – `desired_size` (initial isolates) and `max_size` (upper bound). Calls queue when all isolates are busy.
+- **Queueing behaviour** – `queue_mode::Block` waits until an isolate is free; `queue_mode::FailFast` surfaces `PoolQueueFull` immediately. `max_queue` caps queued calls.
+- **Resource guard rails** – `heap_limit_kib` and `memory_limit_kib` quarantine isolates that exceed the configured budgets.
+- **Lifecycle hooks** – `LifecycleHooks` expose `on_isolate_started`, `on_isolate_recycled`, `on_call_started`, and `on_call_finished` so hosts can attach custom monitoring.
+
+`PoolStats` now reports invocation counts, average queue wait, and queue wait percentiles. `ExecutionOutcome` diagnostics capture per-call queue wait, heap usage, and (on Linux) RSS snapshots so hosts can alert when an invocation runs close to the limits.
 
 ## Dropping down to `PyRuntime`
 

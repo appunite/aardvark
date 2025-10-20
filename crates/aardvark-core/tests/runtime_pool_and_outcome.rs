@@ -3,7 +3,8 @@ use aardvark_core::{
     invocation::{FieldDescriptor, InvocationDescriptor, InvocationLimits},
     outcome::{FailureKind, OutcomeStatus, ResetMode, ResultPayload},
     persistent::{
-        BundleArtifact, BundleHandle, BundlePool, IsolateConfig, PoolOptions, PythonIsolate,
+        BundleArtifact, BundleHandle, BundlePool, CallOutcome, IsolateConfig, IsolateId,
+        LifecycleHooks, PoolOptions, PythonIsolate, QueueMode,
     },
     pool::{PoolConfig, PoolResetMode},
     strategy::{
@@ -17,6 +18,7 @@ use serde_json::json;
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use zip::write::FileOptions;
 use zip::CompressionMethod;
 
@@ -55,6 +57,10 @@ fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_pool_reset_failure_removes_runtime()?;
     verify_persistent_isolate_resets_modules()?;
     verify_bundle_pool_executes_handlers()?;
+    verify_bundle_pool_allows_concurrency()?;
+    verify_bundle_pool_failfast_when_at_capacity()?;
+    verify_bundle_pool_lifecycle_hooks()?;
+    verify_bundle_pool_heap_quarantine()?;
     verify_python_isolate_inline()?;
     Ok(())
 }
@@ -882,6 +888,209 @@ def handler():
     assert!(stats.total >= 1);
     assert!(stats.idle <= stats.total);
     assert_eq!(stats.invocations, 1);
+    Ok(())
+}
+
+fn verify_bundle_pool_allows_concurrency() -> Result<()> {
+    let bundle = bundle_with_main_and_manifest(
+        r#"
+def handler():
+    return "concurrent"
+"#,
+        &json!({
+            "schemaVersion": "1.0",
+            "entrypoint": "main:handler",
+            "runtime": {"language": "python"}
+        })
+        .to_string(),
+    );
+
+    let artifact = BundleArtifact::from_bundle(bundle)?;
+    let options = PoolOptions {
+        desired_size: 2,
+        max_size: 2,
+        ..PoolOptions::default()
+    };
+    let pool = BundlePool::from_artifact(artifact.clone(), options)?;
+
+    let lease_a = pool.test_acquire_guard()?;
+    let lease_b = pool.test_acquire_guard()?;
+
+    let stats = pool.stats();
+    assert_eq!(stats.total, 2);
+    assert_eq!(stats.busy, 2);
+    assert_eq!(stats.idle, 0);
+
+    drop(lease_a);
+    drop(lease_b);
+
+    let stats_after = pool.stats();
+    assert_eq!(stats_after.idle, stats_after.total);
+    assert_eq!(stats_after.busy, 0);
+    assert!(stats_after.queue_wait_p50_ms.is_none());
+    assert!(stats_after.queue_wait_p95_ms.is_none());
+    Ok(())
+}
+
+fn verify_bundle_pool_failfast_when_at_capacity() -> Result<()> {
+    let bundle = bundle_with_main_and_manifest(
+        r#"
+def handler():
+    return "hello"
+"#,
+        &json!({
+            "schemaVersion": "1.0",
+            "entrypoint": "main:handler",
+            "runtime": {"language": "python"}
+        })
+        .to_string(),
+    );
+
+    let artifact = BundleArtifact::from_bundle(bundle)?;
+    let options = PoolOptions {
+        desired_size: 1,
+        max_size: 1,
+        max_queue: Some(0),
+        queue_mode: QueueMode::FailFast,
+        ..PoolOptions::default()
+    };
+    let pool = BundlePool::from_artifact(artifact.clone(), options)?;
+
+    let lease = pool.test_acquire_guard()?;
+    let handler = pool.handle().prepare_default_handler();
+    let err = pool
+        .call_default(&handler)
+        .expect_err("call should fail fast while isolate leased");
+
+    match err {
+        PyRunnerError::PoolAtCapacity { .. } | PyRunnerError::PoolQueueFull { .. } => {}
+        other => panic!("unexpected pool error: {:?}", other),
+    }
+
+    drop(lease);
+    let pool_reset = BundlePool::from_artifact(artifact.clone(), PoolOptions::default())?;
+    let handler_reset = pool_reset.handle().prepare_default_handler();
+    let outcome = pool_reset.call_default(&handler_reset)?;
+    assert_eq!(payload_text(&outcome), "'hello'");
+    Ok(())
+}
+
+fn verify_bundle_pool_lifecycle_hooks() -> Result<()> {
+    let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let events_start = events.clone();
+    let events_recycle = events.clone();
+    let events_call_start = events.clone();
+    let events_call_finish = events.clone();
+
+    let hooks = LifecycleHooks {
+        on_isolate_started: Some(Arc::new(move |id| {
+            events_start.lock().unwrap().push(format!("start:{id}"));
+        })),
+        on_isolate_recycled: Some(Arc::new(move |id| {
+            events_recycle.lock().unwrap().push(format!("recycle:{id}"));
+        })),
+        on_call_started: Some(Arc::new(move |ctx| {
+            events_call_start
+                .lock()
+                .unwrap()
+                .push(format!("call-start:{}:{}", ctx.isolate_id, ctx.entrypoint));
+        })),
+        on_call_finished: Some(Arc::new(move |ctx, outcome| {
+            let mut events = events_call_finish.lock().unwrap();
+            match outcome {
+                CallOutcome::Success(_) => events.push(format!(
+                    "call-finish:success:{}:{}",
+                    ctx.isolate_id, ctx.entrypoint
+                )),
+                CallOutcome::Error(err) => {
+                    events.push(format!("call-finish:error:{}:{}", ctx.isolate_id, err))
+                }
+            }
+        })),
+    };
+
+    let bundle = bundle_with_main_and_manifest(
+        r#"
+def handler():
+    return "hook"
+"#,
+        &json!({
+            "schemaVersion": "1.0",
+            "entrypoint": "main:handler",
+            "runtime": {"language": "python"}
+        })
+        .to_string(),
+    );
+
+    let artifact = BundleArtifact::from_bundle(bundle)?;
+    let options = PoolOptions {
+        lifecycle_hooks: Some(hooks),
+        ..PoolOptions::default()
+    };
+    let pool = BundlePool::from_artifact(artifact.clone(), options)?;
+
+    {
+        let lease = pool.test_acquire_guard()?;
+        drop(lease);
+    }
+
+    let handler = pool.handle().prepare_default_handler();
+    let outcome = pool.call_default(&handler)?;
+    assert_eq!(payload_text(&outcome), "'hook'");
+
+    let recorded = events.lock().unwrap().clone();
+    assert!(recorded.iter().any(|entry| entry.starts_with("start:")));
+    assert!(recorded.iter().any(|entry| entry.starts_with("recycle:")));
+    assert!(recorded
+        .iter()
+        .any(|entry| entry.starts_with("call-start:")));
+    assert!(recorded
+        .iter()
+        .any(|entry| entry.starts_with("call-finish:success:")));
+    Ok(())
+}
+
+fn verify_bundle_pool_heap_quarantine() -> Result<()> {
+    let starts: Arc<Mutex<Vec<IsolateId>>> = Arc::new(Mutex::new(Vec::new()));
+    let starts_clone = starts.clone();
+    let hooks = LifecycleHooks {
+        on_isolate_started: Some(Arc::new(move |id| {
+            starts_clone.lock().unwrap().push(id);
+        })),
+        ..Default::default()
+    };
+
+    let bundle = bundle_with_main_and_manifest(
+        r#"
+def handler():
+    data = [i for i in range(1024)]
+    return "boom"
+"#,
+        &json!({
+            "schemaVersion": "1.0",
+            "entrypoint": "main:handler",
+            "runtime": {"language": "python"}
+        })
+        .to_string(),
+    );
+
+    let artifact = BundleArtifact::from_bundle(bundle)?;
+    let options = PoolOptions {
+        heap_limit_kib: Some(1),
+        lifecycle_hooks: Some(hooks),
+        ..PoolOptions::default()
+    };
+    let pool = BundlePool::from_artifact(artifact, options)?;
+
+    let handler = pool.handle().prepare_default_handler();
+    let outcome = pool.call_default(&handler)?;
+    assert_eq!(payload_text(&outcome), "'boom'");
+
+    let recorded = starts.lock().unwrap();
+    assert!(
+        recorded.len() >= 2,
+        "expected quarantine to trigger isolate replacement"
+    );
     Ok(())
 }
 
