@@ -1,72 +1,60 @@
 import builtins
+import copy
 from typing import Optional
 
 DEFAULT_BYTES = b"aardvark"
 
 
-def _coerce_bytes(value: object) -> Optional[bytes]:
-    if value is None:
-        return None
-    if isinstance(value, bytes):
-        return value
-    if isinstance(value, bytearray):
-        return bytes(value)
-    if isinstance(value, memoryview):
-        return value.tobytes()
-    if isinstance(value, str):
-        return value.encode("utf-8")
-    if isinstance(value, dict):
-        data = value.get("data") if "data" in value else None
-        return _coerce_bytes(data)
-    return None
-
-
-def _rawctx_bytes(field: str) -> Optional[bytes]:
+def _rawctx_inputs() -> Optional[dict]:
     source = getattr(builtins, "__aardvark_rawctx_inputs", None)
-    if isinstance(source, dict):
-        record = source.get(field)
-        if isinstance(record, dict):
-            return _coerce_bytes(record.get("data"))
+    return source if isinstance(source, dict) else None
+
+
+def _rawctx_payload(field: str) -> Optional[bytes]:
+    source = _rawctx_inputs()
+    if source is None:
+        return None
+    record = source.get(field)
+    if isinstance(record, dict):
+        data = record.get("data")
+        if isinstance(data, memoryview):
+            return data.tobytes()
+        if isinstance(data, (bytes, bytearray)):
+            return bytes(data)
     return None
 
 
-def _json_payload() -> Optional[bytes]:
-    payload = getattr(builtins, "__aardvark_input", None)
-    return _coerce_bytes(payload)
+def _json_payload() -> Optional[object]:
+    return getattr(builtins, "__aardvark_input", None)
 
 
-def _output_buffer(size: int):
+def _publish_raw(data: bytes):
     factory = globals().get("__aardvark_output_buffer")
     if callable(factory):
-        return factory(size, id="echo-output")
-    return None
+        buffer = factory(len(data), id="echo-output")
+        buffer[: len(data)] = data
+        return buffer
+    return data
 
 
-def main(payload=None, control=None, **kwargs):
-    raw_mode = False
-    data = None
-    if isinstance(payload, dict):
-        raw_mode = True
-        data = _coerce_bytes(payload)
-    if data is None and control is not None:
-        raw_mode = True
-        data = _coerce_bytes(control)
-    if data is None:
-        raw_bytes = _rawctx_bytes("payload")
-        if raw_bytes is not None:
-            raw_mode = True
-            data = raw_bytes
-    if data is None:
-        explicit = kwargs.get("data")
-        data = _coerce_bytes(explicit)
-    if data is None:
-        data = _json_payload()
-    if data is None:
-        data = DEFAULT_BYTES
+def main(input):  # noqa: D401 - benchmark echo handler
+    """Return a deep copy of the provided input."""
+    return copy.deepcopy(input)
 
-    if raw_mode:
-        buffer = _output_buffer(len(data))
-        if buffer is not None:
-            buffer[: len(data)] = data
-            return buffer
-    return data.decode("utf-8", errors="ignore")
+
+def entrypoint():
+    if _rawctx_inputs() is not None:
+        raw = _rawctx_payload("payload")
+        if raw is None:
+            raw = DEFAULT_BYTES
+        result = main(raw)
+        if isinstance(result, memoryview):
+            return _publish_raw(result.tobytes())
+        if isinstance(result, (bytes, bytearray)):
+            return _publish_raw(bytes(result))
+        return _publish_raw(bytes(str(result), "utf-8"))
+
+    json_value = _json_payload()
+    if json_value is None:
+        return main(DEFAULT_BYTES.decode("utf-8"))
+    return main(copy.deepcopy(json_value))

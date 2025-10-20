@@ -11,8 +11,8 @@ use aardvark_core::{
     outcome::{OutcomeStatus, ResultPayload},
     pool::{PoolConfig, PoolResetMode, PyRuntimePool},
     strategy::{
-        JsonInvocationStrategy, RawCtxBindingBuilder, RawCtxInput, RawCtxInvocationStrategy,
-        RawCtxMetadata, RawCtxPublishBuilder,
+        JsonInvocationStrategy, RawCtxInput, RawCtxInvocationStrategy, RawCtxMetadata,
+        RawCtxPublishBuilder,
     },
     Bundle, BundleArtifact, BundlePool, CleanupMode, IsolateConfig, PoolOptions, PyRuntime,
 };
@@ -695,7 +695,7 @@ fn scenario_manifest(scenario: Scenario, invocation: InvocationKind) -> String {
     let packages = scenario_packages(scenario);
     let mut manifest = json!({
         "schemaVersion": "1.0",
-        "entrypoint": "main:main",
+        "entrypoint": "main:entrypoint",
         "packages": packages,
     });
     if matches!(invocation, InvocationKind::RawCtx) {
@@ -707,26 +707,26 @@ fn scenario_manifest(scenario: Scenario, invocation: InvocationKind) -> String {
 }
 
 fn descriptor_for(
-    scenario: Scenario,
+    _scenario: Scenario,
     invocation: InvocationKind,
-    profile: LoadProfile,
+    _profile: LoadProfile,
 ) -> Option<InvocationDescriptor> {
     match invocation {
         InvocationKind::Json => None,
         InvocationKind::RawCtx => {
-            let mut descriptor = InvocationDescriptor::new("main:main");
-            let metadata = match scenario {
+            let mut descriptor = InvocationDescriptor::new("main:entrypoint");
+            let metadata = match _scenario {
                 Scenario::Echo => RawCtxPublishBuilder::new("echo-output")
                     .transform("memoryview")
-                    .metadata(json!({"kind": "echo", "profile": profile.name()}))
+                    .metadata(json!({"scenario": "echo", "profile": _profile.name()}))
                     .build(),
                 Scenario::Numpy => RawCtxPublishBuilder::new("numpy-output")
                     .transform("memoryview")
-                    .metadata(json!({"dtype": "float64_le", "profile": profile.name()}))
+                    .metadata(json!({"scenario": "numpy", "profile": _profile.name()}))
                     .build(),
                 Scenario::Pandas => RawCtxPublishBuilder::new("pandas-output")
                     .transform("memoryview")
-                    .metadata(json!({"encoding": "utf8", "profile": profile.name()}))
+                    .metadata(json!({"scenario": "pandas", "profile": _profile.name()}))
                     .build(),
             };
             descriptor.outputs.push(FieldDescriptor {
@@ -734,38 +734,6 @@ fn descriptor_for(
                 type_tag: None,
                 metadata: Some(metadata),
             });
-            match scenario {
-                Scenario::Echo => descriptor.inputs.push(FieldDescriptor {
-                    name: "payload".to_owned(),
-                    type_tag: None,
-                    metadata: Some(
-                        RawCtxBindingBuilder::new()
-                            .raw_arg("payload")
-                            .optional(true)
-                            .build(),
-                    ),
-                }),
-                Scenario::Numpy => descriptor.inputs.push(FieldDescriptor {
-                    name: "control".to_owned(),
-                    type_tag: None,
-                    metadata: Some(
-                        RawCtxBindingBuilder::new()
-                            .raw_arg("payload")
-                            .optional(true)
-                            .build(),
-                    ),
-                }),
-                Scenario::Pandas => descriptor.inputs.push(FieldDescriptor {
-                    name: "control".to_owned(),
-                    type_tag: None,
-                    metadata: Some(
-                        RawCtxBindingBuilder::new()
-                            .raw_arg("payload")
-                            .optional(true)
-                            .build(),
-                    ),
-                }),
-            }
             Some(descriptor)
         }
     }
