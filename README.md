@@ -6,7 +6,7 @@
 >
 > -- [Wikipedia](https://en.wikipedia.org/wiki/Aardvark)
 
-Embedded multi-language runtime for executing sandboxed bundles inside V8, with hardened resource controls and structured diagnostics. The project takes clear inspiration from Cloudflare Python Workers while pursuing an embeddable library-first design for Rust hosts. **Aardvark is experimental software**: APIs, manifests, and runtime semantics may change without notice, and the system has not been hardened for production traffic yet.
+Embedded multi-language runtime for executing sandboxed bundles inside [V8](https://v8.dev/), with hardened resource controls and structured diagnostics. The project takes clear inspiration from Cloudflare Python Workers while pursuing an embeddable library-first design for Rust hosts. **Aardvark is experimental software**: APIs, manifests, and runtime semantics may change without notice, and the system has not been hardened for production traffic yet.
 
 ## Why Aardvark?
 
@@ -28,7 +28,7 @@ cargo run -p aardvark-cli -- \
   --entrypoint main:main
 ```
 
-To preload packages, point the runtime at an unpacked Pyodide cache:
+To preload packages, point the runtime at an unpacked [Pyodide](https://pyodide.org/) cache:
 
 ```
 AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.28.2 \
@@ -39,9 +39,9 @@ AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.28.2 \
 
 The manifest bundled with the example instructs the runtime to install `numpy` and `pandas` before executing the handler.
 
-### Preparing Pyodide assets
+### Preparing [Pyodide](https://pyodide.org/) assets
 
-The runtime expects a local Pyodide cache and never downloads wheels on demand.
+The runtime expects a local [Pyodide](https://pyodide.org/) cache and never downloads wheels on demand.
 Stage the upstream release yourself and flatten it into
 `./.aardvark/pyodide/<version>` so every asset sits directly under that
 directory:
@@ -59,7 +59,7 @@ rm -rf pyodide pyodide-0.28.2.tar.bz2
 Swap the archive name for `pyodide-core-0.28.2.tar.bz2` if you only need the
 core subset. Once the files are in place, set
 `AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.28.2` (or configure
-`PyRuntimeConfig::pyodide_version`). When Pyodide requests
+`PyRuntimeConfig::pyodide_version`). When [Pyodide](https://pyodide.org/) requests
 `pyodide/v0.28.2/full/numpy-*.whl`, the runtime will serve
 `.aardvark/pyodide/0.28.2/numpy-*.whl` straight from disk.
 
@@ -191,7 +191,7 @@ fn execute_with_runtime(bytes: &[u8]) -> anyhow::Result<()> {
 
 ### Warm Snapshots
 
-Capture a fully-initialised Pyodide instance (including packages) and reuse it for future runtimes:
+Capture a fully-initialised [Pyodide](https://pyodide.org/) instance (including packages) and reuse it for future runtimes:
 
 ```rust
 use aardvark_core::{Bundle, PyRuntime, PyRuntimeConfig};
@@ -209,7 +209,7 @@ fn build_warm_state(bytes: &[u8]) -> anyhow::Result<(PyRuntimeConfig, Bundle)> {
 }
 ```
 
-Any new runtime (or pool) constructed with that `PyRuntimeConfig` skips the heavy Pyodide bootstrap and restores directly from the warm snapshot. Snapshots captured inside the runtime automatically mark their overlays as preloaded so in-place resets avoid re-importing site-packages.
+Any new runtime (or pool) constructed with that `PyRuntimeConfig` skips the heavy [Pyodide](https://pyodide.org/) bootstrap and restores directly from the warm snapshot. Snapshots captured inside the runtime automatically mark their overlays as preloaded so in-place resets avoid re-importing site-packages.
 
 ## Benchmarking the runtime
 
@@ -225,7 +225,7 @@ Arguments are `[iterations] [payload_len]` (both optional). The harness warms th
 
 ## Documentation
 
-- Architecture guidance lives under `docs/architecture/`. Start with `overview.md` for a top-down explanation, then branch into resource-limits, sandbox internals, and telemetry.
+- Architecture guidance lives under `docs/architecture/`. Start with `overview.md` for a top-down explanation, then branch into resource-limits, lifecycle/sandbox internals, and telemetry. The current feature plan is in `roadmap.md`.
 - API reference under `docs/api/` covers the manifest schema, host integration, handler contracts, and diagnostics handling with examples.
 - Developer onboarding material is available in `docs/dev/` for contributors extending the project.
 - Performance notes and benchmark workflow live in `docs/perf/overview.md`.
@@ -237,7 +237,7 @@ Arguments are `[iterations] [payload_len]` (both optional). The harness warms th
 
 The core library is published as `aardvark-core`. Before cutting any experimental build:
 
-- Audit the bundled Pyodide version and rebuild snapshots if needed.
+- Audit the bundled [Pyodide](https://pyodide.org/) version and rebuild snapshots if needed.
 - Decide whether to ship the CLI (`aardvark-cli`) alongside or keep it workspace-only.
 - Ensure `AARDVARK_PYODIDE_PACKAGE_DIR` points at a cache available on the target system; the crate never downloads wheels at runtime.
 - Regenerate the bundle manifest schema if new fields were added.
@@ -250,7 +250,7 @@ The core library is published as `aardvark-core`. Before cutting any experimenta
 - Network sandboxing is allowlist-based per session; there is no per-request override yet.
 - Filesystem quota enforcement only covers the `/session` tree.
 - Streaming outputs and incremental logs are not available; handlers must return a single payload.
-- Warm snapshots are tied to the Pyodide build and manifest used when you captured them; changing either requires baking a new snapshot. When you assemble warm states manually, remember to flag them as `overlay_preloaded` so resets avoid redundant imports.
+- Warm snapshots are tied to the [Pyodide](https://pyodide.org/) build and manifest used when you captured them; changing either requires baking a new snapshot. When you assemble warm states manually, remember to flag them as `overlay_preloaded` so resets avoid redundant imports.
 - Runtime pool resets still execute synchronously on the thread that next checks out a runtime; there is no background reset worker yet.
 - API stability is not guaranteed; expect breaking changes while the runtime matures.
 

@@ -91,10 +91,10 @@ For zero-copy outputs, allocate buffers via `builtins.__aardvark_output_buffer(s
 
 - Use the CLI to load your bundle: `cargo run -p aardvark-cli -- --bundle my_bundle.zip --manifest`.
 - Provide `--descriptor` when testing descriptor-only bundles.
-- For unit tests, load the same module under CPython and invoke the handler with representative payloads. Ensure any Pyodide-specific APIs are guarded behind runtime checks.
+- For unit tests, load the same module under CPython and invoke the handler with representative payloads. Ensure any [Pyodide](https://pyodide.org/)-specific APIs are guarded behind runtime checks.
 
 ## Known gaps
 
 - Streaming output is not supported; handlers must return a single payload.
-- There is no built-in virtualenv simulation. The Pyodide environment may differ from CPython (especially around file IO and native extensions).
+- There is no built-in virtualenv simulation. The [Pyodide](https://pyodide.org/) environment may differ from CPython (especially around file IO and native extensions).
 - Persistent filesystem state is wiped after each invocation in pooled runtimes; do not rely on local cache between runs.

@@ -23,12 +23,12 @@ flowchart TD
 
 **Limitations**
 
-- Only fetch-style requests are intercepted today. Direct socket access is not exposed, but if Pyodide gains new networking backdoors they still need to be patched into the shim.
+- Only fetch-style requests are intercepted today. Direct socket access is not exposed, but if [Pyodide](https://pyodide.org/) gains new networking backdoors they still need to be patched into the shim.
 - DNS resolution is not measured. Hosts may want to proxy network access when audit-grade logging is required.
 
 ## Filesystem
 
-- User bundles mount at `/app`. Pyodide’s standard runtime mounts `/lib`, `/usr`, etc.; these remain read-only.
+- User bundles mount at `/app`. [Pyodide](https://pyodide.org/)’s standard runtime mounts `/lib`, `/usr`, etc.; these remain read-only.
 - The JS shim tracks writes under `/session` via virtual `FS` hooks. Hosts can choose `read` or `readWrite` mode per manifest.
 - When writable mode is enabled, an optional quota (bytes written) can be set. Attempting to write beyond the quota raises `FilesystemPolicyError` inside Python.
 - On every invocation finish the shim enumerates new/changed files and deletes them to leave the session clean.
@@ -88,3 +88,11 @@ sequenceDiagram
 
 - CPU timers are not available on all targets. When the platform does not supply `thread_cpu_time_ns`, CPU limits can’t be enforced.
 - There is no sampling profiler integration yet; only aggregate CPU milliseconds are reported.
+
+## Isolation Gaps & Follow-ups
+
+- **Single-process boundary** – isolation depends on the host process.
+- **Network visibility** – DNS, connection metadata, and request bodies are not surfaced today. Follow-up: integrate a host-side proxy and attach richer telemetry events.
+- **Filesystem visibility** – quota enforcement covers byte counts only. We do not surface the list of mutated files; hosts should mount `/session` onto ephemeral storage until we add exposure.
+- **Crash containment** – a fatal trap forces isolate recreation but keeps the process alive. We still rely on host supervision to restart the process.
+- **Capability growth** – all native bridges must opt into the capability gate. Audit new host APIs for accidental exposure.

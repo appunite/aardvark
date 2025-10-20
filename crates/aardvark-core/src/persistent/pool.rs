@@ -37,14 +37,23 @@ pub type IsolateId = u64;
 /// Configuration for bundle pools.
 #[derive(Clone)]
 pub struct PoolOptions {
+    /// Baseline isolate options (Pyodide version, warm snapshot hooks, etc.).
     pub isolate: IsolateConfig,
+    /// Preferred number of isolates to keep hot.
     pub desired_size: usize,
+    /// Upper bound on isolates that may be spawned when demand spikes.
     pub max_size: usize,
+    /// Optional maximum number of queued calls awaiting an idle isolate.
     pub max_queue: Option<usize>,
+    /// Behaviour when the queue is full (`Block` vs `FailFast`).
     pub queue_mode: QueueMode,
+    /// Optional lifecycle callbacks invoked around isolate/call events.
     pub lifecycle_hooks: Option<LifecycleHooks>,
+    /// RSS guard rail in KiB; isolates exceeding it are quarantined.
     pub memory_limit_kib: Option<u64>,
+    /// Pyodide heap guard rail in KiB; isolates exceeding it are quarantined.
     pub heap_limit_kib: Option<u64>,
+    /// Interval for the periodic telemetry reporter (set to `None` to disable).
     pub telemetry_interval: Option<Duration>,
 }
 
@@ -94,9 +103,13 @@ type CallFinishedCallback = Arc<dyn for<'a> Fn(&CallContext, CallOutcome<'a>) + 
 /// Lifecycle hooks invoked during pool operations.
 #[derive(Clone, Default)]
 pub struct LifecycleHooks {
+    /// Called when a new isolate starts (after warm state application).
     pub on_isolate_started: Option<IsolateStartCallback>,
+    /// Called when an isolate leaves active service (idle/quarantined/etc.).
     pub on_isolate_recycled: Option<IsolateRecycleCallback>,
+    /// Called right before a call is handed to an isolate.
     pub on_call_started: Option<CallStartedCallback>,
+    /// Called after a call completes (success or failure).
     pub on_call_finished: Option<CallFinishedCallback>,
 }
 
@@ -124,9 +137,13 @@ pub enum CallOutcome<'a> {
 
 /// Snapshot describing an invocation being processed by the pool.
 pub struct CallContext {
+    /// Identifier for the isolate serving the call.
     pub isolate_id: IsolateId,
+    /// Fingerprint of the bundle currently mounted.
     pub bundle_fingerprint: BundleFingerprint,
+    /// Entrypoint being executed (module:function).
     pub entrypoint: String,
+    /// Milliseconds the call spent waiting in the queue before dispatch.
     pub queue_wait_ms: u64,
 }
 

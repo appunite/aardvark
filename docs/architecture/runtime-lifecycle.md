@@ -6,8 +6,8 @@ This guide follows a bundle from the moment the host hands it to a `PythonIsolat
 
 - Hosts instantiate `PythonIsolate` directly or borrow one via `BundlePool`. These wrappers sit on top of `PyRuntime`. `IsolateConfig`/`PyRuntimeConfig` control snapshot paths, global budget overrides, cleanup policy, and default host capabilities.
 - During `PyRuntime::new`, the runtime:
-  - boots a dedicated V8 isolate,
-  - registers embedded assets (Pyodide modules, bootstrap JS),
+  - boots a dedicated [V8](https://v8.dev/) isolate,
+  - registers embedded assets ([Pyodide](https://pyodide.org/) modules, bootstrap JS),
   - injects the bundled Pyodide version into the JS globals, and
   - stores an optional warm snapshot payload.
 
@@ -23,7 +23,7 @@ A runtime may stay idle in the pool until a bundle arrives. No Python code is lo
    - network allowlist + HTTPS requirement,
    - filesystem mode (`read` or `readWrite`) and quota,
    - host capability gates (allowlist of native bridges).
-4. Ensure Pyodide is loaded (from snapshot when available) and mount the bundle at `/app`.
+4. Ensure [Pyodide](https://pyodide.org/) is loaded (from snapshot when available) and mount the bundle at `/app`.
 5. Install requested packages through the Pyodide package loader and pre-stage dynamic libraries.
 
 If a manifest is absent, the host may call `prepare_session_with_descriptor` after building the descriptor manually. Both paths produce a `PySession` which is an immutable handle containing the bundle and descriptor.
@@ -103,6 +103,6 @@ Regardless of success or failure the runtime collects:
 
 ## Outstanding Gaps
 
-- Wall-clock watchdog relies on cooperative interruption by Pyodide; heavy native extensions may not obey it.
+- Wall-clock watchdog relies on cooperative interruption by [Pyodide](https://pyodide.org/); heavy native extensions may not obey it.
 - CPU accounting uses per-thread timers which some targets disable. When absent the runtime skips enforcement and reports `None` for `cpu_ms_used`.
 - Guard rail telemetry for RSS depends on platform support (Linux uses `/proc/self/statm`; macOS relies on `mach_task_basic_info`; other targets still report `None`).

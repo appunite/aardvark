@@ -33,56 +33,74 @@ the OS.
 ## Requirements
 
 - `uv` for ephemeral Python environments: <https://docs.astral.sh/uv/>
-- `mise` (or any toolchain manager capable of installing Python 3.12) – we use
+- `mise` (or any toolchain manager capable of installing Python 3.13) – we use
   it in documentation for reproducible instructions.
-- Pyodide assets already downloaded (see [Host Integration – Preparing Pyodide
-  assets](../api/rust-host.md#preparing-pyodide-assets)).
+- [Pyodide](https://pyodide.org/) assets already downloaded (see [Host Integration – Preparing Pyodide assets](../api/rust-host.md#preparing-pyodide-assets)).
 
-Ensure a matching CPython is available (Pyodide 0.28.2 targets Python 3.12):
+Ensure a matching CPython is available ([Pyodide](https://pyodide.org/) 0.28.2 targets Python 3.13):
 
 ```sh
-mise install python@3.12
-mise exec python@3.12 -- python --version
+mise install python@3.13
+mise exec python@3.13 -- python --version
 ```
 
 ## Running the Benchmarks
 
-The harness reads Pyodide wheels from the directory referenced by
+The harness reads [Pyodide](https://pyodide.org/) wheels from the directory referenced by
 `AARDVARK_PYODIDE_PACKAGE_DIR` (the `Makefile` forwards `PYODIDE_DIR`, which
 defaults to `./.aardvark/pyodide/0.28.2`). Stage the upstream release and copy
 the contents of `pyodide/v0.28.2/full/` (or `core/`) into that directory so the
 runtime can serve requests like `pyodide/v0.28.2/full/numpy-….whl` from a flat
-layout.
+layout. A quick setup looks like:
+
+```sh
+export PYODIDE_VERSION=0.28.2
+export PYODIDE_DIR="$PWD/.aardvark/pyodide/$PYODIDE_VERSION"
+mkdir -p "$PYODIDE_DIR"
+# …download and extract the Pyodide release here…
+```
+
+The top-level `Makefile` now exposes helper targets. Run `make help` to see the
+available commands and the current environment defaults:
+
+```
+$ make help
+Available targets:
+  make perf-all     Run the full perf suite (JSON/CSV artefacts).
+  make perf-md      Generate Markdown summary (runs perf-all first).
+  make setup-python Install Python 3.13 via mise (used by host runner).
+Variables:
+  PYODIDE_VERSION=0.28.2
+  PYODIDE_DIR=/…/.aardvark/pyodide/0.28.2
+  ITERATIONS=25
+```
+
+Run `make setup-python` once per machine to install the host-side Python
+interpreter used for the comparative baseline.
+
+`make perf-all` executes the full matrix (`aardvark-perf all …`) and writes both
+JSON and CSV artefacts under `target/perf/`. To inspect the Markdown table
+directly call `make perf-md`, which invokes the same run and pipes the JSON into
+`perf/scripts/render_markdown.py`.
 
 For the cold and warm paths each iteration spins up a fresh runtime, installs
 the requested packages from the local cache, prepares the bundle, and executes
 the entrypoint. The persistent rows keep a `BundlePool` isolate hot between
-calls (`CleanupMode::Full`), highlighting the latency win from skipping the
-hydration step.
+calls (`CleanupMode::Full` unless noted), highlighting the latency win from
+skipping the hydration step.
 
-From the repository root:
-
-```sh
-make perf-all ITERATIONS=10
-```
-
-By default the harness iterates through every workload and load profile,
-printing a combined table. Sample console output (2 iterations per profile on
-an M2 Max):
+Sample console output (abbreviated; numbers will vary with hardware and
+iteration count):
 
 ```
-┌──────────┬──────────┬──────────────────────────────┬────────────┬──────────────┬─────────┬─────────┬─────────┬───────────┐
-│ Scenario │ Profile  │ Mode                         │ Invocation │ Path         │ Avg ms  │ Min ms  │ Max ms  │ RSS (KiB) │
-╞══════════╪══════════╪══════════════════════════════╪════════════╪══════════════╪═════════╪═════════╪═════════╪═══════════╡
-│ echo     │ none     │ aardvark-json-persistent     │ json       │ persistent   │ 38.5    │ 3.8     │ 76.2    │ 620800    │
-│ echo     │ medium   │ aardvark-json-persistent     │ json       │ persistent   │ 80.7    │ 5.9     │ 155.6   │ 642448    │
-│ echo     │ high     │ aardvark-json-persistent     │ json       │ persistent   │ 35.1    │ 3.8     │ 157.5   │ 652928    │
-│ numpy    │ medium   │ aardvark-json-persistent     │ json       │ persistent   │ 246.0   │ 25.9    │ 466.1   │ 940160    │
-│ numpy    │ high     │ aardvark-rawctx-persistent   │ rawctx     │ persistent   │ 129.3   │ 37.6    │ 493.6   │ 965312    │
-│ pandas   │ medium   │ aardvark-json-persistent     │ json       │ persistent   │ 438.2   │ 72.8    │ 1897.8  │ 1765808   │
-│ pandas   │ high     │ aardvark-rawctx-persistent   │ rawctx     │ persistent   │ 450.3   │ 84.7    │ 1911.0  │ 1970048   │
-│ numpy    │ high     │ host-python                  │ -          │ -            │ 0.96    │ 0.23    │ 1.99    │ 38976     │
-└──────────┴──────────┴──────────────────────────────┴────────────┴──────────────┴─────────┴─────────┴─────────┴───────────┘
+┌──────────┬──────────┬──────────────────────────────┬────────────┬──────────────┬───────────────┬──────┬────────┬────────┬────────┬────────┬────────┬────────┬──────────┐
+│ Scenario │ Profile  │ Mode                         │ Invocation │ Path         │ Cleanup       │ Iter │ Avg ms │ Min ms │ Max ms │ Std ms │ P50 ms │ P95 ms │ RSS (MiB)│
+├──────────┼──────────┼──────────────────────────────┼────────────┼──────────────┼───────────────┼──────┼────────┼────────┼────────┼────────┼────────┼────────┼──────────┤
+│ echo     │ low      │ aardvark-json-persistent     │ json       │ persistent   │ full          │ 25   │  42.10 │   3.95 │  88.42 │  19.32 │   5.92 │  76.73 │   607.12 │
+│ numpy    │ medium   │ aardvark-rawctx-persistent   │ rawctx     │ persistent   │ shared-buffers-only │ 25   │ 210.54 │  38.22 │ 454.11 │ 123.47 │  68.09 │ 392.77 │   942.65 │
+│ pandas   │ high     │ aardvark-json-cold           │ json       │ cold         │ -             │ 25   │ 790.31 │ 765.42 │ 812.55 │   9.88 │ 789.77 │ 803.91 │  2184.40 │
+│ pandas   │ high     │ host-python                  │ -          │ -            │ -             │ 25   │   1.12 │   0.18 │   2.02 │   0.39 │   0.96 │   1.78 │    37.88 │
+└──────────┴──────────┴──────────────────────────────┴────────────┴──────────────┴───────────────┴──────┴────────┴────────┴────────┴────────┴────────┴────────┴──────────┘
 ```
 
 The JSON/CSV artefacts live under `target/perf/` and include the same
@@ -91,10 +109,11 @@ information (one row per scenario/profile/path/mode combination).
 
 ### Single Scenario
 
-To benchmark one combination:
+To benchmark one combination set `AARDVARK_PYODIDE_PACKAGE_DIR` (or export
+`PYODIDE_DIR` before invoking make) and run:
 
 ```sh
-cargo run -p aardvark-perf -- scenario \
+AARDVARK_PYODIDE_PACKAGE_DIR=$PYODIDE_DIR cargo run -p aardvark-perf -- scenario \
   --scenario pandas \
   --mode aardvark-json-persistent \
   --profile medium \
@@ -106,7 +125,7 @@ cargo run -p aardvark-perf -- scenario \
 The harness shells out to:
 
 ```sh
-uv run --python 3.12 --with numpy --with pandas \
+uv run --python 3.13 --with numpy --with pandas \
   python perf/fixtures/run_host.py --scenario pandas --profile medium --iterations 25
 ```
 

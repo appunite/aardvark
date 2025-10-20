@@ -1019,7 +1019,7 @@ fn print_summary(results: &[BenchResult]) {
 }
 
 fn host_python_version() -> &'static str {
-    "3.12"
+    "3.13"
 }
 
 #[derive(Serialize, serde::Deserialize)]

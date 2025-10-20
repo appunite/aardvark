@@ -9,60 +9,90 @@ use crate::persistent::PoolStats;
 /// Aggregated telemetry derived from [`Diagnostics`] for host integrations.
 #[derive(Clone, Debug, Default)]
 pub struct SandboxTelemetry {
+    /// CPU milliseconds consumed by the guest (thread time).
     pub cpu_ms_used: Option<u64>,
+    /// Milliseconds spent waiting for an isolate when coming from a pool.
     pub queue_wait_ms: Option<u64>,
+    /// Milliseconds spent preparing the runtime before invocation.
     pub prepare_ms: Option<u64>,
+    /// Milliseconds spent cleaning up after invocation.
     pub cleanup_ms: Option<u64>,
+    /// Filesystem activity summary (bytes written + violations).
     pub filesystem: FilesystemTelemetry,
+    /// Network allow/deny observations.
     pub network: NetworkTelemetry,
+    /// Reset behaviour captured before the call.
     pub reset: Option<ResetTelemetry>,
+    /// RSS and heap usage snapshots collected around the call.
     pub memory: MemoryTelemetry,
 }
 
 /// Filesystem usage and violation details.
 #[derive(Clone, Debug, Default)]
 pub struct FilesystemTelemetry {
+    /// Bytes written to the writable sandbox during the invocation.
     pub bytes_written: Option<u64>,
+    /// Policy violations observed while enforcing filesystem rules.
     pub violations: Vec<FilesystemViolation>,
 }
 
 /// Network allow/deny observations captured during execution.
 #[derive(Clone, Debug, Default)]
 pub struct NetworkTelemetry {
+    /// Hosts successfully contacted under the allowlist.
     pub allowed: Vec<NetworkHostContact>,
+    /// Hosts that were blocked by policy enforcement.
     pub blocked: Vec<NetworkDeniedHost>,
 }
 
 /// Memory usage snapshots captured during execution.
 #[derive(Clone, Debug, Default)]
 pub struct MemoryTelemetry {
+    /// Python heap usage reported by the guest during the call.
     pub py_heap_kib: Option<u64>,
+    /// RSS of the host process before invocation.
     pub rss_kib_before: Option<u64>,
+    /// RSS of the host process after invocation.
     pub rss_kib_after: Option<u64>,
 }
 
 /// Reset data captured prior to invocation.
 #[derive(Clone, Debug)]
 pub struct ResetTelemetry {
+    /// Reset mode applied before invocation (in-place vs full recreate).
     pub mode: ResetMode,
+    /// Duration of the reset in milliseconds.
     pub duration_ms: u64,
+    /// Engine generation identifier after the reset.
     pub engine_generation: u64,
 }
 
 /// Aggregated pool-level telemetry derived from [`PoolStats`].
 #[derive(Clone, Debug, Default)]
 pub struct PoolTelemetry {
+    /// Total isolates managed by the pool.
     pub total_isolates: usize,
+    /// Number of idle isolates ready to accept work.
     pub idle_isolates: usize,
+    /// Number of isolates currently executing handlers.
     pub busy_isolates: usize,
+    /// Calls waiting in the pool queue.
     pub waiting_calls: usize,
+    /// Total invocation count served since startup.
     pub invocations: u64,
+    /// Average queue wait in milliseconds (rolling window).
     pub average_queue_wait_ms: f64,
+    /// 50th percentile queue wait in milliseconds (if computed).
     pub queue_wait_p50_ms: Option<f64>,
+    /// 95th percentile queue wait in milliseconds (if computed).
     pub queue_wait_p95_ms: Option<f64>,
+    /// Total number of times isolates were quarantined.
     pub quarantine_events: u64,
+    /// Number of quarantines triggered by heap guard rails.
     pub quarantine_heap_hits: u64,
+    /// Number of quarantines triggered by RSS guard rails.
     pub quarantine_rss_hits: u64,
+    /// Occurrences of deliberate pool scale-downs.
     pub scaledown_events: u64,
 }
 

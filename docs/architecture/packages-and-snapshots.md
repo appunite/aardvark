@@ -20,8 +20,8 @@ graph TD
 
 ## Manifest-driven packages
 
-- The manifest’s `packages` field lists Pyodide packages to preload. Names are normalised (trimmed, deduplicated, lowercase for comparisons).
-- During session preparation the JS bootstrap resolves dependencies using Pyodide’s lockfile and installs wheels from the local cache referenced by `AARDVARK_PYODIDE_PACKAGE_DIR`. The cache should contain the flattened contents of `pyodide/v0.28.2/<variant>/` so requests like `pyodide/v0.28.2/full/numpy-….whl` resolve to `<cache>/numpy-….whl`.
+- The manifest’s `packages` field lists [Pyodide](https://pyodide.org/) packages to preload. Names are normalised (trimmed, deduplicated, lowercase for comparisons).
+- During session preparation the JS bootstrap resolves dependencies using [Pyodide](https://pyodide.org/)’s lockfile and installs wheels from the local cache referenced by `AARDVARK_PYODIDE_PACKAGE_DIR`. The cache should contain the flattened contents of `pyodide/v0.28.2/<variant>/` so requests like `pyodide/v0.28.2/full/numpy-….whl` resolve to `<cache>/numpy-….whl`.
 - Dynamic libraries required by those packages are preloaded immediately after installation so they remain available during snapshot capture and execution.
 
 ```mermaid
@@ -36,12 +36,12 @@ flowchart LR
 
 **Limitations**
 
-- Manifests only support the bundled Pyodide version (currently `0.28.2`). Requests for a different version fail fast.
+- Manifests only support the bundled [Pyodide](https://pyodide.org/) version (currently `0.28.2`). Requests for a different version fail fast.
 - Package installation still hits the local filesystem. Ensure hosts point `AARDVARK_PYODIDE_PACKAGE_DIR` at a prepared cache.
 
 ## Snapshots
 
-- Passing `snapshot.load_from` in `PyRuntimeConfig` hydrates Pyodide from a previously captured memory snapshot, skipping import time.
+- Passing `snapshot.load_from` in `PyRuntimeConfig` hydrates [Pyodide](https://pyodide.org/) from a previously captured memory snapshot, skipping import time.
 - When `snapshot.save_to` is set, `PyRuntime::prepare_session_with_descriptor` writes a new snapshot after the first load, including overlay metadata.
 - Snapshot exports generate:
   - the main memory image,
@@ -70,5 +70,5 @@ flowchart TD
 
 ## Alternative Loader Paths
 
-- Hosts needing bespoke package resolution can skip the manifest packages and install requirements manually by calling into Pyodide through a custom strategy before handing control to user code.
+- Hosts needing bespoke package resolution can skip the manifest packages and install requirements manually by calling into [Pyodide](https://pyodide.org/) through a custom strategy before handing control to user code.
 - LangChain-style bundles with large optional dependencies can be shipped as separate snapshots; the manifest can reference the minimal package set and rely on the host to choose the right snapshot per request.

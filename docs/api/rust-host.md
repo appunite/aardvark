@@ -2,6 +2,8 @@
 
 This guide shows how to embed `aardvark-core` in a Rust service. It covers runtime setup, bundle execution, pooling, and error handling. Everything here is **experimental** and likely to change; use it for prototypes rather than production traffic.
 
+The same surface runs JavaScript bundles: set `InvocationDescriptor::runtime.language` or add `"runtime": {"language": "javascript"}` to the manifest. JavaScript bundles must ship their own modules; the runtime never resolves npm packages.
+
 ## Adding the dependency
 
 ```toml
@@ -11,9 +13,9 @@ aardvark-core = { path = "crates/aardvark-core" }
 
 For crates.io you will depend on the published version instead of the workspace path.
 
-## Preparing Pyodide assets
+## Preparing [Pyodide](https://pyodide.org/) assets
 
-Before initialising the runtime you need the pinned Pyodide bundle on disk.
+Before initialising the runtime you need the pinned [Pyodide](https://pyodide.org/) bundle on disk.
 Download the upstream archive, extract it, and move the desired variant into a
 flat directory so the runtime can resolve requests such as
 `pyodide/v0.28.2/full/numpy-….whl` from
@@ -159,11 +161,10 @@ if let Some(p95) = pool_telemetry.queue_wait_p95_ms {
 metrics::counter!("aardvark.pool.quarantine.total", pool_telemetry.quarantine_events as u64);
 ```
 
-### Migrating from `PyRuntimePool`
+### Moving away from `PyRuntimePool`
 
 `PyRuntimePool` is still available but `BundlePool` provides stricter cleanup,
-better telemetry, and host-controlled guard rails. A straight migration looks
-like:
+better telemetry, and host-controlled guard rails. To adopt it:
 
 1. Replace the old `PoolConfig` construction with `PoolOptions`. Copy over the
    concurrency knobs (`max_runtimes` → `desired_size/max_size`) and reset mode
@@ -345,4 +346,3 @@ Arguments are `[iterations] [payload_len]`. The harness warms the runtime, captu
 
 - Neither runtime path is production hardened. Expect breaking changes to manifests, descriptors, and configuration while we iterate.
 - The manifest schema is currently versioned as `1.0` but should be treated as provisional; schema bumps may happen without backwards compatibility.
-- When we approach a stable release we will publish migration guides and follow semantic versioning.

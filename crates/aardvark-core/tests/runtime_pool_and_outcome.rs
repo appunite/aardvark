@@ -709,6 +709,111 @@ export function handler() {
     Ok(())
 }
 
+#[test]
+fn javascript_network_denies_hosts_not_in_allowlist() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" },
+        "resources": {
+            "network": {
+                "allow": [],
+                "httpsOnly": true
+            }
+        }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(JS_NETWORK_BLOCK_SCRIPT, manifest);
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    match &outcome.status {
+        OutcomeStatus::Failure(FailureKind::PythonException(info)) => {
+            if let Some(message) = info.value.as_ref() {
+                let lowered = message.to_lowercase();
+                assert!(
+                    lowered.contains("not permitted")
+                        || lowered.contains("blocked")
+                        || lowered == "undefined",
+                    "expected network policy message, got {:?}",
+                    message
+                );
+            }
+        }
+        other => panic!("expected javascript network denial, got {:?}", other),
+    }
+    assert_eq!(
+        outcome.diagnostics.network_hosts_blocked.len(),
+        1,
+        "expected one blocked host in diagnostics"
+    );
+    let blocked = &outcome.diagnostics.network_hosts_blocked[0];
+    assert_eq!(blocked.host, "blocked.example");
+    assert_eq!(blocked.reason, "no-allowlist");
+    assert!(
+        !blocked.https_required,
+        "https flag should be false for blanket denials"
+    );
+    Ok(())
+}
+
+#[test]
+fn javascript_exception_reports_failure() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(JS_THROWING_SCRIPT, manifest);
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    match &outcome.status {
+        OutcomeStatus::Failure(FailureKind::PythonException(info)) => {
+            let typ = info.typ.clone().unwrap_or_default().to_lowercase();
+            assert!(
+                typ.contains("error"),
+                "expected JS exception type in diagnostics, got {:?}",
+                info.typ
+            );
+            let value = info.value.clone().unwrap_or_default();
+            assert!(
+                value.contains("boom"),
+                "expected message to contain boom, got {:?}",
+                value
+            );
+        }
+        other => panic!("expected javascript exception failure, got {:?}", other),
+    }
+    assert!(
+        outcome.diagnostics.stdout.contains("about to throw"),
+        "stdout should include pre-throw log"
+    );
+    Ok(())
+}
+
+#[test]
+fn javascript_rawctx_requires_capability() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(JS_RAWCTX_PUBLISH_SCRIPT, manifest);
+    let mut config = PyRuntimeConfig::default();
+    config.host_capabilities.clear();
+    let mut runtime = PyRuntime::new(config)?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    assert!(
+        matches!(outcome.status, OutcomeStatus::Failure(_)),
+        "expected capability denial"
+    );
+    Ok(())
+}
+
 fn verify_prepare_session_with_manifest_defaults() -> Result<()> {
     let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
     let bundle = bundle_with_main_and_manifest(
@@ -2789,6 +2894,20 @@ def main():
     js.__pyRunnerNativeFetch("http://allowed.test/resource")
 "#;
 
+const JS_NETWORK_BLOCK_SCRIPT: &str = r#"
+export default function main() {
+    globalThis.__pyRunnerNativeFetch("https://blocked.example/resource");
+    return "should-not-complete";
+}
+"#;
+
+const JS_THROWING_SCRIPT: &str = r#"
+export default function main() {
+    console.log("about to throw");
+    throw new Error("boom from js");
+}
+"#;
+
 const DIAGNOSTICS_RESOURCE_SCRIPT: &str = r#"
 import js
 from pathlib import Path
@@ -2810,6 +2929,13 @@ import js
 def main():
     js.__aardvarkPublishBuffer("buf", b"abc", None)
     return "ok"
+"#;
+
+const JS_RAWCTX_PUBLISH_SCRIPT: &str = r#"
+export default function main() {
+    globalThis.__aardvarkPublishBuffer("js-buf", new Uint8Array([1, 2, 3]), null);
+    return null;
+}
 "#;
 
 const FILESYSTEM_CREATE_FILE_SCRIPT: &str = r#"

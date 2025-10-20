@@ -7,19 +7,19 @@ information about the moving parts you are likely to touch.
 
 1. **Rust runtime (`crates/aardvark-core/src/runtime.rs`)** – orchestrates
    session preparation, watchdogs, and diagnostics.
-2. **JS engine wrapper (`crates/aardvark-core/src/engine.rs`)** – embeds V8 and
-   exposes a safe Rust façade for evaluating scripts, mounting bundles, and
-   configuring policies.
+2. **JS engine wrapper (`crates/aardvark-core/src/engine.rs`)** – embeds [V8](https://v8.dev/) and
+  exposes a safe Rust façade for evaluating scripts, mounting bundles, and
+  configuring policies.
 3. **Bootstrap assets (`crates/aardvark-core/src/js/`)** – JavaScript injected
-   into Pyodide to enforce sandboxing and provide host hooks.
+   into [Pyodide](https://pyodide.org/) to enforce sandboxing and provide host hooks.
 4. **Python support (`crates/aardvark-core/src/py/`)** – small utilities copied
-   into the virtual filesystem to patch Pyodide behaviour where necessary.
+   into the virtual filesystem to patch [Pyodide](https://pyodide.org/) behaviour where necessary.
 
 ## Rust ↔ JS Bridge
 
-- The bridge is synchronous and single-threaded. Every call into V8 happens on
+- The bridge is synchronous and single-threaded. Every call into [V8](https://v8.dev/) happens on
   the runtime thread; we rely on `v8::Locker` to guard isolates.
-- `JsRuntime` caches compiled modules (Pyodide, bootstrap scripts) and exposes
+- `JsRuntime` caches compiled modules ([Pyodide](https://pyodide.org/), bootstrap scripts) and exposes
   helpers for calling specific exported functions.
 - Errors from JS are converted into `PyRunnerError::Execution` with rich
   context. When changing bindings, keep failure modes actionable.
@@ -47,7 +47,7 @@ information about the moving parts you are likely to touch.
 
 ## CPU and Wall Watchdogs
 
-- Wall watchdog uses V8’s interrupt mechanism. The guard object returned by
+- Wall watchdog uses [V8](https://v8.dev/)’s interrupt mechanism. The guard object returned by
   `arm_watchdog` must be dropped explicitly to avoid spurious interrupts.
 - CPU measurement relies on `thread_cpu_time_ns()` from `std::time::Instant`.
   Platforms that lack it return `None`, so code should handle the absence
@@ -66,7 +66,7 @@ information about the moving parts you are likely to touch.
 
 - After editing JS files, run `npm run lint:js` (or equivalent) and ensure the
   assets still load in Node. The JS bundle is not transpiled; stick to syntax
-  supported by the embedded V8 version.
+  supported by the embedded [V8](https://v8.dev/) version.
 - Keep modules self-contained: no dynamic `import()` without embedding the
   dependency alongside the bootstrap file.
 
@@ -95,7 +95,7 @@ Following this order keeps host APIs and in-process behaviour aligned.
 
 ## Threading & Pooling Model
 
-- **Single-threaded core.** `JsRuntime` owns a V8 isolate; every call into the engine must happen on the same OS thread that created it. The runtime is not `Send`/`Sync`, and `v8::Locker` guards the isolate.
+- **Single-threaded core.** `JsRuntime` owns a [V8](https://v8.dev/) isolate; every call into the engine must happen on the same OS thread that created it. The runtime is not `Send`/`Sync`, and `v8::Locker` guards the isolate.
 - **Host-driven parallelism.** To run handlers concurrently, hosts create or pool multiple runtimes—one per worker thread (or process). Each checkout stays on the borrowing thread until it is dropped.
 - **Pooling vs. manual reuse.** If you only run sequential invocations, holding a `PyRuntime` and calling `reset_in_place()` yourself is equivalent to pooling. Pools add value when you need lifecycle isolation (drop tainted runtimes) or multiple threads sharing a limited set of isolates.
 - **No implicit async.** Aardvark does not spawn worker threads or background reset tasks; everything is synchronous. If you wrap it in async code, use `spawn_blocking` or your own thread pool.

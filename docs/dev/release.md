@@ -28,7 +28,7 @@ This checklist covers preparing a new public release of Aardvark.
 7. Update public docs (`docs/architecture`, `docs/api`) and developer docs
    (`docs/dev`).
 8. Update `README.md` with any new capabilities.
-9. Regenerate Pyodide assets if the bundled version changed.
+9. Regenerate [Pyodide](https://pyodide.org/) assets if the bundled version changed.
 
 ## Tagging
 

@@ -28,7 +28,11 @@ the daily workflow.
   ```bash
   cargo test -p aardvark-core
   ```
-- JS shim tests (run under Node with mocked Pyodide):
+- Sandbox regression tests (network/filesystem/capability coverage):
+  ```bash
+  cargo test -p aardvark-core --test runtime_pool_and_outcome
+  ```
+- JS shim tests (run under Node with mocked [Pyodide](https://pyodide.org/)):
   ```bash
   node crates/aardvark-core/tests/js/run-tests.mjs
   ```
@@ -37,7 +41,7 @@ the daily workflow.
   cargo test -p integration-tests -- --nocapture
   ```
   These will mount real overlay caches. Ensure `AARDVARK_PYODIDE_PACKAGE_DIR`
-  points at an unpacked cache.
+  points at an unpacked [Pyodide](https://pyodide.org/) cache.
 
 ### Smoke Testing the CLI
 
@@ -49,7 +53,7 @@ AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.28.2 \
 
 Set `RUST_LOG=aardvark::telemetry=info` to verify tracing and sandbox telemetry output.
 
-## JS/Pyodide Asset Workflow
+## JS/[Pyodide](https://pyodide.org/) Asset Workflow
 
 - Edit the bootstrap code under `crates/aardvark-core/src/js/`.
 - Keep the assets ASCII-only to simplify embedding.

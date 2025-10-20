@@ -1,3 +1,5 @@
+//! Persistent-runtime helpers: isolates, bundle handles, and pools.
+
 mod artifact;
 mod isolate;
 mod pool;
