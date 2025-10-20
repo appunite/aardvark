@@ -67,6 +67,33 @@ enum PathKind {
     Warm,
     ResetInPlace,
     Persistent,
+    FirstCall,
+}
+
+#[derive(Copy, Clone, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum CleanupKind {
+    Full,
+    SharedBuffersOnly,
+    None,
+}
+
+impl CleanupKind {
+    fn label(self) -> &'static str {
+        match self {
+            CleanupKind::Full => "full",
+            CleanupKind::SharedBuffersOnly => "shared-buffers-only",
+            CleanupKind::None => "none",
+        }
+    }
+
+    fn to_cleanup_mode(self) -> CleanupMode {
+        match self {
+            CleanupKind::Full => CleanupMode::Full,
+            CleanupKind::SharedBuffersOnly => CleanupMode::SharedBuffersOnly,
+            CleanupKind::None => CleanupMode::None,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Serialize)]
@@ -75,10 +102,14 @@ enum Mode {
     AardvarkJsonWarm,
     AardvarkJsonResetInPlace,
     AardvarkJsonPersistent,
+    AardvarkJsonPersistentShared,
+    AardvarkJsonPersistentNone,
     AardvarkRawCtxCold,
     AardvarkRawCtxWarm,
     AardvarkRawCtxResetInPlace,
     AardvarkRawCtxPersistent,
+    AardvarkRawCtxPersistentShared,
+    AardvarkRawCtxPersistentNone,
     HostPython,
 }
 
@@ -88,10 +119,16 @@ impl Mode {
         "aardvark-json-warm",
         "aardvark-json-reset-in-place",
         "aardvark-json-persistent",
+        "aardvark-json-persistent-full",
+        "aardvark-json-persistent-shared",
+        "aardvark-json-persistent-none",
         "aardvark-rawctx-cold",
         "aardvark-rawctx-warm",
         "aardvark-rawctx-reset-in-place",
         "aardvark-rawctx-persistent",
+        "aardvark-rawctx-persistent-full",
+        "aardvark-rawctx-persistent-shared",
+        "aardvark-rawctx-persistent-none",
         "host-python",
     ];
 
@@ -101,10 +138,14 @@ impl Mode {
             Mode::AardvarkJsonWarm => "aardvark-json-warm",
             Mode::AardvarkJsonResetInPlace => "aardvark-json-reset-in-place",
             Mode::AardvarkJsonPersistent => "aardvark-json-persistent",
+            Mode::AardvarkJsonPersistentShared => "aardvark-json-persistent-shared",
+            Mode::AardvarkJsonPersistentNone => "aardvark-json-persistent-none",
             Mode::AardvarkRawCtxCold => "aardvark-rawctx-cold",
             Mode::AardvarkRawCtxWarm => "aardvark-rawctx-warm",
             Mode::AardvarkRawCtxResetInPlace => "aardvark-rawctx-reset-in-place",
             Mode::AardvarkRawCtxPersistent => "aardvark-rawctx-persistent",
+            Mode::AardvarkRawCtxPersistentShared => "aardvark-rawctx-persistent-shared",
+            Mode::AardvarkRawCtxPersistentNone => "aardvark-rawctx-persistent-none",
             Mode::HostPython => "host-python",
         }
     }
@@ -114,11 +155,15 @@ impl Mode {
             Mode::AardvarkJsonCold | Mode::AardvarkJsonWarm | Mode::AardvarkJsonResetInPlace => {
                 Some(InvocationKind::Json)
             }
-            Mode::AardvarkJsonPersistent => Some(InvocationKind::Json),
+            Mode::AardvarkJsonPersistent
+            | Mode::AardvarkJsonPersistentShared
+            | Mode::AardvarkJsonPersistentNone => Some(InvocationKind::Json),
             Mode::AardvarkRawCtxCold
             | Mode::AardvarkRawCtxWarm
             | Mode::AardvarkRawCtxResetInPlace => Some(InvocationKind::RawCtx),
-            Mode::AardvarkRawCtxPersistent => Some(InvocationKind::RawCtx),
+            Mode::AardvarkRawCtxPersistent
+            | Mode::AardvarkRawCtxPersistentShared
+            | Mode::AardvarkRawCtxPersistentNone => Some(InvocationKind::RawCtx),
             Mode::HostPython => None,
         }
     }
@@ -130,10 +175,28 @@ impl Mode {
             Mode::AardvarkJsonResetInPlace | Mode::AardvarkRawCtxResetInPlace => {
                 Some(PathKind::ResetInPlace)
             }
-            Mode::AardvarkJsonPersistent | Mode::AardvarkRawCtxPersistent => {
-                Some(PathKind::Persistent)
-            }
+            Mode::AardvarkJsonPersistent
+            | Mode::AardvarkJsonPersistentShared
+            | Mode::AardvarkJsonPersistentNone
+            | Mode::AardvarkRawCtxPersistent
+            | Mode::AardvarkRawCtxPersistentShared
+            | Mode::AardvarkRawCtxPersistentNone => Some(PathKind::Persistent),
             Mode::HostPython => None,
+        }
+    }
+
+    fn cleanup_kind(self) -> Option<CleanupKind> {
+        match self {
+            Mode::AardvarkJsonPersistent | Mode::AardvarkRawCtxPersistent => {
+                Some(CleanupKind::Full)
+            }
+            Mode::AardvarkJsonPersistentShared | Mode::AardvarkRawCtxPersistentShared => {
+                Some(CleanupKind::SharedBuffersOnly)
+            }
+            Mode::AardvarkJsonPersistentNone | Mode::AardvarkRawCtxPersistentNone => {
+                Some(CleanupKind::None)
+            }
+            _ => None,
         }
     }
 
@@ -143,10 +206,14 @@ impl Mode {
             Mode::AardvarkJsonWarm,
             Mode::AardvarkJsonResetInPlace,
             Mode::AardvarkJsonPersistent,
+            Mode::AardvarkJsonPersistentShared,
+            Mode::AardvarkJsonPersistentNone,
             Mode::AardvarkRawCtxCold,
             Mode::AardvarkRawCtxWarm,
             Mode::AardvarkRawCtxResetInPlace,
             Mode::AardvarkRawCtxPersistent,
+            Mode::AardvarkRawCtxPersistentShared,
+            Mode::AardvarkRawCtxPersistentNone,
         ]
     }
 
@@ -155,7 +222,7 @@ impl Mode {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct BenchResult {
     scenario: Scenario,
     mode: Mode,
@@ -163,6 +230,8 @@ struct BenchResult {
     invocation: Option<InvocationKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<PathKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cleanup: Option<CleanupKind>,
     iterations: usize,
     total: TimingStats,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -207,13 +276,14 @@ fn main() -> Result<()> {
                 }
                 results.push(bench_host(scenario, iterations)?);
             }
+            let expanded = expand_results(&results);
             if let Some(path) = json {
-                write_json(&path, &results)?;
+                write_json(&path, &expanded)?;
             }
             if let Some(path) = csv {
-                write_csv(&path, &results)?;
+                write_csv(&path, &expanded)?;
             }
-            print_summary(&results);
+            print_summary(&expanded);
         }
         Cli::Scenario {
             scenario,
@@ -225,7 +295,8 @@ fn main() -> Result<()> {
             } else {
                 bench_host(scenario, iterations)?
             };
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            let expanded = expand_results(std::slice::from_ref(&result));
+            println!("{}", serde_json::to_string_pretty(&expanded)?);
         }
     }
     Ok(())
@@ -238,6 +309,8 @@ fn bench_aardvark(scenario: Scenario, mode: Mode, iterations: usize) -> Result<B
     let path = mode
         .path_kind()
         .ok_or_else(|| anyhow!("mode '{}' is missing a path kind", mode.name()))?;
+    let cleanup_kind = mode.cleanup_kind();
+    let mut applied_cleanup = cleanup_kind;
 
     let python_source = scenario_source(scenario, invocation);
     let manifest = scenario_manifest(scenario, invocation);
@@ -343,7 +416,9 @@ fn bench_aardvark(scenario: Scenario, mode: Mode, iterations: usize) -> Result<B
 
             let mut isolate_config = IsolateConfig::default();
             isolate_config.runtime.warm_state = Some(warm_state);
-            isolate_config.cleanup = CleanupMode::Full;
+            let bench_cleanup = cleanup_kind.unwrap_or(CleanupKind::Full);
+            isolate_config.cleanup = bench_cleanup.to_cleanup_mode();
+            applied_cleanup = Some(bench_cleanup);
 
             let options = PoolOptions {
                 isolate: isolate_config,
@@ -384,6 +459,7 @@ fn bench_aardvark(scenario: Scenario, mode: Mode, iterations: usize) -> Result<B
                 total.push(total_elapsed);
             }
         }
+        PathKind::FirstCall => unreachable!("first-call path is synthesized post-run"),
     }
 
     Ok(BenchResult {
@@ -391,6 +467,7 @@ fn bench_aardvark(scenario: Scenario, mode: Mode, iterations: usize) -> Result<B
         mode,
         invocation: Some(invocation),
         path: Some(path),
+        cleanup: applied_cleanup,
         iterations,
         total: timing_stats(&total),
         prepare: Some(timing_stats(&prepare)),
@@ -537,6 +614,7 @@ fn bench_host(scenario: Scenario, iterations: usize) -> Result<BenchResult> {
         mode: Mode::HostPython,
         invocation: None,
         path: None,
+        cleanup: None,
         iterations,
         total: result.total,
         prepare: None,
@@ -661,6 +739,33 @@ fn timing_stats(samples: &[Duration]) -> TimingStats {
     }
 }
 
+fn expand_results(results: &[BenchResult]) -> Vec<BenchResult> {
+    let mut expanded = Vec::new();
+    for result in results {
+        if let (Some(cold_total), Some(cold_prepare), Some(cold_run)) =
+            (&result.cold_total, &result.cold_prepare, &result.cold_run)
+        {
+            let mut first = result.clone();
+            first.path = Some(PathKind::FirstCall);
+            first.iterations = 1;
+            first.total = cold_total.clone();
+            first.prepare = Some(cold_prepare.clone());
+            first.run = Some(cold_run.clone());
+            first.cold_total = None;
+            first.cold_prepare = None;
+            first.cold_run = None;
+            expanded.push(first);
+        }
+
+        let mut steady = result.clone();
+        steady.cold_total = None;
+        steady.cold_prepare = None;
+        steady.cold_run = None;
+        expanded.push(steady);
+    }
+    expanded
+}
+
 fn write_json(path: &Path, results: &[BenchResult]) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -681,7 +786,7 @@ fn write_csv(path: &Path, results: &[BenchResult]) -> Result<()> {
         File::create(path).with_context(|| format!("failed to write {}", path.display()))?;
     writeln!(
         file,
-        "scenario,mode,invocation,path,iterations,avg_ms,min_ms,max_ms,rss_kib,prepare_avg_ms,run_avg_ms,cold_avg_ms,cold_prepare_avg_ms,cold_run_avg_ms"
+        "scenario,mode,invocation,path,cleanup,iterations,avg_ms,min_ms,max_ms,rss_kib,prepare_avg_ms,run_avg_ms"
     )?;
     for result in results {
         let prepare_avg = result
@@ -694,24 +799,20 @@ fn write_csv(path: &Path, results: &[BenchResult]) -> Result<()> {
             .as_ref()
             .map(|s| format!("{:.2}", s.avg_ms))
             .unwrap_or_default();
-        let cold_avg = result
-            .cold_total
-            .as_ref()
-            .map(|s| format!("{:.2}", s.avg_ms))
-            .unwrap_or_default();
-        let cold_prepare_avg = result
-            .cold_prepare
-            .as_ref()
-            .map(|s| format!("{:.2}", s.avg_ms))
-            .unwrap_or_default();
-        let cold_run_avg = result
-            .cold_run
-            .as_ref()
-            .map(|s| format!("{:.2}", s.avg_ms))
-            .unwrap_or_default();
+        let path = result
+            .path
+            .map(|mode| match mode {
+                PathKind::Cold => "cold",
+                PathKind::Warm => "warm",
+                PathKind::ResetInPlace => "reset-in-place",
+                PathKind::Persistent => "persistent",
+                PathKind::FirstCall => "first-call",
+            })
+            .unwrap_or("-");
+        let cleanup = result.cleanup.map(|kind| kind.label()).unwrap_or("-");
         writeln!(
             file,
-            "{},{},{},{},{},{:.2},{:.2},{:.2},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{:.2},{:.2},{:.2},{},{},{}",
             result.scenario.name(),
             result.mode.name(),
             result
@@ -721,15 +822,8 @@ fn write_csv(path: &Path, results: &[BenchResult]) -> Result<()> {
                     InvocationKind::RawCtx => "rawctx",
                 })
                 .unwrap_or("-"),
-            result
-                .path
-                .map(|mode| match mode {
-                    PathKind::Cold => "cold",
-                    PathKind::Warm => "warm",
-                    PathKind::ResetInPlace => "reset-in-place",
-                    PathKind::Persistent => "persistent",
-                })
-                .unwrap_or("-"),
+            path,
+            cleanup,
             result.iterations,
             result.total.avg_ms,
             result.total.min_ms,
@@ -737,9 +831,6 @@ fn write_csv(path: &Path, results: &[BenchResult]) -> Result<()> {
             result.rss_kib.unwrap_or_default(),
             prepare_avg,
             run_avg,
-            cold_avg,
-            cold_prepare_avg,
-            cold_run_avg,
         )?;
     }
     Ok(())
@@ -753,11 +844,11 @@ fn print_summary(results: &[BenchResult]) {
         "Mode",
         "Invocation",
         "Path",
+        "Cleanup",
         "Avg ms",
         "Min ms",
         "Max ms",
         "RSS (KiB)",
-        "Cold Avg ms",
     ]);
 
     for r in results {
@@ -775,8 +866,13 @@ fn print_summary(results: &[BenchResult]) {
                 PathKind::Warm => "warm",
                 PathKind::ResetInPlace => "reset-in-place",
                 PathKind::Persistent => "persistent",
+                PathKind::FirstCall => "first-call",
             })
             .unwrap_or("-");
+        let cleanup = r
+            .cleanup
+            .map(|kind| kind.label().to_string())
+            .unwrap_or_else(|| "-".to_string());
 
         let rss = r
             .rss_kib
@@ -788,16 +884,11 @@ fn print_summary(results: &[BenchResult]) {
             Cell::new(r.mode.name()),
             Cell::new(invocation),
             Cell::new(path),
+            Cell::new(cleanup),
             Cell::new(format!("{:.2}", r.total.avg_ms)),
             Cell::new(format!("{:.2}", r.total.min_ms)),
             Cell::new(format!("{:.2}", r.total.max_ms)),
             Cell::new(rss.clone()),
-            Cell::new(
-                r.cold_total
-                    .as_ref()
-                    .map(|stats| format!("{:.2}", stats.avg_ms))
-                    .unwrap_or_else(|| "-".to_string()),
-            ),
         ]);
     }
 
@@ -853,11 +944,19 @@ impl std::str::FromStr for Mode {
             "aardvark-json-cold" => Ok(Mode::AardvarkJsonCold),
             "aardvark-json-warm" => Ok(Mode::AardvarkJsonWarm),
             "aardvark-json-reset-in-place" => Ok(Mode::AardvarkJsonResetInPlace),
-            "aardvark-json-persistent" => Ok(Mode::AardvarkJsonPersistent),
+            "aardvark-json-persistent" | "aardvark-json-persistent-full" => {
+                Ok(Mode::AardvarkJsonPersistent)
+            }
+            "aardvark-json-persistent-shared" => Ok(Mode::AardvarkJsonPersistentShared),
+            "aardvark-json-persistent-none" => Ok(Mode::AardvarkJsonPersistentNone),
             "aardvark-rawctx-cold" => Ok(Mode::AardvarkRawCtxCold),
             "aardvark-rawctx-warm" => Ok(Mode::AardvarkRawCtxWarm),
             "aardvark-rawctx-reset-in-place" => Ok(Mode::AardvarkRawCtxResetInPlace),
-            "aardvark-rawctx-persistent" => Ok(Mode::AardvarkRawCtxPersistent),
+            "aardvark-rawctx-persistent" | "aardvark-rawctx-persistent-full" => {
+                Ok(Mode::AardvarkRawCtxPersistent)
+            }
+            "aardvark-rawctx-persistent-shared" => Ok(Mode::AardvarkRawCtxPersistentShared),
+            "aardvark-rawctx-persistent-none" => Ok(Mode::AardvarkRawCtxPersistentNone),
             "host-python" | "host" | "python" => Ok(Mode::HostPython),
             other => Err(format!("unknown mode '{other}'")),
         }
