@@ -7,7 +7,8 @@ and a native CPython interpreter:
 - **NumPy** – applies deterministic sine transforms and matrix multiplies across 200×200 arrays.
 - **Pandas** – aggregates a 50 000‑row deterministic DataFrame.
 
-Each workload is executed through Aardvark (warm snapshot, in-place resets) and
+Each workload is exercised through four Aardvark paths—cold start, warm
+snapshot, reset-in-place pooling, and the new persistent isolate pool—and
 through the host Python interpreter. The harness records average/min/max
 wall-clock latency per invocation and the peak RSS reported by the OS.
 
@@ -35,9 +36,11 @@ the contents of `pyodide/v0.28.2/full/` (or `core/`) into that directory so the
 runtime can serve requests like `pyodide/v0.28.2/full/numpy-….whl` from a flat
 layout.
 
-Each iteration spins up a fresh runtime, installs the requested packages from
-the local cache, prepares the bundle, and executes the entrypoint. The reported
-timings therefore capture end-to-end cold preparation plus handler runtime.
+For the cold and warm paths each iteration spins up a fresh runtime, installs
+the requested packages from the local cache, prepares the bundle, and executes
+the entrypoint. The persistent rows keep a `BundlePool` isolate hot between
+calls (`CleanupMode::Full`), highlighting the latency win from skipping the
+hydration step.
 
 From the repository root:
 
@@ -45,17 +48,27 @@ From the repository root:
 make perf-all ITERATIONS=25
 ```
 
-Sample console output:
+Sample console output (5 iterations on an M2 Max):
 
 ```
-| Scenario | Mode | Avg ms | Min ms | Max ms | RSS (KiB) |
-|----------|------|--------|--------|--------|-----------|
-| echo     | aardvark | 128.55 | 123.12 | 135.44 | 215000 |
-| echo     | host-python | 1.42 | 1.30 | 1.71 | 10234 |
-...
+┌──────────┬──────────────────────────────┬────────────┬──────────────┬─────────┬─────────┬─────────┬───────────┐
+│ Scenario │ Mode                         │ Invocation │ Path         │ Avg ms  │ Min ms  │ Max ms  │ RSS (KiB) │
+╞══════════╪══════════════════════════════╪════════════╪══════════════╪═════════╪═════════╪═════════╪═══════════╡
+│ echo     │ aardvark-json-cold           │ json       │ cold         │ 976.21  │ 937.34  │ 1032.26 │ 417312    │
+│ echo     │ aardvark-json-warm           │ json       │ warm         │ 170.32  │ 167.79  │ 174.24  │ 567728    │
+│ echo     │ aardvark-json-persistent     │ json       │ persistent   │ 39.14   │ 4.74    │ 173.84  │ 854608    │
+│ echo     │ host-python                  │ -          │ -            │ 0.00    │ 0.00    │ 0.00    │ 12496     │
+│ numpy    │ aardvark-json-persistent     │ json       │ persistent   │ 118.36  │ 27.24   │ 479.64  │ 1413008   │
+│ pandas   │ aardvark-json-persistent     │ json       │ persistent   │ 449.08  │ 75.32   │ 1942.02 │ 1943488   │
+└──────────┴──────────────────────────────┴────────────┴──────────────┴─────────┴─────────┴─────────┴───────────┘
 ```
 
 The JSON/CSV files contain the same data for further analysis and live under `target/perf/`.
+
+The persistent isolate path delivers the biggest gain: despite enforcing full
+cleanup between calls, `echo` falls from ~170 ms (“warm”) to ~39 ms and `numpy`
+drops from ~475 ms to ~118 ms on the same machine. We still report the cold
+baseline in the table so you can quantify the warmup cost your workloads carry.
 
 
 ### Single Scenario

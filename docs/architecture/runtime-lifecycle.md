@@ -105,4 +105,4 @@ Regardless of success or failure the runtime collects:
 
 - Wall-clock watchdog relies on cooperative interruption by Pyodide; heavy native extensions may not obey it.
 - CPU accounting uses per-thread timers which some targets disable. When absent the runtime skips enforcement and reports `None` for `cpu_ms_used`.
-- Guard rail telemetry for RSS depends on platform support (currently only Linux exports `/proc/self/statm`).
+- Guard rail telemetry for RSS depends on platform support (Linux uses `/proc/self/statm`; macOS relies on `mach_task_basic_info`; other targets still report `None`).

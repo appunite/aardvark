@@ -41,7 +41,7 @@ sequenceDiagram
 - `filesystem.violations` – Any attempts that breached filesystem policy.
 - `network.allowed` / `network.blocked` – Lists of contacted hosts and denied requests, including port, HTTPS flag, and reason codes.
 - `py_heap_kib` – Python heap usage at the end of the invocation (KiB).
-- `rss_kib_before` / `rss_kib_after` – Process RSS snapshots (Linux only).
+- `rss_kib_before` / `rss_kib_after` – Process RSS snapshots (Linux and macOS; other targets fall back to `None`).
 
 The telemetry snapshot is cheap to clone and is intended for metrics pipelines (Prometheus, statsd, etc.).
 
@@ -62,10 +62,11 @@ flowchart LR
 The runtime ships with tracing instrumentation (`tracing` crate):
 
 - Runtime lifecycle: `runtime.new`, `runtime.pool.checkout`, `runtime.pool.return`, `runtime.reset`.
-- Budgeting: `aardvark::budget` spans outlining limits and enforcement results.
+- Pool execution: `aardvark.call` spans annotate isolate id, bundle fingerprint, entrypoint, and queue wait duration for every `BundlePool::call_*` invocation. Persistent pools also emit `aardvark::telemetry` events at the interval configured by `PoolOptions::telemetry_interval` (queue depth, P50/P95 wait, isolate counts).
+- Budgeting: `aardvark::budget` spans outline limits and enforcement results.
 - Diagnostics: `aardvark::diagnostics` logs CPU usage, filesystem writes, and network decisions.
 
-Integrations can subscribe via `tracing-subscriber` to feed logs into structured collectors. The emitted fields (`runtime_id`, `entrypoint`, host/port) are stable.
+Subscribe via `tracing-subscriber` (or bridge into OpenTelemetry) to feed these spans into your observability stack. Enable `RUST_LOG=aardvark::telemetry=info` to witness the pool reporter in action; lower levels (`debug`/`trace`) surface the finer-grained diagnostics.
 
 ## FailureKinds
 

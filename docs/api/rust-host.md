@@ -140,8 +140,9 @@ Key `PoolOptions` knobs:
 - **Queueing behaviour** – `queue_mode::Block` waits until an isolate is free; `queue_mode::FailFast` surfaces `PoolQueueFull` immediately. `max_queue` caps queued calls.
 - **Resource guard rails** – `heap_limit_kib` and `memory_limit_kib` quarantine isolates that exceed the configured budgets.
 - **Lifecycle hooks** – `LifecycleHooks` expose `on_isolate_started`, `on_isolate_recycled`, `on_call_started`, and `on_call_finished` so hosts can attach custom monitoring.
+- **Telemetry flushing** – `telemetry_interval` controls the background reporter that logs queue depth/percentiles to `tracing` (`aardvark::telemetry`). Set it to `None` to disable periodic emission if you prefer to poll stats manually.
 
-`PoolStats` now reports invocation counts, average queue wait, and queue wait percentiles. `ExecutionOutcome` diagnostics capture per-call queue wait, heap usage, and (on Linux) RSS snapshots so hosts can alert when an invocation runs close to the limits.
+`PoolStats` now reports invocation counts, average queue wait, and queue wait percentiles. `ExecutionOutcome` diagnostics capture per-call queue wait, heap usage, and (on Linux and macOS) RSS snapshots so hosts can alert when an invocation runs close to the limits.
 
 ```rust
 let pool_telemetry = PoolTelemetry::from(&pool.stats());
@@ -150,6 +151,30 @@ if let Some(p95) = pool_telemetry.queue_wait_p95_ms {
     metrics::histogram!("aardvark.pool.queue_wait_p95_ms", p95);
 }
 ```
+
+### Migrating from `PyRuntimePool`
+
+`PyRuntimePool` is still available but `BundlePool` provides stricter cleanup,
+better telemetry, and host-controlled guard rails. A straight migration looks
+like:
+
+1. Replace the old `PoolConfig` construction with `PoolOptions`. Copy over the
+   concurrency knobs (`max_runtimes` → `desired_size/max_size`) and reset mode
+   (`PoolResetMode::InPlace` corresponds to `CleanupMode::Full`).
+2. Parse your bundle into a `BundleArtifact` once, then initialise a
+   `BundlePool::from_artifact` with optional limits (`heap_limit_kib`,
+   `memory_limit_kib`) and hooks.
+3. Swap `handle.runtime()` usage for `BundleHandle::prepare_handler` and
+   `pool.call_json`/`pool.call_rawctx`. Diagnostics now surface `queue_wait_ms`,
+   `prepare_ms`, `cleanup_ms`, heap usage, and (Linux/macOS) RSS snapshots per
+   call.
+4. If you previously logged pool stats manually, consider either reading
+   `PoolTelemetry::from(&pool.stats())` or enabling the background reporter via
+   `telemetry_interval` to stream queue metrics into your tracing backend.
+
+Once hosts adopt `BundlePool`, `PyRuntimePool` can be reserved for legacy
+scenarios (custom reset flows, non-Python engines) without blocking access to
+the newer guard rails.
 
 ## Dropping down to `PyRuntime`
 

@@ -47,7 +47,7 @@ AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.28.2 \
   --bundle hello_bundle.zip --entrypoint main:main --manifest
 ```
 
-Set `RUST_LOG=info` to verify tracing and sandbox telemetry output.
+Set `RUST_LOG=aardvark::telemetry=info` to verify tracing and sandbox telemetry output.
 
 ## JS/Pyodide Asset Workflow
 
@@ -69,7 +69,9 @@ Set `RUST_LOG=info` to verify tracing and sandbox telemetry output.
 ## Telemetry and Tracing
 
 - All tracing spans use the `aardvark::*` targets. Subscribe with
-  `tracing-subscriber` locally if you need to debug budget enforcement.
+  `tracing-subscriber` locally if you need to debug budget enforcement. The
+  pool reporter logs queue metrics under `aardvark::telemetry`; tweak
+  `PoolOptions::telemetry_interval` to manage its cadence.
 - When touching diagnostics, update `docs/architecture/telemetry.md` and keep
   telemetry structs backwards compatible.
 

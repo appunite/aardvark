@@ -9,8 +9,9 @@ use aardvark_core::{
     invocation::{FieldDescriptor, InvocationDescriptor},
     outcome::{OutcomeStatus, ResultPayload},
     pool::{PoolConfig, PoolResetMode, PyRuntimePool},
-    strategy::{RawCtxInvocationStrategy, RawCtxPublishBuilder},
-    Bundle, PyRuntime, PySession,
+    strategy::{RawCtxInput, RawCtxInvocationStrategy, RawCtxPublishBuilder},
+    Bundle, BundleArtifact, BundlePool, CleanupMode, IsolateConfig, PoolOptions, PyRuntime,
+    PySession,
 };
 use anyhow::{anyhow, Context, Result};
 use comfy_table::{presets::UTF8_FULL_CONDENSED, Cell, Table};
@@ -65,6 +66,7 @@ enum PathKind {
     Cold,
     Warm,
     ResetInPlace,
+    Persistent,
 }
 
 #[derive(Copy, Clone, Debug, Serialize)]
@@ -72,9 +74,11 @@ enum Mode {
     AardvarkJsonCold,
     AardvarkJsonWarm,
     AardvarkJsonResetInPlace,
+    AardvarkJsonPersistent,
     AardvarkRawCtxCold,
     AardvarkRawCtxWarm,
     AardvarkRawCtxResetInPlace,
+    AardvarkRawCtxPersistent,
     HostPython,
 }
 
@@ -83,9 +87,11 @@ impl Mode {
         "aardvark-json-cold",
         "aardvark-json-warm",
         "aardvark-json-reset-in-place",
+        "aardvark-json-persistent",
         "aardvark-rawctx-cold",
         "aardvark-rawctx-warm",
         "aardvark-rawctx-reset-in-place",
+        "aardvark-rawctx-persistent",
         "host-python",
     ];
 
@@ -94,9 +100,11 @@ impl Mode {
             Mode::AardvarkJsonCold => "aardvark-json-cold",
             Mode::AardvarkJsonWarm => "aardvark-json-warm",
             Mode::AardvarkJsonResetInPlace => "aardvark-json-reset-in-place",
+            Mode::AardvarkJsonPersistent => "aardvark-json-persistent",
             Mode::AardvarkRawCtxCold => "aardvark-rawctx-cold",
             Mode::AardvarkRawCtxWarm => "aardvark-rawctx-warm",
             Mode::AardvarkRawCtxResetInPlace => "aardvark-rawctx-reset-in-place",
+            Mode::AardvarkRawCtxPersistent => "aardvark-rawctx-persistent",
             Mode::HostPython => "host-python",
         }
     }
@@ -106,9 +114,11 @@ impl Mode {
             Mode::AardvarkJsonCold | Mode::AardvarkJsonWarm | Mode::AardvarkJsonResetInPlace => {
                 Some(InvocationKind::Json)
             }
+            Mode::AardvarkJsonPersistent => Some(InvocationKind::Json),
             Mode::AardvarkRawCtxCold
             | Mode::AardvarkRawCtxWarm
             | Mode::AardvarkRawCtxResetInPlace => Some(InvocationKind::RawCtx),
+            Mode::AardvarkRawCtxPersistent => Some(InvocationKind::RawCtx),
             Mode::HostPython => None,
         }
     }
@@ -120,6 +130,9 @@ impl Mode {
             Mode::AardvarkJsonResetInPlace | Mode::AardvarkRawCtxResetInPlace => {
                 Some(PathKind::ResetInPlace)
             }
+            Mode::AardvarkJsonPersistent | Mode::AardvarkRawCtxPersistent => {
+                Some(PathKind::Persistent)
+            }
             Mode::HostPython => None,
         }
     }
@@ -129,9 +142,11 @@ impl Mode {
             Mode::AardvarkJsonCold,
             Mode::AardvarkJsonWarm,
             Mode::AardvarkJsonResetInPlace,
+            Mode::AardvarkJsonPersistent,
             Mode::AardvarkRawCtxCold,
             Mode::AardvarkRawCtxWarm,
             Mode::AardvarkRawCtxResetInPlace,
+            Mode::AardvarkRawCtxPersistent,
         ]
     }
 
@@ -317,6 +332,56 @@ fn bench_aardvark(scenario: Scenario, mode: Mode, iterations: usize) -> Result<B
                     )?;
                 }
                 drop(handle);
+            }
+        }
+        PathKind::Persistent => {
+            let (warm_state, cold_total, cold_prepare, cold_run) =
+                capture_warm_state(scenario, invocation, &bundle, descriptor.as_ref())?;
+            cold_total_stats = Some(cold_total);
+            cold_prepare_stats = Some(cold_prepare);
+            cold_run_stats = Some(cold_run);
+
+            let mut isolate_config = IsolateConfig::default();
+            isolate_config.runtime.warm_state = Some(warm_state);
+            isolate_config.cleanup = CleanupMode::Full;
+
+            let options = PoolOptions {
+                isolate: isolate_config,
+                telemetry_interval: None,
+                ..PoolOptions::default()
+            };
+
+            let artifact = BundleArtifact::from_bundle(bundle.clone())?;
+            let pool = BundlePool::from_artifact(artifact, options)?;
+            let handle = pool.handle();
+            let handler = match descriptor.clone() {
+                Some(desc) => handle.prepare_handler(Some(desc)),
+                None => handle.prepare_default_handler(),
+            };
+
+            for _ in 0..iterations {
+                let start = Instant::now();
+                let outcome = match invocation {
+                    InvocationKind::Json => pool.call_json(&handler, None)?,
+                    InvocationKind::RawCtx => {
+                        pool.call_rawctx(&handler, Vec::<RawCtxInput>::new())?
+                    }
+                };
+                let total_elapsed = start.elapsed();
+                let prepare_ms = outcome.diagnostics.prepare_ms.unwrap_or(0);
+                let cleanup_ms = outcome.diagnostics.cleanup_ms.unwrap_or(0);
+                let prepare_duration = Duration::from_millis(prepare_ms);
+                let cleanup_duration = Duration::from_millis(cleanup_ms);
+                let mut run_duration = total_elapsed
+                    .checked_sub(prepare_duration)
+                    .unwrap_or_default();
+                run_duration = run_duration
+                    .checked_sub(cleanup_duration)
+                    .unwrap_or_default();
+
+                prepare.push(prepare_duration);
+                run.push(run_duration);
+                total.push(total_elapsed);
             }
         }
     }
@@ -662,6 +727,7 @@ fn write_csv(path: &Path, results: &[BenchResult]) -> Result<()> {
                     PathKind::Cold => "cold",
                     PathKind::Warm => "warm",
                     PathKind::ResetInPlace => "reset-in-place",
+                    PathKind::Persistent => "persistent",
                 })
                 .unwrap_or("-"),
             result.iterations,
@@ -708,6 +774,7 @@ fn print_summary(results: &[BenchResult]) {
                 PathKind::Cold => "cold",
                 PathKind::Warm => "warm",
                 PathKind::ResetInPlace => "reset-in-place",
+                PathKind::Persistent => "persistent",
             })
             .unwrap_or("-");
 
@@ -786,9 +853,11 @@ impl std::str::FromStr for Mode {
             "aardvark-json-cold" => Ok(Mode::AardvarkJsonCold),
             "aardvark-json-warm" => Ok(Mode::AardvarkJsonWarm),
             "aardvark-json-reset-in-place" => Ok(Mode::AardvarkJsonResetInPlace),
+            "aardvark-json-persistent" => Ok(Mode::AardvarkJsonPersistent),
             "aardvark-rawctx-cold" => Ok(Mode::AardvarkRawCtxCold),
             "aardvark-rawctx-warm" => Ok(Mode::AardvarkRawCtxWarm),
             "aardvark-rawctx-reset-in-place" => Ok(Mode::AardvarkRawCtxResetInPlace),
+            "aardvark-rawctx-persistent" => Ok(Mode::AardvarkRawCtxPersistent),
             "host-python" | "host" | "python" => Ok(Mode::HostPython),
             other => Err(format!("unknown mode '{other}'")),
         }

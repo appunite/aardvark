@@ -7,10 +7,11 @@ use crate::strategy::RawCtxInput;
 use hdrhistogram::Histogram;
 use parking_lot::{Condvar, Mutex};
 use serde_json::Value as JsonValue;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
-use tracing::warn;
+use tracing::{error, info, info_span, warn};
 
 #[cfg(target_os = "linux")]
 use std::fs::File;
@@ -43,6 +44,7 @@ pub struct PoolOptions {
     pub lifecycle_hooks: Option<LifecycleHooks>,
     pub memory_limit_kib: Option<u64>,
     pub heap_limit_kib: Option<u64>,
+    pub telemetry_interval: Option<Duration>,
 }
 
 impl Default for PoolOptions {
@@ -56,6 +58,7 @@ impl Default for PoolOptions {
             lifecycle_hooks: None,
             memory_limit_kib: None,
             heap_limit_kib: None,
+            telemetry_interval: Some(Duration::from_millis(250)),
         }
     }
 }
@@ -123,6 +126,26 @@ impl CallContext {
             queue_wait_ms,
         }
     }
+
+    pub fn isolate_id(&self) -> IsolateId {
+        self.isolate_id
+    }
+
+    pub fn bundle_fingerprint(&self) -> BundleFingerprint {
+        self.bundle_fingerprint
+    }
+
+    pub fn bundle_fingerprint_hex(&self) -> u64 {
+        self.bundle_fingerprint.as_u64()
+    }
+
+    pub fn entrypoint(&self) -> &str {
+        &self.entrypoint
+    }
+
+    pub fn queue_wait_ms(&self) -> u64 {
+        self.queue_wait_ms
+    }
 }
 
 /// Snapshot of current pool state.
@@ -147,15 +170,69 @@ struct BundlePoolInner {
     options: Mutex<PoolOptions>,
     state: Mutex<PoolState>,
     condvar: Condvar,
-    stats: PoolStatsTracker,
+    stats: Arc<PoolStatsTracker>,
+    metrics: Arc<PoolSharedMetrics>,
     hooks: LifecycleHooks,
     isolate_seq: AtomicU64,
+    telemetry: Mutex<Option<TelemetryHandle>>,
 }
 
 struct PoolStatsTracker {
     invocations: AtomicU64,
     queue_wait_ns: AtomicU64,
     queue_wait_hist: Mutex<Histogram<u64>>,
+}
+
+struct PoolSharedMetrics {
+    active: AtomicUsize,
+    idle: AtomicUsize,
+    waiting: AtomicUsize,
+}
+
+impl PoolSharedMetrics {
+    fn new() -> Self {
+        Self {
+            active: AtomicUsize::new(0),
+            idle: AtomicUsize::new(0),
+            waiting: AtomicUsize::new(0),
+        }
+    }
+
+    fn inc_active(&self) {
+        self.active.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn dec_active(&self) {
+        let _ = self
+            .active
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_sub(1)
+            });
+    }
+
+    fn inc_idle(&self) {
+        self.idle.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn dec_idle(&self) {
+        let _ = self
+            .idle
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_sub(1)
+            });
+    }
+
+    fn inc_waiting(&self) {
+        self.waiting.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn dec_waiting(&self) {
+        let _ = self
+            .waiting
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_sub(1)
+            });
+    }
 }
 
 struct StatsSnapshot {
@@ -177,6 +254,77 @@ struct PoolState {
 struct IsolateSlot {
     id: IsolateId,
     isolate: Mutex<PythonIsolate>,
+}
+
+struct TelemetryHandle {
+    stop: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl TelemetryHandle {
+    fn spawn(
+        stats: Arc<PoolStatsTracker>,
+        metrics: Arc<PoolSharedMetrics>,
+        interval: Duration,
+    ) -> Option<Self> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let handle = thread::Builder::new()
+            .name("aardvark-pool-telemetry".into())
+            .spawn(move || {
+                let mut last_invocations = 0u64;
+                while !thread_stop.load(Ordering::Relaxed) {
+                    let snapshot = stats.snapshot();
+                    let total = metrics.active.load(Ordering::Relaxed);
+                    let idle = metrics.idle.load(Ordering::Relaxed);
+                    let waiting = metrics.waiting.load(Ordering::Relaxed);
+                    let busy = total.saturating_sub(idle);
+                    let invocations = snapshot.invocations;
+                    if (invocations != last_invocations || waiting > 0)
+                        && tracing::enabled!(tracing::Level::INFO)
+                    {
+                        info!(
+                            target: "aardvark::telemetry",
+                            total_isolates = total,
+                            idle_isolates = idle,
+                            busy_isolates = busy,
+                            waiting_calls = waiting,
+                            invocations,
+                            avg_queue_wait_ms = snapshot.average_queue_wait_ms,
+                            queue_wait_p50_ms = snapshot.queue_wait_p50_ms,
+                            queue_wait_p95_ms = snapshot.queue_wait_p95_ms,
+                            "pool.telemetry"
+                        );
+                    }
+                    last_invocations = invocations;
+                    thread::sleep(interval);
+                }
+            });
+
+        match handle {
+            Ok(thread) => Some(Self {
+                stop,
+                thread: Some(thread),
+            }),
+            Err(err) => {
+                warn!(
+                    target: "aardvark::pool",
+                    error = %err,
+                    "failed to spawn telemetry reporter"
+                );
+                None
+            }
+        }
+    }
+}
+
+impl Drop for TelemetryHandle {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.thread.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 impl IsolateSlot {
@@ -378,6 +526,24 @@ impl BundlePool {
             handler.descriptor().entrypoint().to_owned(),
             queue_wait_ms,
         );
+        let bundle_hex = format!("{:016x}", context.bundle_fingerprint_hex());
+        let call_span = info_span!(
+            target: "aardvark::telemetry",
+            "aardvark.call",
+            isolate_id = context.isolate_id(),
+            bundle = bundle_hex.as_str(),
+            entrypoint = context.entrypoint(),
+            queue_wait_ms = queue_wait_ms
+        );
+        let _call_guard = call_span.enter();
+        info!(
+            target: "aardvark::telemetry",
+            isolate_id = context.isolate_id(),
+            bundle = bundle_hex.as_str(),
+            entrypoint = context.entrypoint(),
+            queue_wait_ms,
+            "call.start"
+        );
         self.inner.call_hook_call_started(&context);
 
         let result = {
@@ -393,6 +559,16 @@ impl BundlePool {
         let (memory_limit_kib, heap_limit_kib) = self.inner.current_limits();
         match result {
             Ok(mut outcome) => {
+                info!(
+                    target: "aardvark::telemetry",
+                    isolate_id = context.isolate_id(),
+                    bundle = bundle_hex.as_str(),
+                    status = ?outcome.status,
+                    queue_wait_ms,
+                    heap_kib = outcome.diagnostics.py_heap_kib,
+                    rss_after = rss_after,
+                    "call.success"
+                );
                 outcome.diagnostics.queue_wait_ms = Some(queue_wait_ms);
                 if outcome.diagnostics.rss_kib_before.is_none() {
                     outcome.diagnostics.rss_kib_before = rss_before;
@@ -423,6 +599,7 @@ impl BundlePool {
                         warn!(
                             target: "aardvark::pool",
                             isolate_id = id,
+                            bundle = bundle_hex.as_str(),
                             "quarantining isolate after exceeding memory limits"
                         );
                         guard.suppress_release();
@@ -440,6 +617,13 @@ impl BundlePool {
                 Ok(outcome)
             }
             Err(err) => {
+                error!(
+                    target: "aardvark::telemetry",
+                    isolate_id = context.isolate_id(),
+                    bundle = bundle_hex.as_str(),
+                    error = %err,
+                    "call.error"
+                );
                 drop(guard);
                 self.inner
                     .call_hook_call_finished(&context, CallOutcome::Error(&err));
@@ -521,9 +705,11 @@ impl BundlePoolInner {
             options: Mutex::new(options),
             state: Mutex::new(PoolState::new()),
             condvar: Condvar::new(),
-            stats: PoolStatsTracker::new(),
+            stats: Arc::new(PoolStatsTracker::new()),
+            metrics: Arc::new(PoolSharedMetrics::new()),
             hooks,
             isolate_seq: AtomicU64::new(1),
+            telemetry: Mutex::new(None),
         });
 
         let desired = {
@@ -531,6 +717,7 @@ impl BundlePoolInner {
             opts.desired_size
         };
         inner.ensure_min_isolates(desired)?;
+        inner.start_telemetry();
         Ok(inner)
     }
 
@@ -543,6 +730,32 @@ impl BundlePoolInner {
                 }
             }
             self.spawn_isolate(true)?;
+        }
+    }
+
+    fn start_telemetry(self: &Arc<Self>) {
+        let interval = {
+            let opts = self.options.lock();
+            opts.telemetry_interval
+        };
+
+        let Some(interval) = interval else {
+            return;
+        };
+
+        if interval.is_zero() {
+            return;
+        }
+
+        let mut slot = self.telemetry.lock();
+        if slot.is_some() {
+            return;
+        }
+
+        if let Some(handle) =
+            TelemetryHandle::spawn(Arc::clone(&self.stats), Arc::clone(&self.metrics), interval)
+        {
+            *slot = Some(handle);
         }
     }
 
@@ -560,6 +773,7 @@ impl BundlePoolInner {
             }
 
             if let Some(index) = state.idle.pop() {
+                self.metrics.dec_idle();
                 let slot = state.isolates[index]
                     .as_ref()
                     .expect("idle slot must exist")
@@ -596,8 +810,10 @@ impl BundlePoolInner {
             }
 
             state.waiting += 1;
+            self.metrics.inc_waiting();
             self.condvar.wait(&mut state);
             state.waiting = state.waiting.saturating_sub(1);
+            self.metrics.dec_waiting();
         }
     }
 
@@ -613,11 +829,17 @@ impl BundlePoolInner {
                 .get(index)
                 .and_then(|slot| slot.as_ref().map(|slot| slot.id()));
             state.idle.push(index);
+            self.metrics.inc_idle();
             self.condvar.notify_one();
             id
         };
         if let Some(id) = isolate_id {
             self.call_hook_isolate_recycled(id);
+            info!(
+                target: "aardvark::pool",
+                isolate_id = id,
+                "isolate.idle"
+            );
         }
     }
 
@@ -654,18 +876,27 @@ impl BundlePoolInner {
                 let isolate_id = self.isolate_seq.fetch_add(1, Ordering::Relaxed);
                 let slot = Arc::new(IsolateSlot::new(isolate_id, isolate));
 
-                {
+                let active_after = {
                     let mut state = self.state.lock();
                     state.creating = state.creating.saturating_sub(1);
                     state.isolates[placeholder_index] = Some(slot.clone());
                     state.active += 1;
+                    self.metrics.inc_active();
                     if add_to_idle {
                         state.idle.push(placeholder_index);
                         self.condvar.notify_one();
+                        self.metrics.inc_idle();
                     }
-                }
+                    state.active
+                };
 
                 self.call_hook_isolate_started(isolate_id);
+                info!(
+                    target: "aardvark::pool",
+                    isolate_id,
+                    active_isolates = active_after,
+                    "isolate.started"
+                );
 
                 Ok(SlotEntry {
                     index: placeholder_index,
@@ -688,6 +919,13 @@ impl BundlePoolInner {
 
 impl Drop for BundlePoolInner {
     fn drop(&mut self) {
+        {
+            let telemetry = self.telemetry.lock().take();
+            drop(telemetry);
+        }
+        self.metrics.active.store(0, Ordering::Relaxed);
+        self.metrics.idle.store(0, Ordering::Relaxed);
+        self.metrics.waiting.store(0, Ordering::Relaxed);
         let mut state = self.state.lock();
         state.shutdown = true;
         state.idle.clear();
@@ -711,7 +949,29 @@ fn current_rss_kib() -> Option<u64> {
     Some(resident_pages.saturating_mul(page_size) / 1024)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn current_rss_kib() -> Option<u64> {
+    use std::mem::MaybeUninit;
+    unsafe {
+        let mut info = MaybeUninit::<libc::mach_task_basic_info>::uninit();
+        #[allow(deprecated)]
+        let task = libc::mach_task_self();
+        let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
+        let result = libc::task_info(
+            task,
+            libc::MACH_TASK_BASIC_INFO,
+            info.as_mut_ptr() as *mut libc::integer_t,
+            &mut count,
+        );
+        if result != libc::KERN_SUCCESS {
+            return None;
+        }
+        let info = info.assume_init();
+        Some(info.resident_size / 1024)
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn current_rss_kib() -> Option<u64> {
     None
 }
@@ -763,7 +1023,12 @@ impl BundlePoolInner {
             let removed_id = removed.as_ref().map(|slot| slot.id());
             if removed.is_some() {
                 state.active = state.active.saturating_sub(1);
+                self.metrics.dec_active();
+                let idle_before = state.idle.len();
                 state.idle.retain(|&i| i != index);
+                if state.idle.len() < idle_before {
+                    self.metrics.dec_idle();
+                }
             }
             while matches!(state.isolates.last(), Some(None)) {
                 state.isolates.pop();
