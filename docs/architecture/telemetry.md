@@ -33,10 +33,15 @@ sequenceDiagram
 
 `ExecutionOutcome::sandbox_telemetry()` produces a `SandboxTelemetry` struct:
 
+- `queue_wait_ms` – Milliseconds spent waiting for a pooled isolate (if the call went through `BundlePool`).
+- `queue_wait_p50_ms` / `queue_wait_p95_ms` – Rolling queue wait percentiles produced by the pool.
 - `cpu_ms_used` – CPU milliseconds consumed by the Python thread (if available).
+- `prepare_ms` / `cleanup_ms` – Host-visible timings for the runtime’s prepare and cleanup phases.
 - `filesystem.bytes_written` – Bytes written under `/session` during the invocation.
 - `filesystem.violations` – Any attempts that breached filesystem policy.
 - `network.allowed` / `network.blocked` – Lists of contacted hosts and denied requests, including port, HTTPS flag, and reason codes.
+- `py_heap_kib` – Python heap usage at the end of the invocation (KiB).
+- `rss_kib_before` / `rss_kib_after` – Process RSS snapshots (Linux and macOS; other targets fall back to `None`).
 
 The telemetry snapshot is cheap to clone and is intended for metrics pipelines (Prometheus, statsd, etc.).
 
@@ -57,10 +62,11 @@ flowchart LR
 The runtime ships with tracing instrumentation (`tracing` crate):
 
 - Runtime lifecycle: `runtime.new`, `runtime.pool.checkout`, `runtime.pool.return`, `runtime.reset`.
-- Budgeting: `aardvark::budget` spans outlining limits and enforcement results.
+- Pool execution: `aardvark.call` spans annotate isolate id, bundle fingerprint, entrypoint, and queue wait duration for every `BundlePool::call_*` invocation. Persistent pools also emit `aardvark::telemetry` events at the interval configured by `PoolOptions::telemetry_interval` (queue depth, P50/P95 wait, isolate counts).
+- Budgeting: `aardvark::budget` spans outline limits and enforcement results.
 - Diagnostics: `aardvark::diagnostics` logs CPU usage, filesystem writes, and network decisions.
 
-Integrations can subscribe via `tracing-subscriber` to feed logs into structured collectors. The emitted fields (`runtime_id`, `entrypoint`, host/port) are stable.
+Subscribe via `tracing-subscriber` (or bridge into OpenTelemetry) to feed these spans into your observability stack. Enable `RUST_LOG=aardvark::telemetry=info` to witness the pool reporter in action; lower levels (`debug`/`trace`) surface the finer-grained diagnostics.
 
 ## FailureKinds
 
@@ -77,7 +83,7 @@ Hosts should treat adapter and other failures as infrastructure incidents; polic
 
 The following telemetry gaps remain open:
 
-- No heap usage metrics beyond the hard fail when limits are exceeded. Capturing peak heap usage is on the backlog.
+- Heap telemetry is sampled at completion; peak usage during the call is still unknown. Capturing peaks remains on the backlog.
 - Filesystem telemetry does not list the filenames written; only aggregate bytes and violation messages are provided.
 - There is no streaming log channel; all stdout/stderr is buffered until completion.
 

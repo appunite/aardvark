@@ -4,9 +4,10 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::env;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -25,6 +26,7 @@ use v8::{
     FunctionCallbackArguments, Local, Module, ModuleRequest, Object, PinScope, Promise,
     PromiseState, ReturnValue, String as V8String, Uint8Array, Value,
 };
+use walkdir::WalkDir;
 static V8_PLATFORM: OnceCell<v8::SharedRef<v8::Platform>> = OnceCell::new();
 static PACKAGE_ROOT: OnceCell<Option<PathBuf>> = OnceCell::new();
 
@@ -212,7 +214,27 @@ pub struct OverlayExport {
 
 fn package_root_dir() -> Option<&'static Path> {
     PACKAGE_ROOT
-        .get_or_init(|| env::var_os("AARDVARK_PYODIDE_PACKAGE_DIR").map(PathBuf::from))
+        .get_or_init(|| {
+            let value = env::var_os("AARDVARK_PYODIDE_PACKAGE_DIR").map(PathBuf::from);
+            let resolved = value.map(|path| {
+                if path.is_relative() {
+                    match env::current_dir() {
+                        Ok(cwd) => cwd.join(path),
+                        Err(_) => path,
+                    }
+                } else {
+                    path
+                }
+            });
+            if let Some(ref path) = resolved {
+                tracing::debug!(
+                    target = "aardvark::packages",
+                    path = %path.display(),
+                    "initialised package root"
+                );
+            }
+            resolved
+        })
         .as_deref()
 }
 
@@ -233,14 +255,86 @@ fn resolve_local_package_path(url: &str) -> Option<PathBuf> {
         return None;
     }
     let as_path = Path::new(trimmed);
-    let candidate = root.join(as_path);
-    if candidate.exists() {
-        return Some(candidate);
+    let mut attempts: Vec<PathBuf> = Vec::new();
+
+    if let Some(file_name) = as_path.file_name() {
+        push_unique(&mut attempts, root.join(file_name));
+    }
+
+    if let Some(variant_relative) = strip_variant_prefix(as_path) {
+        push_unique(&mut attempts, root.join(&variant_relative));
+        if let Some(last) = variant_relative.file_name() {
+            push_unique(&mut attempts, root.join(last));
+        }
+    }
+
+    push_unique(&mut attempts, root.join(as_path));
+    push_unique(&mut attempts, root.join("pyodide").join(as_path));
+
+    if let Some(file_name) = as_path.file_name() {
+        push_unique(&mut attempts, root.join("full").join(file_name));
+    }
+
+    for candidate in attempts {
+        tracing::debug!(
+            target = "aardvark::packages",
+            path = %candidate.display(),
+            exists = candidate.exists(),
+            "checking local package candidate"
+        );
+        if candidate.exists() {
+            tracing::debug!(
+                target = "aardvark::packages",
+                path = %candidate.display(),
+                "resolved local package path"
+            );
+            return Some(candidate);
+        }
     }
     if let Some(file_name) = as_path.file_name() {
-        let fallback = root.join(file_name);
-        if fallback.exists() {
-            return Some(fallback);
+        if let Some(found) = walk_for_file(root, file_name) {
+            tracing::debug!(
+                target = "aardvark::packages",
+                path = %found.display(),
+                "resolved local package path via search"
+            );
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn strip_variant_prefix(path: &Path) -> Option<PathBuf> {
+    let mut components = path.components();
+    match (components.next()?, components.next(), components.next()) {
+        (
+            Component::Normal(first),
+            Some(Component::Normal(_version)),
+            Some(Component::Normal(_variant)),
+        ) if first == OsStr::new("pyodide") => {
+            let remaining = components.as_path();
+            if remaining.as_os_str().is_empty() {
+                None
+            } else {
+                Some(remaining.to_path_buf())
+            }
+        }
+        _ => None,
+    }
+}
+
+fn push_unique(list: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if !list.iter().any(|existing| existing == &candidate) {
+        list.push(candidate);
+    }
+}
+
+fn walk_for_file(root: &Path, needle: &OsStr) -> Option<PathBuf> {
+    let walker = WalkDir::new(root).into_iter();
+    for entry in walker.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.file_name() == Some(needle) {
+            return Some(path.to_path_buf());
         }
     }
     None
@@ -321,19 +415,7 @@ impl JsRuntime {
     /// Creates a new isolate with an empty context and basic polyfills.
     pub fn new() -> Result<Self> {
         init_v8();
-        let context_state = Rc::new(RuntimeContext {
-            assets: AssetStore::new(),
-            modules: RefCell::new(HashMap::new()),
-            module_by_hash: RefCell::new(HashMap::new()),
-            module_namespaces: RefCell::new(HashMap::new()),
-            pyodide_instance: RefCell::new(None),
-            stdout_log: RefCell::new(String::new()),
-            stderr_log: RefCell::new(String::new()),
-            network_policy: RwLock::new(NetworkPolicy::default()),
-            network_contacts: RwLock::new(Vec::new()),
-            network_denied: RwLock::new(Vec::new()),
-            filesystem_violations: RwLock::new(Vec::new()),
-        });
+        let context_state = Rc::new(RuntimeContext::new());
         let create_params =
             v8::CreateParams::default().array_buffer_allocator(v8::new_default_allocator());
         let mut isolate = v8::Isolate::new(create_params);
@@ -351,6 +433,25 @@ impl JsRuntime {
         };
         runtime.install_polyfills()?;
         Ok(runtime)
+    }
+
+    /// Reinitializes the isolate in place, keeping the outer runtime alive.
+    pub fn reset(&mut self) -> Result<()> {
+        // Drop the previous context state so any module caches or globals are released.
+        let new_state = Rc::new(RuntimeContext::new());
+        self.context_state = new_state.clone();
+        self.isolate.set_slot(new_state);
+
+        // Hint V8 to reclaim memory from the old context before installing a new one.
+        self.isolate.low_memory_notification();
+
+        let global = {
+            v8::scope!(let scope, &mut self.isolate);
+            let context = v8::Context::new(scope, v8::ContextOptions::default());
+            v8::Global::new(scope, context)
+        };
+        self.context = global;
+        self.install_polyfills()
     }
 
     /// Configures the network allowlist for subsequent native fetches.
@@ -745,6 +846,24 @@ impl JsRuntime {
         execution.stderr = ctx_state.take_stderr();
 
         Ok(execution)
+    }
+
+    /// Clears published shared buffers between invocations.
+    pub fn reset_shared_buffers(&mut self) -> Result<()> {
+        self.with_context(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let key = v8::String::new(scope, "__aardvarkResetSharedBuffers").ok_or_else(|| {
+                PyRunnerError::Execution("shared buffer reset hook unavailable".into())
+            })?;
+            if let Some(value) = global.get(scope, key.into()) {
+                if let Ok(func) = Local::<Function>::try_from(value) {
+                    func.call(scope, global.into(), &[]).ok_or_else(|| {
+                        PyRunnerError::Execution("shared buffer reset failed".into())
+                    })?;
+                }
+            }
+            Ok(())
+        })
     }
 
     /// Resets the session scratch filesystem after an invocation completes.
@@ -2240,6 +2359,22 @@ fn normalize_specifier(spec: &str) -> String {
 }
 
 impl RuntimeContext {
+    fn new() -> Self {
+        Self {
+            assets: AssetStore::new(),
+            modules: RefCell::new(HashMap::new()),
+            module_by_hash: RefCell::new(HashMap::new()),
+            module_namespaces: RefCell::new(HashMap::new()),
+            pyodide_instance: RefCell::new(None),
+            stdout_log: RefCell::new(String::new()),
+            stderr_log: RefCell::new(String::new()),
+            network_policy: RwLock::new(NetworkPolicy::default()),
+            network_contacts: RwLock::new(Vec::new()),
+            network_denied: RwLock::new(Vec::new()),
+            filesystem_violations: RwLock::new(Vec::new()),
+        }
+    }
+
     fn clear_console(&self) {
         self.stdout_log.borrow_mut().clear();
         self.stderr_log.borrow_mut().clear();

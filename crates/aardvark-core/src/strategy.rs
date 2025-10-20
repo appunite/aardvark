@@ -9,6 +9,7 @@ use crate::session::PySession;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{self, Map as JsonMap, Value as JsonValue};
+use std::sync::Arc;
 use v8;
 
 /// Shared context passed to invocation strategies during a single invocation.
@@ -393,6 +394,10 @@ impl RawCtxInvocationStrategy {
         static PRELUDE: &str = r#"
 from js import globalThis as _js
 import builtins
+try:
+    from pyodide.ffi import to_memoryview as _aardvark_to_memoryview
+except ImportError:
+    _aardvark_to_memoryview = None
 
 __aardvark_rawctx_inputs = {}
 if hasattr(_js, "__aardvarkInputBuffers"):
@@ -401,18 +406,30 @@ if hasattr(_js, "__aardvarkInputBuffers"):
     if hasattr(_js, "__aardvarkInputMetadata"):
         _meta_source = _js.__aardvarkInputMetadata.to_py()
     _view = None
-    _buffer = None
     _memory = None
     _meta = None
+    _candidate = None
     for _name, _view in _buffers.items():
-        if hasattr(_view, "to_py"):
-            _buffer = _view.to_py()
-        else:
-            _buffer = _view
-        try:
-            _memory = memoryview(_buffer)
-        except TypeError:
-            _memory = memoryview(bytearray(_buffer))
+        _memory = None
+        if hasattr(_view, "to_memoryview"):
+            try:
+                _memory = _view.to_memoryview()
+            except TypeError:
+                _memory = None
+        if _memory is None and _aardvark_to_memoryview is not None:
+            try:
+                _memory = _aardvark_to_memoryview(_view)
+            except TypeError:
+                _memory = None
+        if _memory is None:
+            if hasattr(_view, "to_py"):
+                _candidate = _view.to_py()
+            else:
+                _candidate = _view
+            try:
+                _memory = memoryview(_candidate)
+            except TypeError:
+                _memory = memoryview(bytearray(_candidate))
         _meta = None
         if isinstance(_meta_source, dict):
             _meta = _meta_source.get(_name)
@@ -420,27 +437,22 @@ if hasattr(_js, "__aardvarkInputBuffers"):
                 _meta = _meta.to_py()
         __aardvark_rawctx_inputs[_name] = {"data": _memory, "metadata": _meta}
 builtins.__aardvark_rawctx_inputs = __aardvark_rawctx_inputs
-del _js, _buffers, _view, _buffer, _memory, _meta, _meta_source, builtins
+del _js, _buffers, _view, _memory, _meta, _meta_source, _aardvark_to_memoryview, _candidate, builtins
 "#;
         ctx.runtime().run_python_snippet(PRELUDE)
     }
 
     fn install_auto_wrapper(&self, ctx: &mut InvocationContext<'_>) -> Result<()> {
         let session = ctx.session();
-        let spec = build_rawctx_auto_spec(session)?;
-        if let Some(spec) = spec {
-            let payload = serde_json::to_string(&spec).map_err(|err| {
-                PyRunnerError::Execution(format!(
-                    "failed to serialise rawctx auto-wrapper spec: {err}"
-                ))
-            })?;
-            let safe_payload = payload.replace("'''", "\\'\\'\\'");
-            let script = format!(
-                "{prelude}\n",
-                prelude = RAWCTX_AUTO_WRAPPER_SNIPPET.replace("{spec_json}", &safe_payload)
-            );
-            ctx.runtime().run_python_snippet(&script)?;
-        }
+        let Some(spec_json) = cached_rawctx_spec(session)? else {
+            return Ok(());
+        };
+        let safe_payload = spec_json.replace("'''", "\\'\\'\\'");
+        let script = format!(
+            "{prelude}\n",
+            prelude = RAWCTX_AUTO_WRAPPER_SNIPPET.replace("{spec_json}", &safe_payload)
+        );
+        ctx.runtime().run_python_snippet(&script)?;
         Ok(())
     }
 }
@@ -502,14 +514,9 @@ impl RawCtxInvocationStrategy {
         if ctx.language() != RuntimeLanguage::JavaScript {
             return Ok(());
         }
-        let spec = build_rawctx_auto_spec(ctx.session())?;
-        let script = if let Some(spec) = spec {
-            let payload = serde_json::to_string(&spec).map_err(|err| {
-                PyRunnerError::Execution(format!(
-                    "failed to serialize rawctx auto-wrapper spec: {err}"
-                ))
-            })?;
-            format!("globalThis.__aardvarkSetRawctxSpec({payload});")
+        let spec_json = cached_rawctx_spec(ctx.session())?;
+        let script = if let Some(spec_json) = spec_json {
+            format!("globalThis.__aardvarkSetRawctxSpec({spec_json});")
         } else {
             "globalThis.__aardvarkSetRawctxSpec(null);".to_string()
         };
@@ -1368,6 +1375,23 @@ fn merge_metadata(target: &mut JsonValue, incoming: JsonValue) {
     }
 }
 
+fn cached_rawctx_spec(session: &PySession) -> Result<Option<Arc<String>>> {
+    session.rawctx_spec_json(|| {
+        let spec = build_rawctx_auto_spec(session)?;
+        match spec {
+            Some(spec) => {
+                let json = serde_json::to_string(&spec).map_err(|err| {
+                    PyRunnerError::Execution(format!(
+                        "failed to serialise rawctx auto-wrapper spec: {err}"
+                    ))
+                })?;
+                Ok(Some(json))
+            }
+            None => Ok(None),
+        }
+    })
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct RawCtxAutoSpec {
     entrypoint: String,
@@ -1983,6 +2007,29 @@ const RAWCTX_AUTO_WRAPPER_SNIPPET: &str = r#"
 import builtins, importlib, json
 
 __aardvark_rawctx_spec = json.loads(r'''{spec_json}''')
+
+def __aardvark__acquire_output_buffer(size, *, id=None, metadata=None):
+    if size is None:
+        raise ValueError("size is required")
+    length = int(size)
+    if length < 0:
+        raise ValueError("size must be non-negative")
+    from js import globalThis as _js
+    view = _js.__aardvarkAcquireOutputBuffer(id, length, metadata)
+    if hasattr(view, "to_py"):
+        py_view = view.to_py()
+    else:
+        try:
+            from pyodide.ffi import to_py
+
+            py_view = to_py(view)
+        except ImportError:
+            py_view = view
+    if isinstance(py_view, memoryview):
+        return py_view
+    return memoryview(py_view)
+
+builtins.__aardvark_output_buffer = __aardvark__acquire_output_buffer
 
 def __aardvark__decode_rawctx(binding, payload):
     value, metadata, raw_payload = __aardvark__decode_scalar(binding, payload)

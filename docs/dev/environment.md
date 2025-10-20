@@ -7,11 +7,11 @@ runtime. The following steps get you ready to develop locally.
 
 - **Rust**: Install via `rustup` and ensure the toolchain matches
   `rust-toolchain.toml` (nightly features are not required).
-- **Node.js**: Needed for bundling the Pyodide bootstrap assets. Use `mise` or
+- **Node.js**: Needed for bundling the [Pyodide](https://pyodide.org/) bootstrap assets. Use `mise` or
   another version manager to match the version pinned in `.mise.toml`.
-- **Python 3.11+**: Only required for regenerating Pyodide metadata and running
+- **Python 3.11+**: Only required for regenerating [Pyodide](https://pyodide.org/) metadata and running
   certain integration helpers.
-- **wasm-pack** *(optional)*: Handy when inspecting Pyodide builds, but not part
+- **wasm-pack** *(optional)*: Handy when inspecting [Pyodide](https://pyodide.org/) builds, but not part
   of the default build.
 
 ## Bootstrapping
@@ -29,11 +29,18 @@ runtime. The following steps get you ready to develop locally.
    mise install
    ```
 
-3. Fetch Pyodide assets. The build script expects a cached tarball inside
-   `tmp/`. Use the helper script:
+3. Fetch [Pyodide](https://pyodide.org/) assets. Download the upstream release and copy the contents of
+   the requested variant into `.aardvark/pyodide/<version>` so the runtime can
+   serve wheel requests locally:
 
    ```bash
-   scripts/fetch-pyodide.sh   # downloads the version pinned in assets.rs
+   mkdir -p .aardvark/pyodide/0.28.2
+   curl -L -o pyodide-0.28.2.tar.bz2 \
+     https://github.com/pyodide/pyodide/releases/download/0.28.2/pyodide-0.28.2.tar.bz2
+   echo "31021174e8fdc9556c17e9d435e20d9c07f203ac542d9161ca3b8d9d5d04e7e7  pyodide-0.28.2.tar.bz2" | sha256sum --check
+   tar -xjf pyodide-0.28.2.tar.bz2
+   rsync -a pyodide/pyodide/v0.28.2/full/ .aardvark/pyodide/0.28.2/
+   rm -rf pyodide pyodide-0.28.2.tar.bz2
    ```
 
 4. Build the workspace:
@@ -42,7 +49,7 @@ runtime. The following steps get you ready to develop locally.
    cargo build
    ```
 
-   The build downloads V8 via `v8-rs` the first time; this may take a while.
+   The build downloads [V8](https://v8.dev/) via `v8-rs` the first time; this may take a while.
 
 ## Project Layout
 
@@ -64,7 +71,7 @@ runtime. The following steps get you ready to develop locally.
 
 ## Common Environment Variables
 
-- `AARDVARK_PYODIDE_PACKAGE_DIR` – path to a Pyodide wheel cache; required for
+- `AARDVARK_PYODIDE_PACKAGE_DIR` – path to a [Pyodide](https://pyodide.org/) wheel cache; required for
   package-loading tests.
 - `AARDVARK_OVERLAY_CACHE_DIR` – directory used by overlay hydration tests.
 - `RUST_LOG` – set to `info` or `debug` to see tracing spans while running the

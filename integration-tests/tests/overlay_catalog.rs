@@ -1,5 +1,6 @@
 use assert_cmd::prelude::*;
 use serde_json::Value;
+use std::env;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,11 @@ use zip::ZipWriter;
 const ENTRYPOINT: &str = "main:main";
 
 fn pyodide_dir() -> PathBuf {
-    workspace_root().join("tmp/pyodide")
+    if let Some(dir) = env::var_os("AARDVARK_PYODIDE_PACKAGE_DIR") {
+        PathBuf::from(dir)
+    } else {
+        workspace_root().join(".aardvark/pyodide/0.28.2")
+    }
 }
 
 fn workspace_root() -> &'static Path {
@@ -47,7 +52,7 @@ fn snapshot_restore_uses_catalog() {
     let pyodide_dir = pyodide_dir();
     assert!(
         pyodide_dir.exists(),
-        "expected Pyodide cache at {:?}",
+        "expected Pyodide cache at {:?}; set AARDVARK_PYODIDE_PACKAGE_DIR or stage .aardvark/pyodide/0.28.2",
         pyodide_dir
     );
 
@@ -135,7 +140,7 @@ fn catalog_eviction_budget_trims_cache() {
     let pyodide_dir = pyodide_dir();
     assert!(
         pyodide_dir.exists(),
-        "expected Pyodide cache at {:?}",
+        "expected Pyodide cache at {:?}; set AARDVARK_PYODIDE_PACKAGE_DIR or stage .aardvark/pyodide/0.28.2",
         pyodide_dir
     );
 

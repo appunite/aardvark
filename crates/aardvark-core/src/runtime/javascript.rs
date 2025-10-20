@@ -56,4 +56,11 @@ impl LanguageEngine for JavaScriptEngine {
         }
         Ok(())
     }
+
+    fn reset_in_place(&mut self, _config: &PyRuntimeConfig) -> Result<()> {
+        self.js.reset()?;
+        self.js
+            .insert_text_asset("js_runtime_bootstrap.js", assets::js_runtime_bootstrap_js());
+        self.js.ensure_module("js_runtime_bootstrap.js")
+    }
 }

@@ -24,6 +24,9 @@ ureq = { version = "2.10", features = ["tls"] }
 capnp = "0.18"
 libc.workspace = true
 url.workspace = true
+walkdir.workspace = true
+blake3.workspace = true
+hdrhistogram.workspace = true
 
 [build-dependencies]
 anyhow = "1.0"

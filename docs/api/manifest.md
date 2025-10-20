@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | `schemaVersion` | string | yes | Must equal `"1.0"`. The runtime rejects other versions.
 | `entrypoint` | string | yes | `module:export` pointing at the handler exported by the bundle.
-| `packages` | array(string) | no | Pyodide packages to preload. Names are normalised (trimmed, case-insensitive dedupe).
+| `packages` | array(string) | no | [Pyodide](https://pyodide.org/) packages to preload. Names are normalised (trimmed, case-insensitive dedupe).
 | `runtime` | object | no | Runtime selection and language-specific constraints (language defaults to `python`).
 | `resources` | object | no | Resource policies for CPU, network, filesystem, and host capabilities.
 
@@ -99,7 +99,7 @@
 - Entrypoints must include both module and function names separated by `:`. Whitespace is trimmed automatically.
 - Empty strings in `packages`, `network.allow`, or `hostCapabilities` cause the manifest to be rejected.
 - `quotaBytes` and `defaultLimitMs` must be positive when provided.
-- Mixing Pyodide versions is not supported. Upgrade the runtime or regenerate bundles when Pyodide changes.
+- Mixing [Pyodide](https://pyodide.org/) versions is not supported. Upgrade the runtime or regenerate bundles when [Pyodide](https://pyodide.org/) changes.
 - When `runtime.language` is `"javascript"`, omit `runtime.pyodide` and leave `packages` empty.
 
 ## When to skip the manifest
@@ -110,5 +110,5 @@
 
 ## Known gaps
 
-- Schema versioning is manual. We plan to add explicit backwards-compatibility ranges when Pyodide upgrades demand changes.
+- Schema versioning is manual. We plan to add explicit backwards-compatibility ranges when [Pyodide](https://pyodide.org/) upgrades demand changes.
 - There is no manifest field for describing output payloads beyond the descriptor metadata; hosts should rely on descriptors for now.

@@ -36,9 +36,12 @@ Treat adapter and other failures as infrastructure incidents. Policy violations 
 
 ## Reading diagnostics
 
-- `stdout`/`stderr` capture everything printed by Python; include them in logs.
-- `exception` carries Python exception type/value/traceback when available.
-- `cpu_ms_used`, `filesystem_bytes_written`, and the network/violation arrays provide the sandbox perspective.
+- `stdout`/`stderr` capture everything printed by Python or JavaScript; include them in logs.
+- `exception` carries guest exception type/value/traceback when available.
+- `cpu_ms_used`, `filesystem_bytes_written`, and the network allow/block lists record sandbox activity.
+- `prepare_ms`, `queue_wait_ms`, and `cleanup_ms` mark the lifecycle phases around the call (see `docs/architecture/lifecycle.md`).
+- `reset` is populated when the runtime reapplies a warm snapshot; you get the reset mode (`RecreateEngine` vs `InPlace`), duration, and engine generation.
+- `py_heap_kib`, `rss_kib_before`, and `rss_kib_after` are best-effort memory readings (heap inside the guest and host RSS).
 
 ## Telemetry helper
 
@@ -46,6 +49,16 @@ Treat adapter and other failures as infrastructure incidents. Policy violations 
 let telemetry = outcome.sandbox_telemetry();
 if let Some(cpu_ms) = telemetry.cpu_ms_used {
     metrics::histogram!("aardvark.cpu_ms", cpu_ms as f64);
+}
+if let Some(wait_ms) = telemetry.queue_wait_ms {
+    metrics::histogram!("aardvark.queue_wait_ms", wait_ms as f64);
+}
+if let Some(rss_after) = telemetry.memory.rss_kib_after {
+    metrics::gauge!("aardvark.rss_kib", rss_after as f64);
+}
+if let Some(reset) = telemetry.reset.as_ref() {
+    metrics::gauge!("aardvark.reset.duration_ms", reset.duration_ms as f64);
+    metrics::gauge!("aardvark.reset.engine_generation", reset.engine_generation as f64);
 }
 for denied in telemetry.network.blocked.iter() {
     metrics::counter!("aardvark.network.denied", 1,
@@ -55,7 +68,7 @@ for denied in telemetry.network.blocked.iter() {
 }
 ```
 
-`SandboxTelemetry::has_policy_violations()` is a quick guard for alerting.
+`SandboxTelemetry::has_policy_violations()` is a quick guard for alerting. Pair it with `PoolTelemetry::from(&pool.stats())` if you want to publish aggregate queue metrics and guard-rail counters (total quarantines, heap-triggered quarantines, RSS-triggered quarantines, and scale-down events).
 
 ## Handling policy breaches gracefully
 

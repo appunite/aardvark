@@ -4,6 +4,7 @@ members = [
   "crates/aardvark-cli",
   "integration-tests",
   "xtask",
+  "perf/runner",
 ]
 resolver = "2"
 
@@ -30,7 +31,10 @@ futures = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 url = "2.5"
+walkdir = "2.5"
 libc = "0.2"
+blake3 = "1.5"
+hdrhistogram = "7.5"
 
 [profile.release]
 opt-level = "z"

@@ -8,6 +8,8 @@ use crate::engine::{JsRuntime, PyodideLoadOptions};
 use crate::error::{PyRunnerError, Result};
 use crate::package_metadata;
 use crate::runtime_language::RuntimeLanguage;
+use std::collections::HashSet;
+use std::env;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -19,6 +21,7 @@ pub struct PythonEngine {
     js: JsRuntime,
     snapshot_bytes: Option<Arc<[u8]>>,
     warm_state: Option<WarmState>,
+    installed_packages: HashSet<String>,
 }
 
 impl PythonEngine {
@@ -29,6 +32,7 @@ impl PythonEngine {
             js,
             snapshot_bytes: load_snapshot_bytes(config)?,
             warm_state,
+            installed_packages: HashSet::new(),
         };
         engine.register_core_assets();
         engine.inject_version_globals(config)?;
@@ -102,10 +106,27 @@ impl LanguageEngine for PythonEngine {
         };
         self.js.load_pyodide(load_opts)?;
         self.snapshot_bytes = None;
+        self.installed_packages.clear();
         if let Some(state) = self.warm_state.as_ref() {
-            let overlay = state.overlay();
-            self.js.import_overlay(&overlay.metadata, &overlay.blobs)?;
-            self.js.prepare_dynlibs()?;
+            if state.overlay_preloaded() {
+                // Overlay already baked into the snapshot; refresh dynlibs to keep loaders in sync.
+                self.js.prepare_dynlibs()?;
+            } else {
+                if let Some(token) = env::var_os("AARDVARK_TEST_FORCE_OVERLAY_IMPORT_FAILURE") {
+                    env::remove_var("AARDVARK_TEST_FORCE_OVERLAY_IMPORT_FAILURE");
+                    let label = token
+                        .to_str()
+                        .filter(|value| !value.is_empty())
+                        .map(|value| format!(" forced by {value}"))
+                        .unwrap_or_default();
+                    return Err(PyRunnerError::Init(format!(
+                        "forced overlay import failure{label}"
+                    )));
+                }
+                let overlay = state.overlay();
+                self.js.import_overlay(&overlay.metadata, &overlay.blobs)?;
+                self.js.prepare_dynlibs()?;
+            }
         }
         Ok(())
     }
@@ -116,9 +137,27 @@ impl LanguageEngine for PythonEngine {
         }
         if self.warm_state.is_some() {
             // Packages already included in the warm snapshot.
+            for package in manifest.packages() {
+                self.installed_packages.insert(package.clone());
+            }
             return Ok(());
         }
-        self.js.load_packages(manifest.packages())?;
+        let requested: Vec<String> = manifest.packages().to_vec();
+        let mut missing: Vec<String> = Vec::new();
+        for package in requested {
+            if self.installed_packages.contains(&package) {
+                continue;
+            }
+            missing.push(package.clone());
+        }
+        if missing.is_empty() {
+            return Ok(());
+        }
+        tracing::info!(target: "aardvark::packages", packages = ?missing, "loading packages from manifest");
+        self.js.load_packages(&missing)?;
+        for package in missing {
+            self.installed_packages.insert(package);
+        }
         self.js.prepare_dynlibs()?;
         Ok(())
     }
@@ -127,9 +166,22 @@ impl LanguageEngine for PythonEngine {
         self.js.mount_bundle(bundle, "/app")
     }
 
+    fn reset_in_place(&mut self, config: &PyRuntimeConfig) -> Result<()> {
+        self.js.reset()?;
+        self.snapshot_bytes = load_snapshot_bytes(config)?;
+        self.warm_state = config.warm_state.clone();
+        self.installed_packages.clear();
+        self.register_core_assets();
+        self.inject_version_globals(config)?;
+        Ok(())
+    }
+
     fn set_warm_state(&mut self, state: Option<WarmState>) {
         self.warm_state = state;
         self.snapshot_bytes = self.warm_state.as_ref().map(|s| s.snapshot());
+        if self.warm_state.is_some() {
+            self.installed_packages.clear();
+        }
     }
 }
 

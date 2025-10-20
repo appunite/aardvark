@@ -17,6 +17,8 @@ pub struct PoolConfig {
     pub max_runtimes: usize,
     /// Baseline configuration applied to every newly-created runtime.
     pub runtime_config: PyRuntimeConfig,
+    /// How the pool resets runtimes when they are returned.
+    pub reset_mode: PoolResetMode,
 }
 
 impl PoolConfig {
@@ -25,6 +27,7 @@ impl PoolConfig {
         Self {
             max_runtimes,
             runtime_config,
+            reset_mode: PoolResetMode::RecreateEngine,
         }
     }
 }
@@ -34,8 +37,18 @@ impl Default for PoolConfig {
         Self {
             max_runtimes: 4,
             runtime_config: PyRuntimeConfig::default(),
+            reset_mode: PoolResetMode::RecreateEngine,
         }
     }
+}
+
+/// Reset strategy to use when returning runtimes to the pool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoolResetMode {
+    /// Drop the language engine and recreate it from scratch (`reset_to_snapshot`).
+    RecreateEngine,
+    /// Keep the existing isolate/context and rebuild it in place (`reset_in_place`).
+    InPlace,
 }
 
 /// Runtime pool managing reusable PyRuntime instances.
@@ -172,10 +185,15 @@ impl Drop for PooledRuntime {
                 let span = info_span!(
                     target: "aardvark::runtime",
                     "runtime.reset",
-                    runtime_id = runtime_id.as_str()
+                    runtime_id = runtime_id.as_str(),
+                    mode = ?self.inner.config.reset_mode
                 );
                 let _guard = span.enter();
-                if let Err(err) = managed.runtime.reset_to_snapshot() {
+                let reset_result = match self.inner.config.reset_mode {
+                    PoolResetMode::RecreateEngine => managed.runtime.reset_to_snapshot(),
+                    PoolResetMode::InPlace => managed.runtime.reset_in_place(),
+                };
+                if let Err(err) = reset_result {
                     warn!(
                         target: "aardvark::runtime",
                         runtime_id = runtime_id.as_str(),
@@ -191,6 +209,7 @@ impl Drop for PooledRuntime {
                 info!(
                     target: "aardvark::runtime",
                     runtime_id = runtime_id.as_str(),
+                    mode = ?self.inner.config.reset_mode,
                     "reset complete"
                 );
             }

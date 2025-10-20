@@ -1597,7 +1597,7 @@ function ensureSessionSitePackagesOnSysPath(Module, publicApi = null) {
   if (!sessionPath) {
     return;
   }
-  const script = `import os\nimport sys\n_path = os.path.normpath("${sessionPath}")\nif _path not in sys.path:\n    sys.path.insert(0, _path)\ndel os, sys, _path`;
+  const script = `import os\nimport sys\nimport importlib\n_path = os.path.normpath("${sessionPath}")\nif _path not in sys.path:\n    sys.path.insert(0, _path)\nsys.path_importer_cache.pop(_path, None)\nimportlib.invalidate_caches()\ndel os, sys, importlib, _path`;
   if (publicApi && typeof publicApi.runPython === "function") {
     try {
       publicApi.runPython(script);
@@ -2548,6 +2548,25 @@ export async function loadPyRunnerPyodide(options = {}) {
     metadata: Object.create(null),
   };
 
+  function attachBufferId(view, id) {
+    if (!view || typeof view !== "object") {
+      return;
+    }
+    if (Object.prototype.hasOwnProperty.call(view, "__aardvarkBufferId") && view.__aardvarkBufferId === id) {
+      return;
+    }
+    try {
+      Object.defineProperty(view, "__aardvarkBufferId", {
+        value: id,
+        enumerable: false,
+        configurable: true,
+        writable: false,
+      });
+    } catch (_err) {
+      view.__aardvarkBufferId = id;
+    }
+  }
+
   function normalizeSharedBufferInput(value) {
     if (value == null) {
       throw new TypeError("shared buffer payload must be provided");
@@ -2562,14 +2581,15 @@ export async function loadPyRunnerPyodide(options = {}) {
       return { view: candidate, proxy };
     }
     if (ArrayBuffer.isView(candidate)) {
-      return {
-        view: new Uint8Array(
-          candidate.buffer,
-          candidate.byteOffset ?? 0,
-          candidate.byteLength ?? candidate.length ?? 0
-        ),
-        proxy,
-      };
+      const slice = new Uint8Array(
+        candidate.buffer,
+        candidate.byteOffset ?? 0,
+        candidate.byteLength ?? candidate.length ?? 0
+      );
+      if (Object.prototype.hasOwnProperty.call(candidate, "__aardvarkBufferId")) {
+        attachBufferId(slice, candidate.__aardvarkBufferId);
+      }
+      return { view: slice, proxy };
     }
     if (candidate instanceof ArrayBuffer) {
       return { view: new Uint8Array(candidate), proxy };
@@ -2598,14 +2618,77 @@ export async function loadPyRunnerPyodide(options = {}) {
     return value;
   }
 
-globalThis.__aardvarkPublishBuffer = function (bufferId, data, metadata) {
+  globalThis.__aardvarkAcquireOutputBuffer = function (bufferId, size, metadata) {
     requireCapability("rawctx_buffers");
+    const length = Number(size);
+    if (!Number.isFinite(length)) {
+      throw new TypeError("size must be a finite number");
+    }
+    if (length < 0) {
+      throw new RangeError("size must be non-negative");
+    }
+    const byteLength = Math.trunc(length);
     const assigned =
       bufferId != null && bufferId !== ""
         ? String(bufferId)
         : `buffer-${sharedBufferState.nextId++}`;
-    const { view, proxy } = normalizeSharedBufferInput(data);
+    const backing = typeof SharedArrayBuffer !== "undefined"
+      ? new SharedArrayBuffer(byteLength)
+      : new ArrayBuffer(byteLength);
+    const view = new Uint8Array(backing);
+    attachBufferId(view, assigned);
     const metaObject = normalizeMetadataInput(metadata);
+    sharedBufferState.map.set(assigned, {
+      view,
+      proxy: null,
+      metadata: metaObject,
+    });
+    if (typeof globalThis.__aardvarkRecordBufferEvent === "function") {
+      try {
+        globalThis.__aardvarkRecordBufferEvent("acquire", assigned, view.byteLength, metaObject ?? null);
+      } catch (err) {
+        console.warn("[aardvark] failed to record buffer acquire event", err);
+      }
+    }
+    return view;
+  };
+
+  globalThis.__aardvarkPublishBuffer = function (bufferId, data, metadata) {
+    requireCapability("rawctx_buffers");
+    const explicitId = bufferId != null && bufferId !== "" ? String(bufferId) : null;
+    const metaObject = normalizeMetadataInput(metadata);
+
+    let candidateId = null;
+    if (data && typeof data === "object" && Object.prototype.hasOwnProperty.call(data, "__aardvarkBufferId")) {
+      candidateId = String(data.__aardvarkBufferId);
+    }
+
+    const assigned = explicitId ?? candidateId ?? `buffer-${sharedBufferState.nextId++}`;
+
+    if (candidateId && sharedBufferState.map.has(candidateId)) {
+      const entry = sharedBufferState.map.get(candidateId);
+      if (entry) {
+        if (metaObject !== null) {
+          entry.metadata = metaObject;
+        }
+        if (typeof globalThis.__aardvarkRecordBufferEvent === "function") {
+          try {
+            globalThis.__aardvarkRecordBufferEvent(
+              "publish",
+              candidateId,
+              entry.view?.byteLength ?? 0,
+              entry.metadata ?? null,
+            );
+          } catch (err) {
+            console.warn("[aardvark] failed to record buffer publish event", err);
+          }
+        }
+        return candidateId;
+      }
+    }
+
+    const { view, proxy } = normalizeSharedBufferInput(data);
+    attachBufferId(view, assigned);
     sharedBufferState.map.set(assigned, {
       view,
       proxy: proxy ?? null,
@@ -3095,7 +3178,7 @@ globalThis.__aardvarkRegisterInputBuffer = function (name, buffer, metadata) {
         console.warn("[overlay] invalidate caches failed", err);
       }
       try {
-        const ensureSysPathCode = `import sys\npath = "${module.FS.sessionSitePackages}"\nif path not in sys.path:\n    sys.path.insert(0, path)\ndel sys, path`;
+        const ensureSysPathCode = `import sys\nimport importlib\npath = "${module.FS.sessionSitePackages}"\nif path not in sys.path:\n    sys.path.insert(0, path)\nsys.path_importer_cache.pop(path, None)\nimportlib.invalidate_caches()\ndel sys, importlib, path`;
         simpleRunPython(module, ensureSysPathCode);
       } catch (err) {
         nativeLog?.(`[overlay] failed to patch sys.path: ${String(err)}`);

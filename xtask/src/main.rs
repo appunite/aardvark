@@ -15,7 +15,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Build release binaries for the CLI (full + downloader) for macOS and Linux.
+    /// Build release binaries for the CLI on macOS and Linux.
     ReleaseCli(ReleaseCliArgs),
 }
 
@@ -28,14 +28,6 @@ struct ReleaseCliArgs {
     /// Target triples to build. Defaults to macOS + Linux if omitted.
     #[arg(long, value_delimiter = ',', value_name = "TRIPLE")]
     targets: Vec<String>,
-
-    /// Skip building the full (runtime) CLI binary.
-    #[arg(long)]
-    skip_full: bool,
-
-    /// Skip building the downloader-only variant.
-    #[arg(long)]
-    skip_fetcher: bool,
 }
 
 fn main() -> Result<()> {
@@ -46,12 +38,7 @@ fn main() -> Result<()> {
 }
 
 fn release_cli(args: ReleaseCliArgs) -> Result<()> {
-    let ReleaseCliArgs {
-        out_dir,
-        targets,
-        skip_full,
-        skip_fetcher,
-    } = args;
+    let ReleaseCliArgs { out_dir, targets } = args;
 
     let workspace_root = workspace_root();
     let host_triple = detect_host_triple()?;
@@ -64,66 +51,32 @@ fn release_cli(args: ReleaseCliArgs) -> Result<()> {
         targets
     };
 
-    if skip_full && skip_fetcher {
-        bail!("both variants were skipped; nothing to build");
-    }
-
     fs::create_dir_all(&out_dir)
         .with_context(|| format!("failed to create output directory {}", out_dir))?;
 
-    if !skip_full {
-        for target in &targets {
-            build_variant(
-                &workspace_root,
-                &host_triple,
-                target,
-                Variant {
-                    name: "full",
-                    binary: "aardvark-cli",
-                    extra_args: &[],
-                },
-                &out_dir,
-            )?;
-        }
-    }
-
-    if !skip_fetcher {
-        let extra_args = ["--no-default-features", "--features", "fetcher"];
-        for target in &targets {
-            build_variant(
-                &workspace_root,
-                &host_triple,
-                target,
-                Variant {
-                    name: "fetcher",
-                    binary: "cargo-aardvark",
-                    extra_args: &extra_args,
-                },
-                &out_dir,
-            )?;
-        }
+    for target in &targets {
+        build_binary(
+            &workspace_root,
+            &host_triple,
+            target,
+            "aardvark-cli",
+            &[],
+            &out_dir,
+        )?;
     }
 
     Ok(())
 }
 
-struct Variant<'a> {
-    name: &'static str,
-    binary: &'static str,
-    extra_args: &'a [&'a str],
-}
-
-fn build_variant(
+fn build_binary(
     workspace_root: &Utf8PathBuf,
     host_triple: &str,
     target: &str,
-    variant: Variant<'_>,
+    binary: &str,
+    extra_args: &[&str],
     out_dir: &Utf8PathBuf,
 ) -> Result<()> {
-    println!(
-        "Building {} ({}) for {}",
-        variant.binary, variant.name, target
-    );
+    println!("Building {} for {}", binary, target);
 
     ensure_target_installed(target)?;
     let tool = select_build_tool(host_triple, target)?;
@@ -139,26 +92,19 @@ fn build_variant(
         .arg(target)
         .current_dir(workspace_root);
 
-    for arg in variant.extra_args {
+    for arg in extra_args {
         cmd.arg(arg);
     }
 
-    let status = cmd.status().with_context(|| {
-        format!(
-            "failed to spawn cargo for {} variant targeting {}",
-            variant.name, target
-        )
-    })?;
+    let status = cmd
+        .status()
+        .with_context(|| format!("failed to spawn cargo for {} targeting {}", binary, target))?;
 
     if !status.success() {
-        bail!(
-            "cargo build failed for {} variant targeting {}",
-            variant.name,
-            target
-        );
+        bail!("cargo build failed for {} targeting {}", binary, target);
     }
 
-    let binary_name = with_exe_suffix(variant.binary, target);
+    let binary_name = with_exe_suffix(binary, target);
     let built_path = workspace_root
         .join("target")
         .join(target)
@@ -168,7 +114,7 @@ fn build_variant(
         bail!("expected binary at {}", built_path);
     }
 
-    let dest_name = format!("{}-{}-{}", variant.binary, variant.name, target);
+    let dest_name = format!("{}-{}", binary, target);
     let dest_path = out_dir.join(dest_name);
     fs::copy(&built_path, &dest_path)
         .with_context(|| format!("failed to copy {} to {}", built_path, dest_path))?;

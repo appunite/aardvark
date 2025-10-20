@@ -1,24 +1,33 @@
 use aardvark_core::{
     config::{PyRuntimeConfig, ResetPolicy},
     invocation::{FieldDescriptor, InvocationDescriptor, InvocationLimits},
-    outcome::{FailureKind, OutcomeStatus, ResultPayload},
-    pool::PoolConfig,
+    outcome::{FailureKind, OutcomeStatus, ResetMode, ResultPayload},
+    persistent::{
+        BundleArtifact, BundleHandle, BundlePool, CallOutcome, IsolateConfig, IsolateId,
+        LifecycleHooks, PoolOptions, PythonIsolate, QueueMode, RecycleReason,
+    },
+    pool::{PoolConfig, PoolResetMode},
     strategy::{
         JsonInvocationStrategy, RawCtxBindingBuilder, RawCtxInput, RawCtxInvocationStrategy,
         RawCtxMetadata, RawCtxPublishBuilder, RawCtxTableColumnBuilder, RawCtxTableSpecBuilder,
     },
-    Bundle, ExecutionOutcome, PyRuntime, PyRuntimePool, Result, RuntimeLanguage,
+    Bundle, ExecutionOutcome, PyRunnerError, PyRuntime, PyRuntimePool, Result, RuntimeLanguage,
 };
 use bytes::Bytes;
 use serde_json::json;
 use std::env;
 use std::io::Write;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use zip::write::FileOptions;
 use zip::CompressionMethod;
 
 #[test]
 fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_pooled_runtime_manual_reset()?;
+    verify_pooled_runtime_in_place_reset()?;
+    verify_runtime_reset_in_place()?;
+    verify_warm_state_imports_overlay()?;
     verify_after_invocation_reset_policy()?;
     verify_python_exception_outcome()?;
     verify_timeout_failure()?;
@@ -34,6 +43,7 @@ fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_prepare_session_with_manifest_defaults()?;
     verify_rawctx_auto_wrapper()?;
     verify_rawctx_multi_output_publish()?;
+    verify_rawctx_preallocated_output_buffer()?;
     verify_rawctx_table_records()?;
     verify_rawctx_table_missing_column()?;
     verify_rawctx_table_column_decoder()?;
@@ -46,7 +56,20 @@ fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_rawctx_table_invalid_schema()?;
     verify_after_invocation_reset_failure()?;
     verify_pool_reset_failure_removes_runtime()?;
+    verify_persistent_isolate_resets_modules()?;
+    verify_bundle_pool_executes_handlers()?;
+    verify_bundle_pool_allows_concurrency()?;
+    verify_bundle_pool_scaling_controls()?;
+    verify_bundle_pool_failfast_when_at_capacity()?;
+    verify_bundle_pool_lifecycle_hooks()?;
+    verify_bundle_pool_heap_quarantine()?;
+    verify_python_isolate_inline()?;
     Ok(())
+}
+
+#[test]
+fn bundle_pool_basic() -> Result<()> {
+    verify_bundle_pool_executes_handlers()
 }
 
 fn verify_pooled_runtime_manual_reset() -> Result<()> {
@@ -94,12 +117,182 @@ def main():
         )?;
         assert!(outcome.is_success(), "expected success outcome");
         assert_eq!(payload_text(&outcome), "'fresh'");
+        let reset = outcome
+            .diagnostics
+            .reset
+            .as_ref()
+            .expect("expected reset summary for pooled runtime");
+        assert!(matches!(reset.mode, ResetMode::RecreateEngine));
+        assert!(reset.engine_generation >= 2);
         runtime_id
     };
 
     assert_eq!(
         first_runtime_id, second_runtime_id,
         "pool should reuse the same runtime instance"
+    );
+    Ok(())
+}
+
+fn verify_pooled_runtime_in_place_reset() -> Result<()> {
+    let runtime_config = PyRuntimeConfig {
+        reset_policy: ResetPolicy::Manual,
+        ..PyRuntimeConfig::default()
+    };
+    let pool = PyRuntimePool::new(PoolConfig {
+        max_runtimes: 1,
+        runtime_config,
+        reset_mode: PoolResetMode::InPlace,
+    })?;
+
+    let pointer_before = {
+        let mut handle = pool.checkout()?;
+        let ptr = {
+            let runtime = handle.runtime();
+            runtime.js_runtime() as *mut _ as usize
+        };
+        let outcome = {
+            let runtime = handle.runtime();
+            run_main(
+                runtime,
+                r#"
+import builtins
+
+def main():
+    if hasattr(builtins, "__pool_marker"):
+        return "stale"
+    builtins.__pool_marker = "present"
+    return "fresh"
+"#,
+            )?
+        };
+        assert!(outcome.is_success(), "expected success outcome");
+        assert_eq!(payload_text(&outcome), "'fresh'");
+        drop(handle);
+        ptr
+    };
+
+    {
+        let mut handle = pool.checkout()?;
+        let runtime = handle.runtime();
+        let pointer_after = runtime.js_runtime() as *mut _ as usize;
+        assert_eq!(pointer_before, pointer_after, "engine should stay in place");
+        let outcome = run_main(
+            runtime,
+            r#"
+import builtins
+
+def main():
+    if hasattr(builtins, "__pool_marker"):
+        return "stale"
+    builtins.__pool_marker = "present"
+    return "fresh"
+"#,
+        )?;
+        assert!(outcome.is_success(), "expected success outcome");
+        assert_eq!(payload_text(&outcome), "'fresh'");
+        let reset = outcome
+            .diagnostics
+            .reset
+            .as_ref()
+            .expect("expected in-place reset summary after pool reuse");
+        assert!(matches!(reset.mode, ResetMode::InPlace));
+        assert!(reset.engine_generation >= 1);
+        drop(handle);
+    }
+
+    Ok(())
+}
+
+fn verify_runtime_reset_in_place() -> Result<()> {
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+
+    let before_ptr = {
+        let js = runtime.js_runtime();
+        js as *mut _ as usize
+    };
+
+    let initial = run_main(
+        &mut runtime,
+        r#"
+import builtins
+
+def main():
+    if hasattr(builtins, "__reset_marker"):
+        return "stale"
+    builtins.__reset_marker = "present"
+    return "fresh"
+"#,
+    )?;
+    assert!(initial.is_success(), "expected success outcome");
+    assert_eq!(payload_text(&initial), "'fresh'");
+
+    runtime.reset_in_place()?;
+
+    let after_ptr = {
+        let js = runtime.js_runtime();
+        js as *mut _ as usize
+    };
+    assert_eq!(before_ptr, after_ptr, "engine should be reused in-place");
+
+    let second = run_main(
+        &mut runtime,
+        r#"
+import builtins
+
+def main():
+    if hasattr(builtins, "__reset_marker"):
+        return "stale"
+    builtins.__reset_marker = "present"
+    return "fresh"
+"#,
+    )?;
+    assert!(second.is_success(), "expected success outcome");
+    assert_eq!(payload_text(&second), "'fresh'");
+    let reset = second
+        .diagnostics
+        .reset
+        .as_ref()
+        .expect("expected reset telemetry");
+    assert!(matches!(reset.mode, ResetMode::InPlace));
+    assert!(reset.engine_generation >= 1);
+    Ok(())
+}
+
+#[allow(clippy::field_reassign_with_default)]
+fn verify_warm_state_imports_overlay() -> Result<()> {
+    let mut config = PyRuntimeConfig::default();
+    config.snapshot.save_to = Some(PathBuf::from("target/warm-state.snapshot"));
+    let mut runtime = PyRuntime::new(config)?;
+    let outcome = run_main(&mut runtime, SIMPLE_SUCCESS)?;
+    assert!(outcome.is_success(), "expected success outcome");
+
+    let warm_state = runtime.capture_warm_state()?;
+    assert!(
+        !warm_state.overlay_preloaded(),
+        "warm state should require overlay import to restore packages"
+    );
+
+    let mut config = PyRuntimeConfig::default();
+    config.warm_state = Some(warm_state.clone());
+    let mut runtime = PyRuntime::new(config.clone())?;
+    env::set_var("AARDVARK_TEST_FORCE_OVERLAY_IMPORT_FAILURE", "1");
+    let err = run_main(&mut runtime, SIMPLE_SUCCESS)
+        .expect_err("overlay import failure should bubble out when forced");
+    env::remove_var("AARDVARK_TEST_FORCE_OVERLAY_IMPORT_FAILURE");
+
+    match err {
+        PyRunnerError::Init(message) => {
+            assert!(message.contains("forced overlay import failure"));
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
+
+    let mut runtime = PyRuntime::new(config)?;
+    let outcome = run_main(&mut runtime, SIMPLE_SUCCESS)?;
+    assert!(
+        outcome.is_success(),
+        "expected success outcome after reload"
     );
     Ok(())
 }
@@ -516,6 +709,111 @@ export function handler() {
     Ok(())
 }
 
+#[test]
+fn javascript_network_denies_hosts_not_in_allowlist() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" },
+        "resources": {
+            "network": {
+                "allow": [],
+                "httpsOnly": true
+            }
+        }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(JS_NETWORK_BLOCK_SCRIPT, manifest);
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    match &outcome.status {
+        OutcomeStatus::Failure(FailureKind::PythonException(info)) => {
+            if let Some(message) = info.value.as_ref() {
+                let lowered = message.to_lowercase();
+                assert!(
+                    lowered.contains("not permitted")
+                        || lowered.contains("blocked")
+                        || lowered == "undefined",
+                    "expected network policy message, got {:?}",
+                    message
+                );
+            }
+        }
+        other => panic!("expected javascript network denial, got {:?}", other),
+    }
+    assert_eq!(
+        outcome.diagnostics.network_hosts_blocked.len(),
+        1,
+        "expected one blocked host in diagnostics"
+    );
+    let blocked = &outcome.diagnostics.network_hosts_blocked[0];
+    assert_eq!(blocked.host, "blocked.example");
+    assert_eq!(blocked.reason, "no-allowlist");
+    assert!(
+        !blocked.https_required,
+        "https flag should be false for blanket denials"
+    );
+    Ok(())
+}
+
+#[test]
+fn javascript_exception_reports_failure() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(JS_THROWING_SCRIPT, manifest);
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    match &outcome.status {
+        OutcomeStatus::Failure(FailureKind::PythonException(info)) => {
+            let typ = info.typ.clone().unwrap_or_default().to_lowercase();
+            assert!(
+                typ.contains("error"),
+                "expected JS exception type in diagnostics, got {:?}",
+                info.typ
+            );
+            let value = info.value.clone().unwrap_or_default();
+            assert!(
+                value.contains("boom"),
+                "expected message to contain boom, got {:?}",
+                value
+            );
+        }
+        other => panic!("expected javascript exception failure, got {:?}", other),
+    }
+    assert!(
+        outcome.diagnostics.stdout.contains("about to throw"),
+        "stdout should include pre-throw log"
+    );
+    Ok(())
+}
+
+#[test]
+fn javascript_rawctx_requires_capability() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(JS_RAWCTX_PUBLISH_SCRIPT, manifest);
+    let mut config = PyRuntimeConfig::default();
+    config.host_capabilities.clear();
+    let mut runtime = PyRuntime::new(config)?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    assert!(
+        matches!(outcome.status, OutcomeStatus::Failure(_)),
+        "expected capability denial"
+    );
+    Ok(())
+}
+
 fn verify_prepare_session_with_manifest_defaults() -> Result<()> {
     let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
     let bundle = bundle_with_main_and_manifest(
@@ -635,6 +933,368 @@ def main():
         "pool should allocate a new runtime after reset failure"
     );
     env::remove_var("AARDVARK_TEST_FORCE_RESET_FAILURE");
+    Ok(())
+}
+
+fn verify_persistent_isolate_resets_modules() -> Result<()> {
+    let bundle = bundle_with_main_and_manifest(
+        r#"
+counter = 0
+
+def handler():
+    global counter
+    counter += 1
+    return counter
+"#,
+        &json!({
+            "schemaVersion": "1.0",
+            "entrypoint": "main:handler",
+            "runtime": {"language": "python"}
+        })
+        .to_string(),
+    );
+
+    let artifact = BundleArtifact::from_bundle(bundle)?;
+    let mut isolate = PythonIsolate::new(IsolateConfig::default())?;
+    let handle = BundleHandle::from_artifact(artifact.clone());
+    isolate.load_bundle(&handle)?;
+    let handler = handle.prepare_default_handler();
+
+    let first = handler.invoke(&mut isolate)?;
+    assert_eq!(payload_text(&first), "1");
+
+    let second = handler.invoke(&mut isolate)?;
+    assert_eq!(payload_text(&second), "1");
+
+    Ok(())
+}
+
+fn verify_bundle_pool_executes_handlers() -> Result<()> {
+    let bundle = bundle_with_main_and_manifest(
+        r#"
+def handler():
+    return "hello"
+"#,
+        &json!({
+            "schemaVersion": "1.0",
+            "entrypoint": "main:handler",
+            "runtime": {"language": "python"}
+        })
+        .to_string(),
+    );
+
+    let artifact = BundleArtifact::from_bundle(bundle)?;
+    let pool = BundlePool::from_artifact(artifact.clone(), PoolOptions::default())?;
+    let handle = pool.handle();
+    let handler = handle.prepare_default_handler();
+
+    let outcome = pool.call_default(&handler)?;
+    assert_eq!(payload_text(&outcome), "'hello'");
+
+    let stats = pool.stats();
+    assert!(stats.total >= 1);
+    assert!(stats.idle <= stats.total);
+    assert_eq!(stats.invocations, 1);
+    Ok(())
+}
+
+fn verify_bundle_pool_allows_concurrency() -> Result<()> {
+    let bundle = bundle_with_main_and_manifest(
+        r#"
+def handler():
+    return "concurrent"
+"#,
+        &json!({
+            "schemaVersion": "1.0",
+            "entrypoint": "main:handler",
+            "runtime": {"language": "python"}
+        })
+        .to_string(),
+    );
+
+    let artifact = BundleArtifact::from_bundle(bundle)?;
+    let options = PoolOptions {
+        desired_size: 2,
+        max_size: 2,
+        ..PoolOptions::default()
+    };
+    let pool = BundlePool::from_artifact(artifact.clone(), options)?;
+
+    let lease_a = pool.test_acquire_guard()?;
+    let lease_b = pool.test_acquire_guard()?;
+
+    let stats = pool.stats();
+    assert_eq!(stats.total, 2);
+    assert_eq!(stats.busy, 2);
+    assert_eq!(stats.idle, 0);
+
+    drop(lease_a);
+    drop(lease_b);
+
+    let stats_after = pool.stats();
+    assert_eq!(stats_after.idle, stats_after.total);
+    assert_eq!(stats_after.busy, 0);
+    assert!(stats_after.queue_wait_p50_ms.is_none());
+    assert!(stats_after.queue_wait_p95_ms.is_none());
+    Ok(())
+}
+
+fn verify_bundle_pool_scaling_controls() -> Result<()> {
+    let bundle = bundle_with_main_and_manifest(
+        r#"
+def handler():
+    return "scale"
+"#,
+        &json!({
+            "schemaVersion": "1.0",
+            "entrypoint": "main:handler",
+            "runtime": {"language": "python"}
+        })
+        .to_string(),
+    );
+
+    let artifact = BundleArtifact::from_bundle(bundle)?;
+    let options = PoolOptions {
+        desired_size: 1,
+        max_size: 3,
+        ..PoolOptions::default()
+    };
+    let pool = BundlePool::from_artifact(artifact, options)?;
+
+    pool.set_desired_size(2)?;
+    {
+        let lease_a = pool.test_acquire_guard()?;
+        let lease_b = pool.test_acquire_guard()?;
+        drop(lease_a);
+        drop(lease_b);
+    }
+    let stats = pool.stats();
+    assert_eq!(stats.total, 2);
+    assert_eq!(stats.idle, 2);
+
+    pool.set_desired_size(1)?;
+    let stats_shrunk = pool.stats();
+    assert_eq!(stats_shrunk.total, 1);
+    assert_eq!(stats_shrunk.idle, 1);
+    assert_eq!(stats_shrunk.scaledown_events, 1);
+    assert_eq!(stats_shrunk.quarantine_events, 0);
+
+    pool.resize(3)?;
+    pool.set_desired_size(3)?;
+    let stats_scaled = pool.stats();
+    assert_eq!(stats_scaled.total, 3);
+    assert_eq!(stats_scaled.idle, 3);
+    assert_eq!(stats_scaled.scaledown_events, 1);
+
+    let lease = pool.test_acquire_guard()?;
+    let err = pool
+        .set_desired_size(1)
+        .expect_err("shrink should fail while isolate busy");
+    match err {
+        PyRunnerError::Validation(message) => {
+            assert!(message.contains("busy"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    drop(lease);
+
+    Ok(())
+}
+
+fn verify_bundle_pool_failfast_when_at_capacity() -> Result<()> {
+    let bundle = bundle_with_main_and_manifest(
+        r#"
+def handler():
+    return "hello"
+"#,
+        &json!({
+            "schemaVersion": "1.0",
+            "entrypoint": "main:handler",
+            "runtime": {"language": "python"}
+        })
+        .to_string(),
+    );
+
+    let artifact = BundleArtifact::from_bundle(bundle)?;
+    let options = PoolOptions {
+        desired_size: 1,
+        max_size: 1,
+        max_queue: Some(0),
+        queue_mode: QueueMode::FailFast,
+        ..PoolOptions::default()
+    };
+    let pool = BundlePool::from_artifact(artifact.clone(), options)?;
+
+    let lease = pool.test_acquire_guard()?;
+    let handler = pool.handle().prepare_default_handler();
+    let err = pool
+        .call_default(&handler)
+        .expect_err("call should fail fast while isolate leased");
+
+    match err {
+        PyRunnerError::PoolAtCapacity { .. } | PyRunnerError::PoolQueueFull { .. } => {}
+        other => panic!("unexpected pool error: {:?}", other),
+    }
+
+    drop(lease);
+    let pool_reset = BundlePool::from_artifact(artifact.clone(), PoolOptions::default())?;
+    let handler_reset = pool_reset.handle().prepare_default_handler();
+    let outcome = pool_reset.call_default(&handler_reset)?;
+    assert_eq!(payload_text(&outcome), "'hello'");
+    Ok(())
+}
+
+fn verify_bundle_pool_lifecycle_hooks() -> Result<()> {
+    let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let events_start = events.clone();
+    let events_recycle = events.clone();
+    let events_call_start = events.clone();
+    let events_call_finish = events.clone();
+
+    let hooks = LifecycleHooks {
+        on_isolate_started: Some(Arc::new(move |id, _cfg| {
+            events_start.lock().unwrap().push(format!("start:{id}"));
+        })),
+        on_isolate_recycled: Some(Arc::new(move |id, reason| {
+            events_recycle
+                .lock()
+                .unwrap()
+                .push(format!("recycle:{id}:{reason:?}"));
+        })),
+        on_call_started: Some(Arc::new(move |ctx| {
+            events_call_start
+                .lock()
+                .unwrap()
+                .push(format!("call-start:{}:{}", ctx.isolate_id, ctx.entrypoint));
+        })),
+        on_call_finished: Some(Arc::new(move |ctx, outcome| {
+            let mut events = events_call_finish.lock().unwrap();
+            match outcome {
+                CallOutcome::Success(_) => events.push(format!(
+                    "call-finish:success:{}:{}",
+                    ctx.isolate_id, ctx.entrypoint
+                )),
+                CallOutcome::Error(err) => {
+                    events.push(format!("call-finish:error:{}:{}", ctx.isolate_id, err))
+                }
+            }
+        })),
+    };
+
+    let bundle = bundle_with_main_and_manifest(
+        r#"
+def handler():
+    return "hook"
+"#,
+        &json!({
+            "schemaVersion": "1.0",
+            "entrypoint": "main:handler",
+            "runtime": {"language": "python"}
+        })
+        .to_string(),
+    );
+
+    let artifact = BundleArtifact::from_bundle(bundle)?;
+    let options = PoolOptions {
+        lifecycle_hooks: Some(hooks),
+        ..PoolOptions::default()
+    };
+    let pool = BundlePool::from_artifact(artifact.clone(), options)?;
+
+    {
+        let lease = pool.test_acquire_guard()?;
+        drop(lease);
+    }
+
+    let handler = pool.handle().prepare_default_handler();
+    let outcome = pool.call_default(&handler)?;
+    assert_eq!(payload_text(&outcome), "'hook'");
+
+    let recorded = events.lock().unwrap().clone();
+    assert!(recorded.iter().any(|entry| entry.starts_with("start:")));
+    assert!(recorded
+        .iter()
+        .any(|entry| entry.contains("ReturnedToIdle")));
+    assert!(recorded
+        .iter()
+        .any(|entry| entry.starts_with("call-start:")));
+    assert!(recorded
+        .iter()
+        .any(|entry| entry.starts_with("call-finish:success:")));
+    Ok(())
+}
+
+fn verify_bundle_pool_heap_quarantine() -> Result<()> {
+    let starts: Arc<Mutex<Vec<IsolateId>>> = Arc::new(Mutex::new(Vec::new()));
+    let starts_clone = starts.clone();
+    let recycle_reasons: Arc<Mutex<Vec<RecycleReason>>> = Arc::new(Mutex::new(Vec::new()));
+    let recycle_clone = recycle_reasons.clone();
+    let hooks = LifecycleHooks {
+        on_isolate_started: Some(Arc::new(move |id, _cfg| {
+            starts_clone.lock().unwrap().push(id);
+        })),
+        on_isolate_recycled: Some(Arc::new(move |_, reason| {
+            recycle_clone.lock().unwrap().push(reason.clone());
+        })),
+        ..Default::default()
+    };
+
+    let bundle = bundle_with_main_and_manifest(
+        r#"
+def handler():
+    data = [i for i in range(1024)]
+    return "boom"
+"#,
+        &json!({
+            "schemaVersion": "1.0",
+            "entrypoint": "main:handler",
+            "runtime": {"language": "python"}
+        })
+        .to_string(),
+    );
+
+    let artifact = BundleArtifact::from_bundle(bundle)?;
+    let options = PoolOptions {
+        heap_limit_kib: Some(1),
+        lifecycle_hooks: Some(hooks),
+        ..PoolOptions::default()
+    };
+    let pool = BundlePool::from_artifact(artifact, options)?;
+
+    let handler = pool.handle().prepare_default_handler();
+    let outcome = pool.call_default(&handler)?;
+    assert_eq!(payload_text(&outcome), "'boom'");
+
+    let stats = pool.stats();
+    assert!(stats.quarantine_events >= 1);
+    assert!(stats.quarantine_heap_hits >= 1);
+    assert!(stats.quarantine_rss_hits <= stats.quarantine_events);
+
+    let recorded = starts.lock().unwrap();
+    assert!(
+        recorded.len() >= 2,
+        "expected quarantine to trigger isolate replacement"
+    );
+
+    let reasons = recycle_reasons.lock().unwrap();
+    assert!(reasons.iter().any(|reason| matches!(
+        reason,
+        RecycleReason::Quarantined {
+            exceeded_heap: true,
+            ..
+        }
+    )));
+    Ok(())
+}
+
+fn verify_python_isolate_inline() -> Result<()> {
+    let mut isolate = PythonIsolate::new(IsolateConfig::default())?;
+    let code = r#"
+def handler():
+    return "inline"
+"#;
+    let outcome = isolate.run_inline_python(code, "main:handler")?;
+    assert_eq!(payload_text(&outcome), "'inline'");
     Ok(())
 }
 
@@ -872,6 +1532,47 @@ def handler():
                 .and_then(|value| value.as_str())
                 .unwrap_or_default();
             assert_eq!(blob_kind, "bytes");
+        }
+        other => panic!("unexpected payload variant: {:?}", other),
+    }
+
+    Ok(())
+}
+
+fn verify_rawctx_preallocated_output_buffer() -> Result<()> {
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let bundle = bundle_with_main(
+        r#"
+def handler():
+    buf = __aardvark_output_buffer(4, id="payload")
+    buf[:] = b"pong"
+    return buf
+"#,
+    );
+
+    let mut descriptor = InvocationDescriptor::new("main:handler");
+    descriptor.outputs.push(FieldDescriptor {
+        name: "payload".to_owned(),
+        type_tag: None,
+        metadata: Some(
+            RawCtxPublishBuilder::new("payload")
+                .transform("memoryview")
+                .metadata(json!({"kind": "bytes"}))
+                .build(),
+        ),
+    });
+
+    let session = runtime.prepare_session_with_descriptor(bundle, descriptor)?;
+    let mut strategy = RawCtxInvocationStrategy::default();
+    let outcome = runtime.run_session_with_strategy(&session, &mut strategy)?;
+
+    match &outcome.status {
+        OutcomeStatus::Success(ResultPayload::SharedBuffers(buffers)) => {
+            assert_eq!(buffers.len(), 1);
+            let handle = &buffers[0];
+            assert_eq!(handle.id, "payload");
+            let bytes = handle.as_slice().expect("shared buffer should retain data");
+            assert_eq!(bytes, b"pong");
         }
         other => panic!("unexpected payload variant: {:?}", other),
     }
@@ -2193,6 +2894,20 @@ def main():
     js.__pyRunnerNativeFetch("http://allowed.test/resource")
 "#;
 
+const JS_NETWORK_BLOCK_SCRIPT: &str = r#"
+export default function main() {
+    globalThis.__pyRunnerNativeFetch("https://blocked.example/resource");
+    return "should-not-complete";
+}
+"#;
+
+const JS_THROWING_SCRIPT: &str = r#"
+export default function main() {
+    console.log("about to throw");
+    throw new Error("boom from js");
+}
+"#;
+
 const DIAGNOSTICS_RESOURCE_SCRIPT: &str = r#"
 import js
 from pathlib import Path
@@ -2214,6 +2929,13 @@ import js
 def main():
     js.__aardvarkPublishBuffer("buf", b"abc", None)
     return "ok"
+"#;
+
+const JS_RAWCTX_PUBLISH_SCRIPT: &str = r#"
+export default function main() {
+    globalThis.__aardvarkPublishBuffer("js-buf", new Uint8Array([1, 2, 3]), null);
+    return null;
+}
 "#;
 
 const FILESYSTEM_CREATE_FILE_SCRIPT: &str = r#"

@@ -64,6 +64,20 @@ pub struct Diagnostics {
     pub network_hosts_blocked: Vec<NetworkDeniedHost>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filesystem_violations: Vec<FilesystemViolation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset: Option<ResetSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_wait_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepare_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub py_heap_kib: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rss_kib_before: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rss_kib_after: Option<u64>,
 }
 
 impl Diagnostics {
@@ -71,6 +85,21 @@ impl Diagnostics {
     pub fn to_telemetry(&self) -> SandboxTelemetry {
         SandboxTelemetry::from(self)
     }
+}
+
+/// Summary of the reset that prepared the runtime for this invocation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResetSummary {
+    pub mode: ResetMode,
+    pub duration_ms: u64,
+    pub engine_generation: u64,
+}
+
+/// Reset mechanism used before the invocation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ResetMode {
+    RecreateEngine,
+    InPlace,
 }
 
 /// Structured status of the execution.

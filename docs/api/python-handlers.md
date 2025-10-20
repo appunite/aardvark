@@ -79,6 +79,8 @@ RawCtx exposes structured columnar data and shared-memory buffers. Example descr
 
 Python can access the derived metadata via the `meta` argument if the descriptor requests it. RawCtx is useful for high-volume data ingestion because it avoids per-row Python decoding.
 
+For zero-copy outputs, allocate buffers via `builtins.__aardvark_output_buffer(size, *, id=None, metadata=None)`. The helper returns a `memoryview` backed by the runtime's `SharedArrayBuffer`, so filling it in-place and returning it avoids extra copies when `transform="memoryview"`.
+
 ## Error handling inside handlers
 
 - Raise exceptions to signal failure. The runtime captures `type`, `value`, and traceback.
@@ -89,10 +91,10 @@ Python can access the derived metadata via the `meta` argument if the descriptor
 
 - Use the CLI to load your bundle: `cargo run -p aardvark-cli -- --bundle my_bundle.zip --manifest`.
 - Provide `--descriptor` when testing descriptor-only bundles.
-- For unit tests, load the same module under CPython and invoke the handler with representative payloads. Ensure any Pyodide-specific APIs are guarded behind runtime checks.
+- For unit tests, load the same module under CPython and invoke the handler with representative payloads. Ensure any [Pyodide](https://pyodide.org/)-specific APIs are guarded behind runtime checks.
 
 ## Known gaps
 
 - Streaming output is not supported; handlers must return a single payload.
-- There is no built-in virtualenv simulation. The Pyodide environment may differ from CPython (especially around file IO and native extensions).
+- There is no built-in virtualenv simulation. The [Pyodide](https://pyodide.org/) environment may differ from CPython (especially around file IO and native extensions).
 - Persistent filesystem state is wiped after each invocation in pooled runtimes; do not rely on local cache between runs.

@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::bundle_manifest::{BundleManifest, MANIFEST_BASENAME};
 use crate::error::{PyRunnerError, Result};
+use blake3::Hasher;
 use zip::read::ZipFile;
 use zip::ZipArchive;
 
@@ -103,6 +104,25 @@ impl Bundle {
         &self.inner.entries
     }
 
+    /// Returns a stable fingerprint for the bundle contents.
+    pub fn fingerprint(&self) -> BundleFingerprint {
+        let mut hasher = Hasher::new();
+        let mut entries: Vec<_> = self
+            .inner
+            .entries
+            .iter()
+            .map(|entry| (entry.path.clone(), entry.data.clone()))
+            .collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        for (path, data) in entries {
+            hasher.update(path.as_bytes());
+            let len_bytes = (data.len() as u64).to_le_bytes();
+            hasher.update(&len_bytes);
+            hasher.update(&data);
+        }
+        BundleFingerprint(hasher.finalize().as_bytes()[..8].try_into().unwrap())
+    }
+
     /// Parses and returns the embedded bundle manifest, if present.
     pub fn manifest(&self) -> Result<Option<BundleManifest>> {
         let entry = self
@@ -124,6 +144,17 @@ impl Bundle {
         Arc::try_unwrap(self.inner)
             .map(|inner| inner.entries)
             .unwrap_or_else(|inner| inner.entries.clone())
+    }
+}
+
+/// Eight-byte bundle fingerprint derived from a BLAKE3 hash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BundleFingerprint([u8; 8]);
+
+impl BundleFingerprint {
+    /// Returns the fingerprint as a u64 integer.
+    pub fn as_u64(&self) -> u64 {
+        u64::from_le_bytes(self.0)
     }
 }
 

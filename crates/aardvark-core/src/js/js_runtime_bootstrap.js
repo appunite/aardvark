@@ -96,6 +96,25 @@ function sliceUint8(arrayBuffer, offset, length) {
   return new Uint8Array(arrayBuffer, offset, length);
 }
 
+function attachBufferId(view, id) {
+  if (!view || typeof view !== "object") {
+    return;
+  }
+  if (Object.prototype.hasOwnProperty.call(view, "__aardvarkBufferId") && view.__aardvarkBufferId === id) {
+    return;
+  }
+  try {
+    Object.defineProperty(view, "__aardvarkBufferId", {
+      value: id,
+      enumerable: false,
+      configurable: true,
+      writable: false,
+    });
+  } catch (_err) {
+    view.__aardvarkBufferId = id;
+  }
+}
+
 function ensureUint8Array(value) {
   if (value instanceof Uint8Array) {
     return value;
@@ -370,22 +389,26 @@ globalThis.__aardvarkWrapRawctxFunction = function wrapRawctxFunction(fn, module
       }
     }
 
-    const finalArgs = args.slice();
+    const finalArgs = args.length > 0 ? args : callArgs;
     if (Object.keys(kwargs).length > 0) {
       finalArgs.push(kwargs);
     }
-    const invocation = fn.apply(this, finalArgs.length ? finalArgs : callArgs);
+    const invocation = fn.apply(this, finalArgs);
     return applyRawctxOutputs(spec, invocation);
   };
 };
 
 function normalizeSharedBufferInput(data) {
   if (data instanceof Uint8Array) {
-    return data.subarray(0, data.byteLength);
+    return data;
   }
   if (ArrayBuffer.isView(data)) {
     const view = data;
-    return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+    const slice = new Uint8Array(view.buffer, view.byteOffset ?? 0, view.byteLength);
+    if (Object.prototype.hasOwnProperty.call(view, "__aardvarkBufferId")) {
+      attachBufferId(slice, view.__aardvarkBufferId);
+    }
+    return slice;
   }
   if (data instanceof ArrayBuffer) {
     return new Uint8Array(data);
@@ -432,14 +455,58 @@ function recordSharedBufferEvent(event, id, size, metadata) {
   }
 }
 
-globalThis.__aardvarkPublishBuffer = function publishBuffer(bufferId, data, metadata) {
+globalThis.__aardvarkAcquireOutputBuffer = function acquireOutputBuffer(bufferId, size, metadata) {
   requireCapability("rawctx_buffers");
+  const length = Number(size);
+  if (!Number.isFinite(length)) {
+    throw new TypeError("size must be a finite number");
+  }
+  if (length < 0) {
+    throw new RangeError("size must be non-negative");
+  }
+  const byteLength = Math.trunc(length);
   const assigned =
     bufferId != null && bufferId !== ""
       ? String(bufferId)
       : `buffer-${sharedBufferState.nextId++}`;
-  const view = normalizeSharedBufferInput(data);
+  const backing = typeof SharedArrayBuffer !== "undefined"
+    ? new SharedArrayBuffer(byteLength)
+    : new ArrayBuffer(byteLength);
+  const view = new Uint8Array(backing);
+  attachBufferId(view, assigned);
   const metaObject = normalizeMetadataInput(metadata);
+  sharedBufferState.map.set(assigned, {
+    view,
+    metadata: metaObject,
+  });
+  recordSharedBufferEvent("acquire", assigned, view.byteLength, metaObject);
+  return view;
+};
+
+globalThis.__aardvarkPublishBuffer = function publishBuffer(bufferId, data, metadata) {
+  requireCapability("rawctx_buffers");
+  const explicitId = bufferId != null && bufferId !== "" ? String(bufferId) : null;
+  const metaObject = normalizeMetadataInput(metadata);
+
+  let candidateId = null;
+  if (data && typeof data === "object" && Object.prototype.hasOwnProperty.call(data, "__aardvarkBufferId")) {
+    candidateId = String(data.__aardvarkBufferId);
+  }
+  const assigned = explicitId ?? candidateId ?? `buffer-${sharedBufferState.nextId++}`;
+
+  if (candidateId && sharedBufferState.map.has(candidateId)) {
+    const entry = sharedBufferState.map.get(candidateId);
+    if (entry) {
+      if (metaObject !== null) {
+        entry.metadata = metaObject;
+      }
+      recordSharedBufferEvent("publish", candidateId, entry.view.byteLength, entry.metadata ?? null);
+      return candidateId;
+    }
+  }
+
+  const view = normalizeSharedBufferInput(data ?? new Uint8Array());
+  attachBufferId(view, assigned);
   sharedBufferState.map.set(assigned, {
     view,
     metadata: metaObject,

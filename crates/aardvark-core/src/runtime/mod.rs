@@ -3,7 +3,7 @@
 mod javascript;
 mod python;
 
-use crate::bundle::Bundle;
+use crate::bundle::{Bundle, BundleFingerprint};
 use crate::bundle_manifest::{BundleManifest, ManifestFilesystemMode, ManifestFilesystemResources};
 use crate::config::{PyRuntimeConfig, ResetPolicy, WarmState};
 use crate::engine::{ExecutionOutput, FilesystemModeConfig, JsRuntime};
@@ -11,7 +11,7 @@ use crate::error::{PyRunnerError, Result};
 use crate::invocation::{InvocationDescriptor, InvocationLimits};
 use crate::outcome::{
     Diagnostics, ExecutionOutcome, FailureKind, FilesystemViolation, NetworkDeniedHost,
-    NetworkHostContact, ResultPayload,
+    NetworkHostContact, ResetMode, ResetSummary, ResultPayload,
 };
 use crate::runtime_language::RuntimeLanguage;
 use crate::session::PySession;
@@ -25,7 +25,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc, Arc,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{info, info_span, warn};
 use v8::{self, PinScope};
 
@@ -43,6 +43,10 @@ pub struct AardvarkRuntime {
     engine: Option<Box<dyn LanguageEngine>>,
     runtime_id: Option<String>,
     warm_restored: bool,
+    engine_generation: u64,
+    pending_reset_summary: Option<ResetSummary>,
+    environment_ready: bool,
+    current_bundle: Option<CurrentBundleState>,
 }
 
 trait LanguageEngine {
@@ -51,6 +55,7 @@ trait LanguageEngine {
     fn prepare_environment(&mut self, config: &PyRuntimeConfig) -> Result<()>;
     fn load_manifest_packages(&mut self, manifest: &BundleManifest) -> Result<()>;
     fn mount_bundle(&mut self, bundle: &Bundle) -> Result<()>;
+    fn reset_in_place(&mut self, config: &PyRuntimeConfig) -> Result<()>;
     fn set_warm_state(&mut self, _state: Option<WarmState>) {}
 }
 
@@ -102,6 +107,19 @@ struct CollectedDiagnostics {
     network_hosts_contacted: Vec<NetworkHostContact>,
     network_hosts_blocked: Vec<NetworkDeniedHost>,
     filesystem_violations: Vec<FilesystemViolation>,
+    reset_summary: Option<crate::outcome::ResetSummary>,
+    queue_wait_ms: Option<u64>,
+    prepare_ms: Option<u64>,
+    cleanup_ms: Option<u64>,
+    py_heap_kib: Option<u64>,
+    rss_kib_before: Option<u64>,
+    rss_kib_after: Option<u64>,
+}
+
+#[derive(Clone, Copy)]
+struct CurrentBundleState {
+    fingerprint: BundleFingerprint,
+    language: RuntimeLanguage,
 }
 
 impl AardvarkRuntime {
@@ -113,6 +131,10 @@ impl AardvarkRuntime {
             engine: Some(engine),
             runtime_id: None,
             warm_restored: false,
+            engine_generation: 1,
+            pending_reset_summary: None,
+            environment_ready: false,
+            current_bundle: None,
         })
     }
 
@@ -129,50 +151,8 @@ impl AardvarkRuntime {
         bundle: Bundle,
         descriptor: InvocationDescriptor,
     ) -> Result<PySession> {
-        let mut descriptor = descriptor;
-        let language = descriptor.language.unwrap_or(self.config.default_language);
-        descriptor.language = Some(language);
-        self.ensure_engine(language)?;
-
-        {
-            let js = self.engine_mut().js_mut();
-            js.set_network_policy(&[], true);
-        }
-        let using_warm_state = self.config.warm_state.is_some();
-        {
-            let config = self.config.clone();
-            self.engine_mut().prepare_environment(&config)?;
-        }
-        if using_warm_state && !self.warm_restored {
-            if let Some(hook) = self.config.hooks.after_warm_restore.clone() {
-                hook(self)?;
-            }
-            self.warm_restored = true;
-        }
-        {
-            let js = self.engine_mut().js_mut();
-            js.set_filesystem_policy(FilesystemModeConfig::Read, None)?;
-        }
-        self.apply_host_capabilities(None)?;
-        descriptor
-            .validate()
-            .map_err(|err| PyRunnerError::Descriptor(err.to_string()))?;
-
-        info!(
-            target: "aardvark::session",
-            runtime_id = self.runtime_id_str(),
-            entrypoint = descriptor.entrypoint(),
-            inputs = descriptor.inputs.len(),
-            outputs = descriptor.outputs.len(),
-            limits.wall_ms = descriptor.limits.wall_ms.unwrap_or(0),
-            limits.heap_mb = descriptor.limits.heap_mb.unwrap_or(0),
-            "descriptor accepted"
-        );
-
-        self.publish_manifest(&bundle)?;
-        let session = PySession::new(bundle, descriptor);
-        self.publish_descriptor(session.descriptor())?;
-        self.engine_mut().mount_bundle(session.bundle())?;
+        let _fingerprint = bundle.fingerprint();
+        let (session, _, _) = self.prepare_session_core(bundle, descriptor, None, _fingerprint)?;
         Ok(session)
     }
 
@@ -180,19 +160,45 @@ impl AardvarkRuntime {
         &mut self,
         bundle: Bundle,
     ) -> Result<(PySession, Option<BundleManifest>)> {
+        self.prepare_session_with_manifest_internal(bundle, None)
+    }
+
+    /// Prepares a session by combining manifest metadata with a custom descriptor.
+    pub fn prepare_session_with_manifest_and_descriptor(
+        &mut self,
+        bundle: Bundle,
+        descriptor: InvocationDescriptor,
+    ) -> Result<(PySession, Option<BundleManifest>)> {
+        self.prepare_session_with_manifest_internal(bundle, Some(descriptor))
+    }
+
+    fn prepare_session_with_manifest_internal(
+        &mut self,
+        bundle: Bundle,
+        descriptor_override: Option<InvocationDescriptor>,
+    ) -> Result<(PySession, Option<BundleManifest>)> {
         let manifest = bundle.manifest()?;
         let entrypoint = manifest
             .as_ref()
             .map(|m| m.entrypoint().to_owned())
             .unwrap_or_else(|| "main:handler".to_string());
 
-        let mut descriptor = InvocationDescriptor::new(entrypoint);
-        if let Some(runtime) = manifest
-            .as_ref()
-            .and_then(|m| m.runtime.as_ref())
-            .and_then(|rt| rt.language)
-        {
-            descriptor.language = Some(runtime);
+        let mut descriptor = match descriptor_override {
+            Some(desc) if desc.entrypoint().trim().is_empty() => {
+                InvocationDescriptor::new(entrypoint.clone())
+            }
+            Some(desc) => desc,
+            None => InvocationDescriptor::new(entrypoint.clone()),
+        };
+
+        if descriptor.language.is_none() {
+            if let Some(runtime) = manifest
+                .as_ref()
+                .and_then(|m| m.runtime.as_ref())
+                .and_then(|rt| rt.language)
+            {
+                descriptor.language = Some(runtime);
+            }
         }
 
         let mut filesystem_policy = FilesystemPolicy::default();
@@ -214,7 +220,9 @@ impl AardvarkRuntime {
             }
         }
 
-        let session = self.prepare_session_with_descriptor(bundle, descriptor)?;
+        let _fingerprint = bundle.fingerprint();
+        let (session, manifest, _bundle_changed) =
+            self.prepare_session_core(bundle, descriptor, manifest, _fingerprint)?;
 
         {
             let js = self.engine_mut().js_mut();
@@ -225,7 +233,7 @@ impl AardvarkRuntime {
         }
         self.apply_host_capabilities(manifest_host_capabilities.as_deref())?;
 
-        if let Some(manifest) = &manifest {
+        if let Some(manifest) = manifest.as_ref() {
             if let Some(resources) = manifest.resources() {
                 if let Some(network) = &resources.network {
                     self.engine_mut()
@@ -239,6 +247,61 @@ impl AardvarkRuntime {
         }
 
         Ok((session, manifest))
+    }
+
+    fn prepare_session_core(
+        &mut self,
+        bundle: Bundle,
+        mut descriptor: InvocationDescriptor,
+        manifest: Option<BundleManifest>,
+        fingerprint: BundleFingerprint,
+    ) -> Result<(PySession, Option<BundleManifest>, bool)> {
+        let language = descriptor.language.unwrap_or(self.config.default_language);
+        descriptor.language = Some(language);
+
+        self.ensure_environment_ready(language)?;
+
+        {
+            let js = self.engine_mut().js_mut();
+            js.set_filesystem_policy(FilesystemModeConfig::Read, None)?;
+        }
+        self.apply_host_capabilities(None)?;
+
+        descriptor
+            .validate()
+            .map_err(|err| PyRunnerError::Descriptor(err.to_string()))?;
+
+        info!(
+            target: "aardvark::session",
+            runtime_id = self.runtime_id_str(),
+            entrypoint = descriptor.entrypoint(),
+            inputs = descriptor.inputs.len(),
+            outputs = descriptor.outputs.len(),
+            limits.wall_ms = descriptor.limits.wall_ms.unwrap_or(0),
+            limits.heap_mb = descriptor.limits.heap_mb.unwrap_or(0),
+            "descriptor accepted"
+        );
+
+        self.publish_manifest(&bundle)?;
+
+        let bundle_changed = self
+            .current_bundle
+            .as_ref()
+            .map(|state| state.fingerprint != fingerprint)
+            .unwrap_or(true);
+        if bundle_changed {
+            let bundle_clone = bundle.clone();
+            self.engine_mut().mount_bundle(&bundle_clone)?;
+        }
+
+        let session = PySession::new(bundle, descriptor);
+        self.publish_descriptor(session.descriptor())?;
+        self.current_bundle = Some(CurrentBundleState {
+            fingerprint,
+            language,
+        });
+
+        Ok((session, manifest, bundle_changed))
     }
 
     /// Captures a warm state (snapshot + overlay) after packages are loaded.
@@ -288,6 +351,13 @@ impl AardvarkRuntime {
     ) -> Result<ExecutionOutcome> {
         let descriptor = session.descriptor();
         let language = descriptor.language.unwrap_or(self.config.default_language);
+        let invocation_start = Instant::now();
+        let entrypoint_owned = descriptor.entrypoint().to_owned();
+        let cleanup_entrypoint = if language == RuntimeLanguage::Python {
+            Some(entrypoint_owned.as_str())
+        } else {
+            None
+        };
         let limits = self.effective_limits(descriptor);
         info!(
             target: "aardvark::budget",
@@ -328,6 +398,8 @@ impl AardvarkRuntime {
         let mut watchdog = self.arm_watchdog(limits.wall_ms);
         let cpu_start_ns = thread_cpu_time_ns();
 
+        let invoke_start = Instant::now();
+        let prepare_duration = invoke_start.duration_since(invocation_start);
         let runtime_id_owned = self.runtime_id_str().to_owned();
         let strategy_result = {
             let js = self.engine_mut().js_mut();
@@ -351,13 +423,15 @@ impl AardvarkRuntime {
             network_contacts_raw,
             network_denied_raw,
             filesystem_violations_raw,
+            heap_used_bytes,
         ) = {
             let js = self.engine_mut().js_mut();
             let usage = js.filesystem_usage_bytes().ok();
             let contacts = js.drain_network_contacts();
             let denied = js.drain_network_denied();
             let fs_violations = js.drain_filesystem_violations();
-            (usage, contacts, denied, fs_violations)
+            let heap = js.heap_used_bytes() as u64;
+            (usage, contacts, denied, fs_violations, heap)
         };
         let network_hosts_contacted: Vec<NetworkHostContact> = network_contacts_raw
             .into_iter()
@@ -383,13 +457,21 @@ impl AardvarkRuntime {
                 message: record.message,
             })
             .collect();
-        let collected = CollectedDiagnostics {
+        let mut collected = CollectedDiagnostics {
             cpu_ms_used,
             filesystem_bytes_written,
             network_hosts_contacted,
             network_hosts_blocked,
             filesystem_violations,
+            reset_summary: self.pending_reset_summary.take(),
+            queue_wait_ms: None,
+            prepare_ms: None,
+            cleanup_ms: None,
+            py_heap_kib: Some(heap_used_bytes / 1024),
+            rss_kib_before: None,
+            rss_kib_after: None,
         };
+        collected.prepare_ms = Some(prepare_duration.as_millis() as u64);
 
         Self::emit_diagnostics_events(&collected, self.runtime_id_str(), descriptor.entrypoint());
 
@@ -405,12 +487,15 @@ impl AardvarkRuntime {
                 strategy_result.as_ref().ok().map(|res| &res.execution),
                 &collected,
             );
-            return self.finish_with_cleanup(ExecutionOutcome::failure(
-                FailureKind::TimeoutExceeded {
-                    requested_ms: limits.wall_ms.unwrap_or_default(),
-                },
-                diagnostics,
-            ));
+            return self.finish_with_cleanup(
+                ExecutionOutcome::failure(
+                    FailureKind::TimeoutExceeded {
+                        requested_ms: limits.wall_ms.unwrap_or_default(),
+                    },
+                    diagnostics,
+                ),
+                cleanup_entrypoint,
+            );
         }
         if let Some(limit_ms) = limits.cpu_ms {
             if let Some(used_ms) = collected.cpu_ms_used {
@@ -427,13 +512,16 @@ impl AardvarkRuntime {
                         strategy_result.as_ref().ok().map(|res| &res.execution),
                         &collected,
                     );
-                    return self.finish_with_cleanup(ExecutionOutcome::failure(
-                        FailureKind::CpuLimitExceeded {
-                            requested_ms: limit_ms,
-                            used_ms,
-                        },
-                        diagnostics,
-                    ));
+                    return self.finish_with_cleanup(
+                        ExecutionOutcome::failure(
+                            FailureKind::CpuLimitExceeded {
+                                requested_ms: limit_ms,
+                                used_ms,
+                            },
+                            diagnostics,
+                        ),
+                        cleanup_entrypoint,
+                    );
                 } else {
                     info!(
                         target: "aardvark::budget",
@@ -461,12 +549,15 @@ impl AardvarkRuntime {
                     strategy_result.as_ref().ok().map(|res| &res.execution),
                     &collected,
                 );
-                return self.finish_with_cleanup(ExecutionOutcome::failure(
-                    FailureKind::HeapLimitExceeded {
-                        requested_mb: limit_mb,
-                    },
-                    diagnostics,
-                ));
+                return self.finish_with_cleanup(
+                    ExecutionOutcome::failure(
+                        FailureKind::HeapLimitExceeded {
+                            requested_mb: limit_mb,
+                        },
+                        diagnostics,
+                    ),
+                    cleanup_entrypoint,
+                );
             }
         }
 
@@ -515,7 +606,53 @@ impl AardvarkRuntime {
             }
         }
 
-        self.finish_with_cleanup(outcome)
+        let cleanup_start = Instant::now();
+        let mut outcome = self.finish_with_cleanup(outcome, cleanup_entrypoint)?;
+        let cleanup_duration = cleanup_start.elapsed();
+        outcome.diagnostics.cleanup_ms = Some(cleanup_duration.as_millis() as u64);
+        if outcome.diagnostics.prepare_ms.is_none() {
+            outcome.diagnostics.prepare_ms = collected.prepare_ms;
+        }
+        if outcome.diagnostics.py_heap_kib.is_none() {
+            outcome.diagnostics.py_heap_kib = collected.py_heap_kib;
+        }
+        Ok(outcome)
+    }
+
+    fn ensure_environment_ready(&mut self, language: RuntimeLanguage) -> Result<()> {
+        self.ensure_engine(language)?;
+
+        if self
+            .current_bundle
+            .as_ref()
+            .map(|state| state.language != language)
+            .unwrap_or(false)
+        {
+            self.current_bundle = None;
+            self.environment_ready = false;
+        }
+
+        let mut prepared_now = false;
+        if !self.environment_ready {
+            let config = self.config.clone();
+            self.engine_mut().prepare_environment(&config)?;
+            self.environment_ready = true;
+            prepared_now = true;
+        }
+
+        {
+            let js = self.engine_mut().js_mut();
+            js.set_network_policy(&[], true);
+        }
+
+        if prepared_now && self.config.warm_state.is_some() && !self.warm_restored {
+            if let Some(hook) = self.config.hooks.after_warm_restore.clone() {
+                hook(self)?;
+            }
+            self.warm_restored = true;
+        }
+
+        Ok(())
     }
 
     pub fn cleanup_filesystem(&mut self) {
@@ -549,6 +686,7 @@ impl AardvarkRuntime {
             runtime_id = self.runtime_id_str()
         );
         let _guard = span.enter();
+        let start = Instant::now();
         if let Some(token) = env::var_os("AARDVARK_TEST_FORCE_RESET_FAILURE") {
             env::remove_var("AARDVARK_TEST_FORCE_RESET_FAILURE");
             let label = token
@@ -569,7 +707,80 @@ impl AardvarkRuntime {
             drop(old);
         }
         self.engine = Some(create_engine(language, &self.config)?);
+        self.engine_generation = self.engine_generation.saturating_add(1);
+        let summary = ResetSummary {
+            mode: ResetMode::RecreateEngine,
+            duration_ms: start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+            engine_generation: self.engine_generation,
+        };
+        info!(
+            target: "aardvark::runtime",
+            runtime_id = self.runtime_id_str(),
+            reset.mode = ?summary.mode,
+            reset.duration_ms = summary.duration_ms,
+            reset.engine_generation = summary.engine_generation,
+            "reset recorded"
+        );
+        self.pending_reset_summary = Some(summary);
         self.warm_restored = false;
+        self.environment_ready = false;
+        self.current_bundle = None;
+        Ok(())
+    }
+
+    /// Resets the runtime by rebuilding the language engine in place without dropping the isolate.
+    pub fn reset_in_place(&mut self) -> Result<()> {
+        let span = info_span!(
+            target: "aardvark::runtime",
+            "runtime.reset_in_place",
+            runtime_id = self.runtime_id_str()
+        );
+        let _guard = span.enter();
+        let start = Instant::now();
+        let language = self
+            .engine
+            .as_ref()
+            .map(|engine| engine.language())
+            .unwrap_or(self.config.default_language);
+        if let Some(engine) = self.engine.as_mut() {
+            engine.reset_in_place(&self.config)?;
+            let summary = ResetSummary {
+                mode: ResetMode::InPlace,
+                duration_ms: start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                engine_generation: self.engine_generation,
+            };
+            info!(
+                target: "aardvark::runtime",
+                runtime_id = self.runtime_id_str(),
+                reset.mode = ?summary.mode,
+                reset.duration_ms = summary.duration_ms,
+                reset.engine_generation = summary.engine_generation,
+                "reset recorded"
+            );
+            self.pending_reset_summary = Some(summary);
+        } else {
+            self.engine = Some(create_engine(language, &self.config)?);
+            self.engine_generation = self.engine_generation.saturating_add(1);
+            let summary = ResetSummary {
+                mode: ResetMode::RecreateEngine,
+                duration_ms: start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                engine_generation: self.engine_generation,
+            };
+            info!(
+                target: "aardvark::runtime",
+                runtime_id = self.runtime_id_str(),
+                reset.mode = ?summary.mode,
+                reset.duration_ms = summary.duration_ms,
+                reset.engine_generation = summary.engine_generation,
+                "reset recorded"
+            );
+            self.pending_reset_summary = Some(summary);
+            self.warm_restored = false;
+            return Ok(());
+        }
+        self.warm_restored = false;
+        self.environment_ready = false;
+        self.current_bundle = None;
         Ok(())
     }
 
@@ -577,11 +788,29 @@ impl AardvarkRuntime {
         if self.engine.as_ref().map(|engine| engine.language()) == Some(language) {
             return Ok(());
         }
+        let start = Instant::now();
         if let Some(old) = self.engine.take() {
             drop(old);
         }
         self.engine = Some(create_engine(language, &self.config)?);
+        self.engine_generation = self.engine_generation.saturating_add(1);
+        let summary = ResetSummary {
+            mode: ResetMode::RecreateEngine,
+            duration_ms: start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+            engine_generation: self.engine_generation,
+        };
+        info!(
+            target: "aardvark::runtime",
+            runtime_id = self.runtime_id_str(),
+            reset.mode = ?summary.mode,
+            reset.duration_ms = summary.duration_ms,
+            reset.engine_generation = summary.engine_generation,
+            "reset recorded"
+        );
+        self.pending_reset_summary = Some(summary);
         self.warm_restored = false;
+        self.environment_ready = false;
+        self.current_bundle = None;
         Ok(())
     }
 
@@ -761,9 +990,37 @@ impl AardvarkRuntime {
         Ok(())
     }
 
-    fn finish_with_cleanup(&mut self, outcome: ExecutionOutcome) -> Result<ExecutionOutcome> {
+    fn finish_with_cleanup(
+        &mut self,
+        outcome: ExecutionOutcome,
+        cleanup_entrypoint: Option<&str>,
+    ) -> Result<ExecutionOutcome> {
+        if let Some(module) = cleanup_entrypoint.and_then(module_from_entrypoint) {
+            self.cleanup_python_module(module);
+        }
+        if let Err(err) = self.engine_mut().js_mut().reset_shared_buffers() {
+            warn!(
+                target: "aardvark::sandbox",
+                runtime_id = self.runtime_id_str(),
+                error = %err,
+                "reset shared buffers failed"
+            );
+        }
         self.cleanup_filesystem();
         Ok(outcome)
+    }
+
+    fn cleanup_python_module(&mut self, module: &str) {
+        let script = format!("import gc, sys\nsys.modules.pop({module:?}, None)\ngc.collect()\n");
+        if let Err(err) = self.engine_mut().js_mut().run_python_snippet(&script) {
+            warn!(
+                target: "aardvark::runtime",
+                runtime_id = self.runtime_id_str(),
+                module,
+                error = %err,
+                "module cleanup failed"
+            );
+        }
     }
 
     fn make_diagnostics(
@@ -796,6 +1053,13 @@ impl AardvarkRuntime {
         diagnostics.network_hosts_contacted = collected.network_hosts_contacted.clone();
         diagnostics.network_hosts_blocked = collected.network_hosts_blocked.clone();
         diagnostics.filesystem_violations = collected.filesystem_violations.clone();
+        diagnostics.reset = collected.reset_summary.clone();
+        diagnostics.queue_wait_ms = collected.queue_wait_ms;
+        diagnostics.prepare_ms = collected.prepare_ms;
+        diagnostics.cleanup_ms = collected.cleanup_ms;
+        diagnostics.py_heap_kib = collected.py_heap_kib;
+        diagnostics.rss_kib_before = collected.rss_kib_before;
+        diagnostics.rss_kib_after = collected.rss_kib_after;
         diagnostics
     }
 
@@ -855,6 +1119,23 @@ impl AardvarkRuntime {
                 "filesystem policy violation"
             );
         }
+    }
+}
+
+fn module_from_entrypoint(entrypoint: &str) -> Option<&str> {
+    let trimmed = entrypoint.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let module_part = trimmed
+        .split_once(':')
+        .map(|(module, _)| module)
+        .unwrap_or(trimmed);
+    let module_trimmed = module_part.trim();
+    if module_trimmed.is_empty() {
+        None
+    } else {
+        Some(module_trimmed)
     }
 }
 

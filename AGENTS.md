@@ -1,11 +1,11 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `crates/aardvark-core/`: primary runtime library embedding Pyodide and managing sandbox policies. Submodules cover assets (`src/js/`, `src/py/`), manifest parsing, pooling, and invocation strategies.
+- `crates/aardvark-core/`: primary runtime library embedding [Pyodide](https://pyodide.org/) and managing sandbox policies. Submodules cover assets (`src/js/`, `src/py/`), manifest parsing, pooling, and invocation strategies.
 - `crates/aardvark-cli/`: developer CLI that exercises the core library end to end.
 - `integration-tests/`: slower overlay and pooling scenarios that rely on prepared caches.
 - `docs/`: public architecture/API references and `docs/dev/` for contributor workflow notes.
-- `scripts/` and `tmp/`: helper tooling and cached artifacts (Pyodide wheels, overlays).
+- `scripts/` and `.aardvark/`: helper tooling plus developer-managed caches ([Pyodide](https://pyodide.org/) wheels, overlays). The `.aardvark/pyodide/<version>` directory is ignored by git and should contain the flattened [Pyodide](https://pyodide.org/) release you stage locally.
 
 ## Build, Test, and Development Commands
 - `cargo build -p aardvark-core`: compile the runtime library; run before editing JS shims to confirm bindings.
@@ -15,7 +15,7 @@
 
 ## Coding Style & Naming Conventions
 - Rust: standard `rustfmt` (4-space indentation). Prefer descriptive module names (`runtime_lifecycle.rs` over `rt.rs`) and snake_case for files/functions.
-- JavaScript assets: ES modules targeting the bundled V8; keep ASCII-only strings for `include_str!` compatibility.
+- JavaScript assets: ES modules targeting the bundled [V8](https://v8.dev/); keep ASCII-only strings for `include_str!` compatibility.
 - Documentation: use Markdown headings, concise paragraphs, and place developer-facing notes in `docs/dev/`.
 
 ## Testing Guidelines
