@@ -9,6 +9,7 @@ use crate::session::PySession;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{self, Map as JsonMap, Value as JsonValue};
+use std::sync::Arc;
 use v8;
 
 /// Shared context passed to invocation strategies during a single invocation.
@@ -427,20 +428,15 @@ del _js, _buffers, _view, _buffer, _memory, _meta, _meta_source, builtins
 
     fn install_auto_wrapper(&self, ctx: &mut InvocationContext<'_>) -> Result<()> {
         let session = ctx.session();
-        let spec = build_rawctx_auto_spec(session)?;
-        if let Some(spec) = spec {
-            let payload = serde_json::to_string(&spec).map_err(|err| {
-                PyRunnerError::Execution(format!(
-                    "failed to serialise rawctx auto-wrapper spec: {err}"
-                ))
-            })?;
-            let safe_payload = payload.replace("'''", "\\'\\'\\'");
-            let script = format!(
-                "{prelude}\n",
-                prelude = RAWCTX_AUTO_WRAPPER_SNIPPET.replace("{spec_json}", &safe_payload)
-            );
-            ctx.runtime().run_python_snippet(&script)?;
-        }
+        let Some(spec_json) = cached_rawctx_spec(session)? else {
+            return Ok(());
+        };
+        let safe_payload = spec_json.replace("'''", "\\'\\'\\'");
+        let script = format!(
+            "{prelude}\n",
+            prelude = RAWCTX_AUTO_WRAPPER_SNIPPET.replace("{spec_json}", &safe_payload)
+        );
+        ctx.runtime().run_python_snippet(&script)?;
         Ok(())
     }
 }
@@ -502,14 +498,9 @@ impl RawCtxInvocationStrategy {
         if ctx.language() != RuntimeLanguage::JavaScript {
             return Ok(());
         }
-        let spec = build_rawctx_auto_spec(ctx.session())?;
-        let script = if let Some(spec) = spec {
-            let payload = serde_json::to_string(&spec).map_err(|err| {
-                PyRunnerError::Execution(format!(
-                    "failed to serialize rawctx auto-wrapper spec: {err}"
-                ))
-            })?;
-            format!("globalThis.__aardvarkSetRawctxSpec({payload});")
+        let spec_json = cached_rawctx_spec(ctx.session())?;
+        let script = if let Some(spec_json) = spec_json {
+            format!("globalThis.__aardvarkSetRawctxSpec({spec_json});")
         } else {
             "globalThis.__aardvarkSetRawctxSpec(null);".to_string()
         };
@@ -1366,6 +1357,23 @@ fn merge_metadata(target: &mut JsonValue, incoming: JsonValue) {
             *target_value = incoming_value;
         }
     }
+}
+
+fn cached_rawctx_spec(session: &PySession) -> Result<Option<Arc<String>>> {
+    session.rawctx_spec_json(|| {
+        let spec = build_rawctx_auto_spec(session)?;
+        match spec {
+            Some(spec) => {
+                let json = serde_json::to_string(&spec).map_err(|err| {
+                    PyRunnerError::Execution(format!(
+                        "failed to serialise rawctx auto-wrapper spec: {err}"
+                    ))
+                })?;
+                Ok(Some(json))
+            }
+            None => Ok(None),
+        }
+    })
 }
 
 #[derive(Clone, Debug, Serialize)]
