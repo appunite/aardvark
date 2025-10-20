@@ -2548,6 +2548,25 @@ export async function loadPyRunnerPyodide(options = {}) {
     metadata: Object.create(null),
   };
 
+  function attachBufferId(view, id) {
+    if (!view || typeof view !== "object") {
+      return;
+    }
+    if (Object.prototype.hasOwnProperty.call(view, "__aardvarkBufferId") && view.__aardvarkBufferId === id) {
+      return;
+    }
+    try {
+      Object.defineProperty(view, "__aardvarkBufferId", {
+        value: id,
+        enumerable: false,
+        configurable: true,
+        writable: false,
+      });
+    } catch (_err) {
+      view.__aardvarkBufferId = id;
+    }
+  }
+
   function normalizeSharedBufferInput(value) {
     if (value == null) {
       throw new TypeError("shared buffer payload must be provided");
@@ -2562,14 +2581,15 @@ export async function loadPyRunnerPyodide(options = {}) {
       return { view: candidate, proxy };
     }
     if (ArrayBuffer.isView(candidate)) {
-      return {
-        view: new Uint8Array(
-          candidate.buffer,
-          candidate.byteOffset ?? 0,
-          candidate.byteLength ?? candidate.length ?? 0
-        ),
-        proxy,
-      };
+      const slice = new Uint8Array(
+        candidate.buffer,
+        candidate.byteOffset ?? 0,
+        candidate.byteLength ?? candidate.length ?? 0
+      );
+      if (Object.prototype.hasOwnProperty.call(candidate, "__aardvarkBufferId")) {
+        attachBufferId(slice, candidate.__aardvarkBufferId);
+      }
+      return { view: slice, proxy };
     }
     if (candidate instanceof ArrayBuffer) {
       return { view: new Uint8Array(candidate), proxy };
@@ -2598,14 +2618,77 @@ export async function loadPyRunnerPyodide(options = {}) {
     return value;
   }
 
-globalThis.__aardvarkPublishBuffer = function (bufferId, data, metadata) {
+  globalThis.__aardvarkAcquireOutputBuffer = function (bufferId, size, metadata) {
     requireCapability("rawctx_buffers");
+    const length = Number(size);
+    if (!Number.isFinite(length)) {
+      throw new TypeError("size must be a finite number");
+    }
+    if (length < 0) {
+      throw new RangeError("size must be non-negative");
+    }
+    const byteLength = Math.trunc(length);
     const assigned =
       bufferId != null && bufferId !== ""
         ? String(bufferId)
         : `buffer-${sharedBufferState.nextId++}`;
-    const { view, proxy } = normalizeSharedBufferInput(data);
+    const backing = typeof SharedArrayBuffer !== "undefined"
+      ? new SharedArrayBuffer(byteLength)
+      : new ArrayBuffer(byteLength);
+    const view = new Uint8Array(backing);
+    attachBufferId(view, assigned);
     const metaObject = normalizeMetadataInput(metadata);
+    sharedBufferState.map.set(assigned, {
+      view,
+      proxy: null,
+      metadata: metaObject,
+    });
+    if (typeof globalThis.__aardvarkRecordBufferEvent === "function") {
+      try {
+        globalThis.__aardvarkRecordBufferEvent("acquire", assigned, view.byteLength, metaObject ?? null);
+      } catch (err) {
+        console.warn("[aardvark] failed to record buffer acquire event", err);
+      }
+    }
+    return view;
+  };
+
+  globalThis.__aardvarkPublishBuffer = function (bufferId, data, metadata) {
+    requireCapability("rawctx_buffers");
+    const explicitId = bufferId != null && bufferId !== "" ? String(bufferId) : null;
+    const metaObject = normalizeMetadataInput(metadata);
+
+    let candidateId = null;
+    if (data && typeof data === "object" && Object.prototype.hasOwnProperty.call(data, "__aardvarkBufferId")) {
+      candidateId = String(data.__aardvarkBufferId);
+    }
+
+    const assigned = explicitId ?? candidateId ?? `buffer-${sharedBufferState.nextId++}`;
+
+    if (candidateId && sharedBufferState.map.has(candidateId)) {
+      const entry = sharedBufferState.map.get(candidateId);
+      if (entry) {
+        if (metaObject !== null) {
+          entry.metadata = metaObject;
+        }
+        if (typeof globalThis.__aardvarkRecordBufferEvent === "function") {
+          try {
+            globalThis.__aardvarkRecordBufferEvent(
+              "publish",
+              candidateId,
+              entry.view?.byteLength ?? 0,
+              entry.metadata ?? null,
+            );
+          } catch (err) {
+            console.warn("[aardvark] failed to record buffer publish event", err);
+          }
+        }
+        return candidateId;
+      }
+    }
+
+    const { view, proxy } = normalizeSharedBufferInput(data);
+    attachBufferId(view, assigned);
     sharedBufferState.map.set(assigned, {
       view,
       proxy: proxy ?? null,

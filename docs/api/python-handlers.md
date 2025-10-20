@@ -79,6 +79,8 @@ RawCtx exposes structured columnar data and shared-memory buffers. Example descr
 
 Python can access the derived metadata via the `meta` argument if the descriptor requests it. RawCtx is useful for high-volume data ingestion because it avoids per-row Python decoding.
 
+For zero-copy outputs, allocate buffers via `builtins.__aardvark_output_buffer(size, *, id=None, metadata=None)`. The helper returns a `memoryview` backed by the runtime's `SharedArrayBuffer`, so filling it in-place and returning it avoids extra copies when `transform="memoryview"`.
+
 ## Error handling inside handlers
 
 - Raise exceptions to signal failure. The runtime captures `type`, `value`, and traceback.

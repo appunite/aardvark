@@ -1984,6 +1984,29 @@ import builtins, importlib, json
 
 __aardvark_rawctx_spec = json.loads(r'''{spec_json}''')
 
+def __aardvark__acquire_output_buffer(size, *, id=None, metadata=None):
+    if size is None:
+        raise ValueError("size is required")
+    length = int(size)
+    if length < 0:
+        raise ValueError("size must be non-negative")
+    from js import globalThis as _js
+    view = _js.__aardvarkAcquireOutputBuffer(id, length, metadata)
+    if hasattr(view, "to_py"):
+        py_view = view.to_py()
+    else:
+        try:
+            from pyodide.ffi import to_py
+
+            py_view = to_py(view)
+        except ImportError:
+            py_view = view
+    if isinstance(py_view, memoryview):
+        return py_view
+    return memoryview(py_view)
+
+builtins.__aardvark_output_buffer = __aardvark__acquire_output_buffer
+
 def __aardvark__decode_rawctx(binding, payload):
     value, metadata, raw_payload = __aardvark__decode_scalar(binding, payload)
     table_spec = binding.get("table")

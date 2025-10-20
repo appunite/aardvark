@@ -43,6 +43,7 @@ fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_prepare_session_with_manifest_defaults()?;
     verify_rawctx_auto_wrapper()?;
     verify_rawctx_multi_output_publish()?;
+    verify_rawctx_preallocated_output_buffer()?;
     verify_rawctx_table_records()?;
     verify_rawctx_table_missing_column()?;
     verify_rawctx_table_column_decoder()?;
@@ -1426,6 +1427,47 @@ def handler():
                 .and_then(|value| value.as_str())
                 .unwrap_or_default();
             assert_eq!(blob_kind, "bytes");
+        }
+        other => panic!("unexpected payload variant: {:?}", other),
+    }
+
+    Ok(())
+}
+
+fn verify_rawctx_preallocated_output_buffer() -> Result<()> {
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let bundle = bundle_with_main(
+        r#"
+def handler():
+    buf = __aardvark_output_buffer(4, id="payload")
+    buf[:] = b"pong"
+    return buf
+"#,
+    );
+
+    let mut descriptor = InvocationDescriptor::new("main:handler");
+    descriptor.outputs.push(FieldDescriptor {
+        name: "payload".to_owned(),
+        type_tag: None,
+        metadata: Some(
+            RawCtxPublishBuilder::new("payload")
+                .transform("memoryview")
+                .metadata(json!({"kind": "bytes"}))
+                .build(),
+        ),
+    });
+
+    let session = runtime.prepare_session_with_descriptor(bundle, descriptor)?;
+    let mut strategy = RawCtxInvocationStrategy::default();
+    let outcome = runtime.run_session_with_strategy(&session, &mut strategy)?;
+
+    match &outcome.status {
+        OutcomeStatus::Success(ResultPayload::SharedBuffers(buffers)) => {
+            assert_eq!(buffers.len(), 1);
+            let handle = &buffers[0];
+            assert_eq!(handle.id, "payload");
+            let bytes = handle.as_slice().expect("shared buffer should retain data");
+            assert_eq!(bytes, b"pong");
         }
         other => panic!("unexpected payload variant: {:?}", other),
     }
