@@ -726,7 +726,11 @@ fn descriptor_for(
                     .build(),
                 Scenario::Pandas => RawCtxPublishBuilder::new("pandas-output")
                     .transform("memoryview")
-                    .metadata(json!({"scenario": "pandas", "profile": _profile.name()}))
+                    .metadata(json!({
+                        "format": "i32_f64_pairs",
+                        "fields": ["category", "value_mean"],
+                        "profile": _profile.name(),
+                    }))
                     .build(),
             };
             descriptor.outputs.push(FieldDescriptor {

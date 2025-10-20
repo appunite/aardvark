@@ -1,5 +1,6 @@
 import builtins
 import json
+import struct
 from typing import Optional
 
 import numpy as np
@@ -55,11 +56,21 @@ def _summary(rows: int):
 
 
 def _publish_raw(summary):
-    payload = json.dumps(summary, separators=(",", ":")).encode("utf-8")
+    items = sorted(summary.items())
     factory = getattr(builtins, "__aardvark_output_buffer", None)
     if callable(factory):
-        buffer = factory(len(payload), id="pandas-output")
-        buffer[: len(payload)] = payload
+        count = len(items)
+        size = 4 + count * 12  # u32 count + repeated (i32, f64) pairs
+        metadata = {
+            "format": "i32_f64_pairs",
+            "fields": ["category", "value_mean"],
+        }
+        buffer = factory(size, id="pandas-output", metadata=metadata)
+        struct.pack_into("<I", buffer, 0, count)
+        offset = 4
+        for category, value in items:
+            struct.pack_into("<id", buffer, offset, int(category), float(value))
+            offset += 12
         return buffer
     return summary
 
