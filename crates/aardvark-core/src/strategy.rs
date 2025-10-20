@@ -394,6 +394,10 @@ impl RawCtxInvocationStrategy {
         static PRELUDE: &str = r#"
 from js import globalThis as _js
 import builtins
+try:
+    from pyodide.ffi import to_memoryview as _aardvark_to_memoryview
+except ImportError:
+    _aardvark_to_memoryview = None
 
 __aardvark_rawctx_inputs = {}
 if hasattr(_js, "__aardvarkInputBuffers"):
@@ -402,18 +406,30 @@ if hasattr(_js, "__aardvarkInputBuffers"):
     if hasattr(_js, "__aardvarkInputMetadata"):
         _meta_source = _js.__aardvarkInputMetadata.to_py()
     _view = None
-    _buffer = None
     _memory = None
     _meta = None
+    _candidate = None
     for _name, _view in _buffers.items():
-        if hasattr(_view, "to_py"):
-            _buffer = _view.to_py()
-        else:
-            _buffer = _view
-        try:
-            _memory = memoryview(_buffer)
-        except TypeError:
-            _memory = memoryview(bytearray(_buffer))
+        _memory = None
+        if hasattr(_view, "to_memoryview"):
+            try:
+                _memory = _view.to_memoryview()
+            except TypeError:
+                _memory = None
+        if _memory is None and _aardvark_to_memoryview is not None:
+            try:
+                _memory = _aardvark_to_memoryview(_view)
+            except TypeError:
+                _memory = None
+        if _memory is None:
+            if hasattr(_view, "to_py"):
+                _candidate = _view.to_py()
+            else:
+                _candidate = _view
+            try:
+                _memory = memoryview(_candidate)
+            except TypeError:
+                _memory = memoryview(bytearray(_candidate))
         _meta = None
         if isinstance(_meta_source, dict):
             _meta = _meta_source.get(_name)
@@ -421,7 +437,7 @@ if hasattr(_js, "__aardvarkInputBuffers"):
                 _meta = _meta.to_py()
         __aardvark_rawctx_inputs[_name] = {"data": _memory, "metadata": _meta}
 builtins.__aardvark_rawctx_inputs = __aardvark_rawctx_inputs
-del _js, _buffers, _view, _buffer, _memory, _meta, _meta_source, builtins
+del _js, _buffers, _view, _memory, _meta, _meta_source, _aardvark_to_memoryview, _candidate, builtins
 "#;
         ctx.runtime().run_python_snippet(PRELUDE)
     }

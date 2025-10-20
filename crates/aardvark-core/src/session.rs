@@ -40,11 +40,10 @@ impl PySession {
     where
         F: FnOnce() -> Result<Option<String>, E>,
     {
-        Ok(
-            self.rawctx_spec_json
-                .get_or_try_init(|| build().map(|value| value.map(Arc::new)))?
-                .clone(),
-        )
+        Ok(self
+            .rawctx_spec_json
+            .get_or_try_init(|| build().map(|value| value.map(Arc::new)))?
+            .clone())
     }
 
     /// Returns a simple manifest of the bundle contents.
