@@ -60,6 +60,10 @@ pub struct PoolTelemetry {
     pub average_queue_wait_ms: f64,
     pub queue_wait_p50_ms: Option<f64>,
     pub queue_wait_p95_ms: Option<f64>,
+    pub quarantine_events: u64,
+    pub quarantine_heap_hits: u64,
+    pub quarantine_rss_hits: u64,
+    pub scaledown_events: u64,
 }
 
 impl From<&Diagnostics> for SandboxTelemetry {
@@ -115,6 +119,10 @@ impl From<&PoolStats> for PoolTelemetry {
             average_queue_wait_ms: stats.average_queue_wait_ms,
             queue_wait_p50_ms: stats.queue_wait_p50_ms,
             queue_wait_p95_ms: stats.queue_wait_p95_ms,
+            quarantine_events: stats.quarantine_events,
+            quarantine_heap_hits: stats.quarantine_heap_hits,
+            quarantine_rss_hits: stats.quarantine_rss_hits,
+            scaledown_events: stats.scaledown_events,
         }
     }
 }

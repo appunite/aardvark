@@ -106,7 +106,10 @@ fn pooled_calls(bytes: &[u8]) -> anyhow::Result<()> {
             heap_limit_kib: Some(256 * 1024),
             memory_limit_kib: Some(512 * 1024),
             lifecycle_hooks: Some(LifecycleHooks {
-                on_isolate_started: Some(Arc::new(|id| tracing::debug!(isolate_id = id, "started"))),
+                on_isolate_started: Some(Arc::new(|id, _cfg| tracing::debug!(isolate_id = id, "started"))),
+                on_isolate_recycled: Some(Arc::new(|id, reason| {
+                    tracing::debug!(isolate_id = id, ?reason, "recycled")
+                })),
                 ..Default::default()
             }),
             ..PoolOptions::default()
@@ -129,6 +132,8 @@ fn pooled_calls(bytes: &[u8]) -> anyhow::Result<()> {
         invocations = stats.invocations,
         avg_ms = stats.average_queue_wait_ms,
         p95_ms = stats.queue_wait_p95_ms,
+        quarantine_events = stats.quarantine_events,
+        scaledown_events = stats.scaledown_events,
     );
     Ok(())
 }
@@ -136,13 +141,14 @@ fn pooled_calls(bytes: &[u8]) -> anyhow::Result<()> {
 
 Key `PoolOptions` knobs:
 
-- **Concurrency** – `desired_size` (initial isolates) and `max_size` (upper bound). Calls queue when all isolates are busy.
+- **Concurrency** – `desired_size` (initial isolates) and `max_size` (upper bound). Calls queue when all isolates are busy; hosts can adjust concurrency at runtime via `BundlePool::set_desired_size` or `BundlePool::resize`.
 - **Queueing behaviour** – `queue_mode::Block` waits until an isolate is free; `queue_mode::FailFast` surfaces `PoolQueueFull` immediately. `max_queue` caps queued calls.
 - **Resource guard rails** – `heap_limit_kib` and `memory_limit_kib` quarantine isolates that exceed the configured budgets.
 - **Lifecycle hooks** – `LifecycleHooks` expose `on_isolate_started`, `on_isolate_recycled`, `on_call_started`, and `on_call_finished` so hosts can attach custom monitoring.
+  `on_isolate_recycled` receives a `RecycleReason` so you can distinguish between normal reuse, guard-rail quarantines, scale downs, and shutdowns.
 - **Telemetry flushing** – `telemetry_interval` controls the background reporter that logs queue depth/percentiles to `tracing` (`aardvark::telemetry`). Set it to `None` to disable periodic emission if you prefer to poll stats manually.
 
-`PoolStats` now reports invocation counts, average queue wait, and queue wait percentiles. `ExecutionOutcome` diagnostics capture per-call queue wait, heap usage, and (on Linux and macOS) RSS snapshots so hosts can alert when an invocation runs close to the limits.
+`PoolStats` now reports invocation counts, average queue wait, queue wait percentiles, and guard-rail counters (total quarantines, heap-triggered quarantines, RSS-triggered quarantines, and scale-down events). `ExecutionOutcome` diagnostics capture per-call queue wait, heap usage, and (on Linux and macOS) RSS snapshots so hosts can alert when an invocation runs close to the limits.
 
 ```rust
 let pool_telemetry = PoolTelemetry::from(&pool.stats());
@@ -150,6 +156,7 @@ metrics::gauge!("aardvark.pool.isolates.total", pool_telemetry.total_isolates as
 if let Some(p95) = pool_telemetry.queue_wait_p95_ms {
     metrics::histogram!("aardvark.pool.queue_wait_p95_ms", p95);
 }
+metrics::counter!("aardvark.pool.quarantine.total", pool_telemetry.quarantine_events as u64);
 ```
 
 ### Migrating from `PyRuntimePool`

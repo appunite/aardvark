@@ -61,7 +61,7 @@ for denied in telemetry.network.blocked.iter() {
 }
 ```
 
-`SandboxTelemetry::has_policy_violations()` is a quick guard for alerting. Pair it with `PoolTelemetry::from(&pool.stats())` if you want to publish aggregate queue metrics.
+`SandboxTelemetry::has_policy_violations()` is a quick guard for alerting. Pair it with `PoolTelemetry::from(&pool.stats())` if you want to publish aggregate queue metrics and guard-rail counters (total quarantines, heap-triggered quarantines, RSS-triggered quarantines, and scale-down events).
 
 ## Handling policy breaches gracefully
 

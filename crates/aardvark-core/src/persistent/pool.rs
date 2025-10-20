@@ -7,6 +7,7 @@ use crate::strategy::RawCtxInput;
 use hdrhistogram::Histogram;
 use parking_lot::{Condvar, Mutex};
 use serde_json::Value as JsonValue;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -85,17 +86,34 @@ impl PoolOptions {
     }
 }
 
-type IsolateCallback = Arc<dyn Fn(IsolateId) + Send + Sync>;
+type IsolateStartCallback = Arc<dyn Fn(IsolateId, &IsolateConfig) + Send + Sync>;
+type IsolateRecycleCallback = Arc<dyn Fn(IsolateId, &RecycleReason) + Send + Sync>;
 type CallStartedCallback = Arc<dyn Fn(&CallContext) + Send + Sync>;
 type CallFinishedCallback = Arc<dyn for<'a> Fn(&CallContext, CallOutcome<'a>) + Send + Sync>;
 
 /// Lifecycle hooks invoked during pool operations.
 #[derive(Clone, Default)]
 pub struct LifecycleHooks {
-    pub on_isolate_started: Option<IsolateCallback>,
-    pub on_isolate_recycled: Option<IsolateCallback>,
+    pub on_isolate_started: Option<IsolateStartCallback>,
+    pub on_isolate_recycled: Option<IsolateRecycleCallback>,
     pub on_call_started: Option<CallStartedCallback>,
     pub on_call_finished: Option<CallFinishedCallback>,
+}
+
+/// Reason describing why an isolate left active service.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RecycleReason {
+    /// The isolate completed work and returned to the idle pool.
+    ReturnedToIdle,
+    /// The isolate exceeded a guard rail and was quarantined.
+    Quarantined {
+        exceeded_heap: bool,
+        exceeded_rss: bool,
+    },
+    /// The pool scaled down and explicitly dropped this isolate.
+    ScaledDown,
+    /// The pool shut down and is releasing all isolates.
+    Shutdown,
 }
 
 /// Outcome provided to hook callbacks once a call completes.
@@ -158,6 +176,10 @@ pub struct PoolStats {
     pub average_queue_wait_ms: f64,
     pub queue_wait_p50_ms: Option<f64>,
     pub queue_wait_p95_ms: Option<f64>,
+    pub quarantine_events: u64,
+    pub quarantine_heap_hits: u64,
+    pub quarantine_rss_hits: u64,
+    pub scaledown_events: u64,
 }
 
 /// Bundle-scoped pool managing a reusable isolate.
@@ -187,6 +209,10 @@ struct PoolSharedMetrics {
     active: AtomicUsize,
     idle: AtomicUsize,
     waiting: AtomicUsize,
+    quarantine_total: AtomicU64,
+    quarantine_heap: AtomicU64,
+    quarantine_rss: AtomicU64,
+    scaledown_total: AtomicU64,
 }
 
 impl PoolSharedMetrics {
@@ -195,6 +221,10 @@ impl PoolSharedMetrics {
             active: AtomicUsize::new(0),
             idle: AtomicUsize::new(0),
             waiting: AtomicUsize::new(0),
+            quarantine_total: AtomicU64::new(0),
+            quarantine_heap: AtomicU64::new(0),
+            quarantine_rss: AtomicU64::new(0),
+            scaledown_total: AtomicU64::new(0),
         }
     }
 
@@ -232,6 +262,36 @@ impl PoolSharedMetrics {
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_sub(1)
             });
+    }
+
+    fn inc_quarantine(&self, exceeded_heap: bool, exceeded_rss: bool) {
+        self.quarantine_total.fetch_add(1, Ordering::Relaxed);
+        if exceeded_heap {
+            self.quarantine_heap.fetch_add(1, Ordering::Relaxed);
+        }
+        if exceeded_rss {
+            self.quarantine_rss.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn add_scaledown(&self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        self.scaledown_total
+            .fetch_add(count as u64, Ordering::Relaxed);
+    }
+
+    fn quarantine_counts(&self) -> (u64, u64, u64) {
+        (
+            self.quarantine_total.load(Ordering::Relaxed),
+            self.quarantine_heap.load(Ordering::Relaxed),
+            self.quarantine_rss.load(Ordering::Relaxed),
+        )
+    }
+
+    fn scaledown_count(&self) -> u64 {
+        self.scaledown_total.load(Ordering::Relaxed)
     }
 }
 
@@ -279,6 +339,9 @@ impl TelemetryHandle {
                     let idle = metrics.idle.load(Ordering::Relaxed);
                     let waiting = metrics.waiting.load(Ordering::Relaxed);
                     let busy = total.saturating_sub(idle);
+                    let (quarantine_total, quarantine_heap, quarantine_rss) =
+                        metrics.quarantine_counts();
+                    let scaledown = metrics.scaledown_count();
                     let invocations = snapshot.invocations;
                     if (invocations != last_invocations || waiting > 0)
                         && tracing::enabled!(tracing::Level::INFO)
@@ -293,6 +356,10 @@ impl TelemetryHandle {
                             avg_queue_wait_ms = snapshot.average_queue_wait_ms,
                             queue_wait_p50_ms = snapshot.queue_wait_p50_ms,
                             queue_wait_p95_ms = snapshot.queue_wait_p95_ms,
+                            quarantine_events = quarantine_total,
+                            quarantine_heap_hits = quarantine_heap,
+                            quarantine_rss_hits = quarantine_rss,
+                            scaledown_events = scaledown,
                             "pool.telemetry"
                         );
                     }
@@ -469,6 +536,9 @@ impl BundlePool {
         let idle = state.idle.len();
         let waiting = state.waiting;
         let busy = total.saturating_sub(idle);
+        let (quarantine_events, quarantine_heap_hits, quarantine_rss_hits) =
+            self.inner.metrics.quarantine_counts();
+        let scaledown_events = self.inner.metrics.scaledown_count();
         PoolStats {
             total,
             idle,
@@ -478,6 +548,10 @@ impl BundlePool {
             average_queue_wait_ms: snapshot.average_queue_wait_ms,
             queue_wait_p50_ms: snapshot.queue_wait_p50_ms,
             queue_wait_p95_ms: snapshot.queue_wait_p95_ms,
+            quarantine_events,
+            quarantine_heap_hits,
+            quarantine_rss_hits,
+            scaledown_events,
         }
     }
 
@@ -489,15 +563,7 @@ impl BundlePool {
             ));
         }
 
-        {
-            let state = self.inner.state.lock();
-            if new_max_size < state.active {
-                return Err(PyRunnerError::Validation(format!(
-                    "cannot shrink pool to {new_max_size} isolates while {active} are active",
-                    active = state.active
-                )));
-            }
-        }
+        self.inner.shrink_to(new_max_size)?;
 
         let desired = {
             let mut opts = self.inner.options.lock();
@@ -509,6 +575,33 @@ impl BundlePool {
         };
 
         self.inner.ensure_min_isolates(desired)?;
+        Ok(())
+    }
+
+    /// Sets the desired steady-state isolate count.
+    pub fn set_desired_size(&self, desired_size: usize) -> Result<()> {
+        if desired_size == 0 {
+            return Err(PyRunnerError::Validation(
+                "pool desired_size must be at least 1".to_string(),
+            ));
+        }
+
+        {
+            let max_size = { self.inner.options.lock().max_size };
+            if desired_size > max_size {
+                return Err(PyRunnerError::Validation(format!(
+                    "desired_size {desired_size} exceeds max_size {max_size}",
+                )));
+            }
+        }
+
+        {
+            let mut opts = self.inner.options.lock();
+            opts.desired_size = desired_size;
+        }
+
+        self.inner.ensure_min_isolates(desired_size)?;
+        self.inner.shrink_to(desired_size)?;
         Ok(())
     }
 
@@ -577,7 +670,8 @@ impl BundlePool {
                     outcome.diagnostics.rss_kib_after = rss_after;
                 }
 
-                let mut quarantine = false;
+                let mut exceeded_heap = false;
+                let mut exceeded_rss = false;
                 if let Some(limit) = heap_limit_kib {
                     if outcome
                         .diagnostics
@@ -585,21 +679,27 @@ impl BundlePool {
                         .filter(|heap| *heap > limit)
                         .is_some()
                     {
-                        quarantine = true;
+                        exceeded_heap = true;
                     }
                 }
                 if let Some(limit) = memory_limit_kib {
                     if rss_after.filter(|rss| *rss > limit).is_some() {
-                        quarantine = true;
+                        exceeded_rss = true;
                     }
                 }
 
-                if quarantine {
-                    if let Some(id) = self.inner.quarantine_slot(guard.index()) {
+                if exceeded_heap || exceeded_rss {
+                    let reason = RecycleReason::Quarantined {
+                        exceeded_heap,
+                        exceeded_rss,
+                    };
+                    if let Some(id) = self.inner.quarantine_slot(guard.index(), reason.clone()) {
                         warn!(
                             target: "aardvark::pool",
                             isolate_id = id,
                             bundle = bundle_hex.as_str(),
+                            exceeded_heap,
+                            exceeded_rss,
                             "quarantining isolate after exceeding memory limits"
                         );
                         guard.suppress_release();
@@ -733,6 +833,91 @@ impl BundlePoolInner {
         }
     }
 
+    fn shrink_to(&self, target: usize) -> Result<()> {
+        let mut removed = Vec::new();
+        {
+            let mut state = self.state.lock();
+            if state.active <= target {
+                return Ok(());
+            }
+            let removable = state.active.saturating_sub(target);
+            let idle_available = state.idle.len();
+            if removable > idle_available {
+                let busy = state.active.saturating_sub(idle_available);
+                return Err(PyRunnerError::Validation(format!(
+                    "cannot shrink pool below {target} isolates while {busy} isolates are busy",
+                    busy = busy,
+                )));
+            }
+
+            let idle_set: HashSet<usize> = state.idle.iter().copied().collect();
+            let mut isolates: Vec<(IsolateId, usize, bool)> = state
+                .isolates
+                .iter()
+                .enumerate()
+                .filter_map(|(index, slot)| {
+                    slot.as_ref().map(|slot| {
+                        let is_idle = idle_set.contains(&index);
+                        (slot.id(), index, is_idle)
+                    })
+                })
+                .collect();
+            isolates.sort_by(|a, b| b.0.cmp(&a.0));
+
+            let mut indices_to_remove = Vec::with_capacity(removable);
+            for (id, index, is_idle) in isolates {
+                if indices_to_remove.len() == removable {
+                    break;
+                }
+                if !is_idle {
+                    return Err(PyRunnerError::Validation(format!(
+                        "cannot shrink pool below {target} isolates while isolate {id} is busy",
+                    )));
+                }
+                indices_to_remove.push(index);
+            }
+
+            if indices_to_remove.len() < removable {
+                let busy = state.active.saturating_sub(state.idle.len());
+                return Err(PyRunnerError::Validation(format!(
+                    "cannot shrink pool below {target} isolates while {busy} isolates are busy",
+                    busy = busy,
+                )));
+            }
+
+            let remove_set: HashSet<usize> = indices_to_remove.iter().copied().collect();
+            state.idle.retain(|index| !remove_set.contains(index));
+
+            for index in indices_to_remove {
+                if let Some(slot) = state.isolates[index].take() {
+                    removed.push(slot);
+                }
+                state.active = state.active.saturating_sub(1);
+                self.metrics.dec_active();
+                self.metrics.dec_idle();
+            }
+
+            while matches!(state.isolates.last(), Some(None)) {
+                state.isolates.pop();
+            }
+        }
+
+        if removed.is_empty() {
+            return Ok(());
+        }
+
+        self.metrics.add_scaledown(removed.len());
+
+        let reason = RecycleReason::ScaledDown;
+        for slot in removed {
+            let id = slot.id();
+            self.call_hook_isolate_recycled(id, &reason);
+            drop(slot);
+        }
+
+        Ok(())
+    }
+
     fn start_telemetry(self: &Arc<Self>) {
         let interval = {
             let opts = self.options.lock();
@@ -834,10 +1019,12 @@ impl BundlePoolInner {
             id
         };
         if let Some(id) = isolate_id {
-            self.call_hook_isolate_recycled(id);
+            let reason = RecycleReason::ReturnedToIdle;
+            self.call_hook_isolate_recycled(id, &reason);
             info!(
                 target: "aardvark::pool",
                 isolate_id = id,
+                reason = ?reason,
                 "isolate.idle"
             );
         }
@@ -890,7 +1077,7 @@ impl BundlePoolInner {
                     state.active
                 };
 
-                self.call_hook_isolate_started(isolate_id);
+                self.call_hook_isolate_started(isolate_id, &options_snapshot.isolate);
                 info!(
                     target: "aardvark::pool",
                     isolate_id,
@@ -929,10 +1116,18 @@ impl Drop for BundlePoolInner {
         let mut state = self.state.lock();
         state.shutdown = true;
         state.idle.clear();
+        let mut recycled = Vec::new();
         while let Some(entry) = state.isolates.pop() {
             if let Some(slot) = entry {
-                drop(slot);
+                recycled.push(slot);
             }
+        }
+        drop(state);
+        let reason = RecycleReason::Shutdown;
+        for slot in recycled {
+            let id = slot.id();
+            self.call_hook_isolate_recycled(id, &reason);
+            drop(slot);
         }
     }
 }
@@ -977,15 +1172,15 @@ fn current_rss_kib() -> Option<u64> {
 }
 
 impl BundlePoolInner {
-    fn call_hook_isolate_started(&self, isolate_id: IsolateId) {
+    fn call_hook_isolate_started(&self, isolate_id: IsolateId, config: &IsolateConfig) {
         if let Some(callback) = &self.hooks.on_isolate_started {
-            callback(isolate_id);
+            callback(isolate_id, config);
         }
     }
 
-    fn call_hook_isolate_recycled(&self, isolate_id: IsolateId) {
+    fn call_hook_isolate_recycled(&self, isolate_id: IsolateId, reason: &RecycleReason) {
         if let Some(callback) = &self.hooks.on_isolate_recycled {
-            callback(isolate_id);
+            callback(isolate_id, reason);
         }
     }
 
@@ -1013,7 +1208,7 @@ impl BundlePoolInner {
         }
     }
 
-    fn quarantine_slot(&self, index: usize) -> Option<IsolateId> {
+    fn quarantine_slot(&self, index: usize, reason: RecycleReason) -> Option<IsolateId> {
         let (removed_id, removed_slot) = {
             let mut state = self.state.lock();
             if index >= state.isolates.len() {
@@ -1037,7 +1232,20 @@ impl BundlePoolInner {
             (removed_id, removed)
         };
         if let Some(id) = removed_id {
-            self.call_hook_isolate_recycled(id);
+            if let RecycleReason::Quarantined {
+                exceeded_heap,
+                exceeded_rss,
+            } = &reason
+            {
+                self.metrics.inc_quarantine(*exceeded_heap, *exceeded_rss);
+            }
+            self.call_hook_isolate_recycled(id, &reason);
+            info!(
+                target: "aardvark::pool",
+                isolate_id = id,
+                reason = ?reason,
+                "isolate.quarantined"
+            );
         }
         drop(removed_slot);
         removed_id

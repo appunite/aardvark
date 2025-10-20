@@ -94,6 +94,10 @@ fn pool_stats_into_pool_telemetry() {
         average_queue_wait_ms: 42.5,
         queue_wait_p50_ms: Some(30.0),
         queue_wait_p95_ms: Some(70.0),
+        quarantine_events: 1,
+        quarantine_heap_hits: 1,
+        quarantine_rss_hits: 0,
+        scaledown_events: 2,
     };
 
     let telemetry = PoolTelemetry::from(&stats);
@@ -101,4 +105,8 @@ fn pool_stats_into_pool_telemetry() {
     assert_eq!(telemetry.busy_isolates, 2);
     assert_eq!(telemetry.waiting_calls, 4);
     assert_eq!(telemetry.queue_wait_p95_ms, Some(70.0));
+    assert_eq!(telemetry.quarantine_events, 1);
+    assert_eq!(telemetry.quarantine_heap_hits, 1);
+    assert_eq!(telemetry.quarantine_rss_hits, 0);
+    assert_eq!(telemetry.scaledown_events, 2);
 }

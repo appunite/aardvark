@@ -137,7 +137,10 @@ fn pool_example(bundle_bytes: &[u8]) -> anyhow::Result<()> {
             heap_limit_kib: Some(256 * 1024),
             memory_limit_kib: Some(512 * 1024),
             lifecycle_hooks: Some(LifecycleHooks {
-                on_isolate_started: Some(Arc::new(|id| tracing::debug!(isolate_id = id, "started"))),
+                on_isolate_started: Some(Arc::new(|id, _cfg| tracing::debug!(isolate_id = id, "started"))),
+                on_isolate_recycled: Some(Arc::new(|id, reason| {
+                    tracing::debug!(isolate_id = id, ?reason, "recycled")
+                })),
                 ..Default::default()
             }),
             ..PoolOptions::default()
@@ -158,12 +161,16 @@ fn pool_example(bundle_bytes: &[u8]) -> anyhow::Result<()> {
         invocations = stats.invocations,
         avg_wait_ms = stats.average_queue_wait_ms,
         p95_wait_ms = stats.queue_wait_p95_ms,
+        quarantine_events = stats.quarantine_events,
+        scaledown_events = stats.scaledown_events,
     );
     Ok(())
 }
 ```
 
 The pool now manages multiple isolates, exposes queue behaviour (`QueueMode` + `max_queue`), and enforces per-isolate heap/RSS guard rails. Lifecycle hooks let hosts observe isolate churn and per-call outcomes without instrumenting the runtime directly.
+
+Need to change concurrency after startup? Call `pool.set_desired_size(new_size)` to pre-warm or shed isolates, or `pool.resize(max_size)` to adjust the upper bound.
 
 ### Still need the raw runtime?
 
