@@ -7,4 +7,6 @@ def main():
     b = np.sin(a * 0.001)
     c = a @ b.T
     value = float(c[0, 0])
-    return memoryview(struct.pack("<d", value))
+    buf = __aardvark_output_buffer(8, id="numpy-output")
+    struct.pack_into("<d", buf, 0, value)
+    return buf

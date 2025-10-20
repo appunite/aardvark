@@ -14,4 +14,6 @@ def main():
         {int(idx): float(val) for idx, val in summary["value_mean"].items()},
         separators=(",", ":"),
     ).encode("utf-8")
-    return memoryview(payload)
+    buf = __aardvark_output_buffer(len(payload), id="pandas-output")
+    buf[:] = payload
+    return buf
