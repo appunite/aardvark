@@ -1,6 +1,7 @@
 import argparse
 import builtins
 import json
+import math
 from pathlib import Path
 import resource
 import sys
@@ -28,6 +29,24 @@ def _load_pandas(profile: str):
     return {"rows": int(path.read_text().strip())}
 
 
+def _tensor_length(profile: str) -> int:
+    if profile == "low":
+        return 256
+    if profile == "medium":
+        return 16_384
+    if profile == "high":
+        return 262_144
+    raise RuntimeError(f"unsupported tensor profile '{profile}'")
+
+
+def _load_tensor(profile: str):
+    length = _tensor_length(profile)
+    return [
+        (math.sin(index * 0.001953125) + math.cos(index * 0.001953125)) * 0.5
+        for index in range(length)
+    ]
+
+
 def build_payload(scenario: str, profile: str):
     if profile == "none":
         return None
@@ -37,6 +56,8 @@ def build_payload(scenario: str, profile: str):
         return _load_numpy(profile)
     if scenario == "pandas":
         return _load_pandas(profile)
+    if scenario == "tensor":
+        return _load_tensor(profile)
     raise RuntimeError(f"unknown scenario '{scenario}'")
 
 

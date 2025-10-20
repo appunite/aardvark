@@ -6,11 +6,11 @@ profiles** so we can observe how latency scales with input size:
 
 - **None** – no explicit input; the handler uses its baked-in defaults.
 - **Low** – roughly 10² logical items (16 bytes for `echo`, 64 scalars for
-  `numpy`, 128 rows for `pandas`).
+  `numpy`, 128 rows for `pandas`, 256 tensor elements).
 - **Medium** – roughly 10³–10⁴ logical items (1 000 bytes / 4 096 scalars /
-  10 000 rows).
+  10 000 rows / 16 384 tensor elements).
 - **High** – roughly 10⁶ logical items (1 MB / 1 000 000 scalars /
-  1 000 000 rows).
+  1 000 000 rows / 262 144 tensor elements).
 
 Workloads:
 
@@ -19,6 +19,10 @@ Workloads:
   on the requested size and returns a scalar aggregate.
 - **Pandas** – aggregates a deterministic DataFrame with repeatable groups and
   returns a JSON summary.
+- **Tensor** – consumes dense `float32` tensors, applying transcendental
+  transforms and publishing the result through RawCtx as a zero-copy binary
+  buffer. The JSON path exercises the same computation but serialises the
+  tensor as a list of floats, highlighting the bandwidth cost of JSON.
 
 Each workload/profile pair is exercised through four Aardvark paths—cold
 start, warm snapshot, reset-in-place pooling, and the persistent isolate

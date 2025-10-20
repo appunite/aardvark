@@ -12,6 +12,10 @@ pub fn pandas_script() -> &'static str {
     include_str!("../../../fixtures/scenarios/pandas.py")
 }
 
+pub fn tensor_script() -> &'static str {
+    include_str!("../../../fixtures/scenarios/tensor.py")
+}
+
 pub fn echo_payload(profile: LoadProfile) -> Option<&'static [u8]> {
     match profile {
         LoadProfile::None => None,
@@ -49,6 +53,33 @@ pub fn pandas_rows(profile: LoadProfile) -> Option<u64> {
             "../../../fixtures/inputs/pandas_high.txt"
         ))),
     }
+}
+
+pub fn tensor_length(profile: LoadProfile) -> usize {
+    match profile {
+        LoadProfile::None => 0,
+        LoadProfile::Low => 256,
+        LoadProfile::Medium => 16_384,
+        LoadProfile::High => 262_144,
+    }
+}
+
+pub fn tensor_data(profile: LoadProfile) -> Vec<f32> {
+    let len = tensor_length(profile);
+    (0..len)
+        .map(|index| {
+            let x = index as f32 * 0.001953125; // deterministic but non-trivial signal
+            (x.sin() + x.cos()) * 0.5
+        })
+        .collect()
+}
+
+pub fn tensor_bytes(profile: LoadProfile) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    for value in tensor_data(profile) {
+        buffer.extend_from_slice(&value.to_le_bytes());
+    }
+    buffer
 }
 
 fn parse_u64(text: &str) -> u64 {

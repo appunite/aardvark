@@ -11,8 +11,8 @@ use aardvark_core::{
     outcome::{OutcomeStatus, ResultPayload},
     pool::{PoolConfig, PoolResetMode, PyRuntimePool},
     strategy::{
-        JsonInvocationStrategy, RawCtxInput, RawCtxInvocationStrategy, RawCtxMetadata,
-        RawCtxPublishBuilder,
+        JsonInvocationStrategy, RawCtxBindingBuilder, RawCtxInput, RawCtxInvocationStrategy,
+        RawCtxMetadata, RawCtxPublishBuilder,
     },
     Bundle, BundleArtifact, BundlePool, CleanupMode, IsolateConfig, PoolOptions, PyRuntime,
 };
@@ -61,6 +61,7 @@ enum Scenario {
     Echo,
     Numpy,
     Pandas,
+    Tensor,
 }
 
 #[derive(Copy, Clone, Debug, Serialize)]
@@ -301,7 +302,12 @@ fn main() -> Result<()> {
                 ],
             };
             for profile in profiles {
-                for scenario in [Scenario::Echo, Scenario::Numpy, Scenario::Pandas] {
+                for scenario in [
+                    Scenario::Echo,
+                    Scenario::Numpy,
+                    Scenario::Pandas,
+                    Scenario::Tensor,
+                ] {
                     for mode in Mode::aardvark_modes() {
                         results.push(bench_aardvark(scenario, *mode, iterations, profile)?);
                     }
@@ -688,6 +694,7 @@ fn scenario_source(scenario: Scenario) -> String {
         Scenario::Echo => perf::echo_script().to_owned(),
         Scenario::Numpy => perf::numpy_script().to_owned(),
         Scenario::Pandas => perf::pandas_script().to_owned(),
+        Scenario::Tensor => perf::tensor_script().to_owned(),
     }
 }
 
@@ -707,7 +714,7 @@ fn scenario_manifest(scenario: Scenario, invocation: InvocationKind) -> String {
 }
 
 fn descriptor_for(
-    _scenario: Scenario,
+    scenario: Scenario,
     invocation: InvocationKind,
     _profile: LoadProfile,
 ) -> Option<InvocationDescriptor> {
@@ -715,7 +722,7 @@ fn descriptor_for(
         InvocationKind::Json => None,
         InvocationKind::RawCtx => {
             let mut descriptor = InvocationDescriptor::new("main:entrypoint");
-            let metadata = match _scenario {
+            let metadata = match scenario {
                 Scenario::Echo => RawCtxPublishBuilder::new("echo-output")
                     .transform("memoryview")
                     .metadata(json!({"scenario": "echo", "profile": _profile.name()}))
@@ -732,12 +739,31 @@ fn descriptor_for(
                         "profile": _profile.name(),
                     }))
                     .build(),
+                Scenario::Tensor => RawCtxPublishBuilder::new("tensor-output")
+                    .transform("memoryview")
+                    .metadata(json!({
+                        "format": "f32_le",
+                        "profile": _profile.name(),
+                    }))
+                    .build(),
             };
             descriptor.outputs.push(FieldDescriptor {
                 name: "result".to_owned(),
                 type_tag: None,
                 metadata: Some(metadata),
             });
+            if matches!(scenario, Scenario::Tensor) {
+                descriptor.inputs.push(FieldDescriptor {
+                    name: "tensor".to_owned(),
+                    type_tag: None,
+                    metadata: Some(
+                        RawCtxBindingBuilder::new()
+                            .raw_arg("tensor_payload")
+                            .optional(true)
+                            .build(),
+                    ),
+                });
+            }
             Some(descriptor)
         }
     }
@@ -748,6 +774,7 @@ fn scenario_packages(scenario: Scenario) -> &'static [&'static str] {
         Scenario::Echo => &[],
         Scenario::Numpy => &["numpy"],
         Scenario::Pandas => &["numpy", "pandas"],
+        Scenario::Tensor => &["numpy"],
     }
 }
 
@@ -970,12 +997,13 @@ impl ScenarioExt for Scenario {
             Scenario::Echo => "echo",
             Scenario::Numpy => "numpy",
             Scenario::Pandas => "pandas",
+            Scenario::Tensor => "tensor",
         }
     }
 }
 
 impl Scenario {
-    const VARIANTS: &'static [&'static str] = &["echo", "numpy", "pandas"];
+    const VARIANTS: &'static [&'static str] = &["echo", "numpy", "pandas", "tensor"];
 }
 
 impl LoadProfile {
@@ -1001,6 +1029,15 @@ fn json_payload_for(scenario: Scenario, profile: LoadProfile) -> Option<JsonValu
         }),
         Scenario::Numpy => perf::numpy_size(profile).map(|size| json!({"size": size})),
         Scenario::Pandas => perf::pandas_rows(profile).map(|rows| json!({"rows": rows})),
+        Scenario::Tensor => {
+            let data = perf::tensor_data(profile);
+            if data.is_empty() {
+                None
+            } else {
+                let values = data.into_iter().map(JsonValue::from).collect::<Vec<_>>();
+                Some(JsonValue::Array(values))
+            }
+        }
     }
 }
 
@@ -1028,6 +1065,21 @@ fn rawctx_inputs_for(scenario: Scenario, profile: LoadProfile) -> Result<Vec<Raw
             let data = Bytes::copy_from_slice(&rows.to_le_bytes());
             Ok(vec![RawCtxInput::new("control", data, None)?])
         }
+        Scenario::Tensor => {
+            let bytes = perf::tensor_bytes(profile);
+            if bytes.is_empty() {
+                return Ok(Vec::new());
+            }
+            let length = bytes.len() / std::mem::size_of::<f32>();
+            let metadata = RawCtxMetadata::new("binary")
+                .with_shape(vec![length])
+                .with_extra(json!({"format": "f32_le"}))?;
+            Ok(vec![RawCtxInput::new(
+                "tensor",
+                Bytes::from(bytes),
+                Some(metadata),
+            )?])
+        }
     }
 }
 
@@ -1039,6 +1091,7 @@ impl std::str::FromStr for Scenario {
             "echo" => Ok(Scenario::Echo),
             "numpy" => Ok(Scenario::Numpy),
             "pandas" => Ok(Scenario::Pandas),
+            "tensor" => Ok(Scenario::Tensor),
             other => Err(format!("unknown scenario '{other}'")),
         }
     }

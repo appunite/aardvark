@@ -389,11 +389,11 @@ globalThis.__aardvarkWrapRawctxFunction = function wrapRawctxFunction(fn, module
       }
     }
 
-    const finalArgs = args.slice();
+    const finalArgs = args.length > 0 ? args : callArgs;
     if (Object.keys(kwargs).length > 0) {
       finalArgs.push(kwargs);
     }
-    const invocation = fn.apply(this, finalArgs.length ? finalArgs : callArgs);
+    const invocation = fn.apply(this, finalArgs);
     return applyRawctxOutputs(spec, invocation);
   };
 };

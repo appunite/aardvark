@@ -6,6 +6,7 @@ _SCENARIO_MODULES = {
     "echo": ".echo",
     "numpy": ".numpy",
     "pandas": ".pandas",
+    "tensor": ".tensor",
 }
 
 
