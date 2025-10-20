@@ -2,7 +2,8 @@ use aardvark_core::outcome::{
     Diagnostics, ExecutionOutcome, FailureKind, FilesystemViolation, NetworkDeniedHost,
     NetworkHostContact, OutcomeStatus, ResultPayload,
 };
-use aardvark_core::SandboxTelemetry;
+use aardvark_core::persistent::PoolStats;
+use aardvark_core::{PoolTelemetry, SandboxTelemetry};
 
 #[test]
 fn diagnostics_to_telemetry_maps_fields() {
@@ -28,11 +29,22 @@ fn diagnostics_to_telemetry_maps_fields() {
             message: "quota exceeded".into(),
         }],
         reset: None,
-        ..Diagnostics::default()
+        queue_wait_ms: Some(12),
+        prepare_ms: Some(34),
+        cleanup_ms: Some(56),
+        py_heap_kib: Some(2048),
+        rss_kib_before: Some(4096),
+        rss_kib_after: Some(6144),
     };
 
     let telemetry: SandboxTelemetry = diagnostics.to_telemetry();
     assert_eq!(telemetry.cpu_ms_used, Some(42));
+    assert_eq!(telemetry.queue_wait_ms, Some(12));
+    assert_eq!(telemetry.prepare_ms, Some(34));
+    assert_eq!(telemetry.cleanup_ms, Some(56));
+    assert_eq!(telemetry.memory.py_heap_kib, Some(2048));
+    assert_eq!(telemetry.memory.rss_kib_before, Some(4096));
+    assert_eq!(telemetry.memory.rss_kib_after, Some(6144));
     assert_eq!(telemetry.filesystem.bytes_written, Some(1024));
     assert_eq!(telemetry.network.allowed[0].host, "allowed.test");
     assert_eq!(telemetry.network.blocked[0].host, "denied.test");
@@ -69,4 +81,24 @@ fn execution_outcome_exposes_telemetry() {
         }
         _ => panic!("unexpected outcome status"),
     }
+}
+
+#[test]
+fn pool_stats_into_pool_telemetry() {
+    let stats = PoolStats {
+        total: 3,
+        idle: 1,
+        busy: 2,
+        waiting: 4,
+        invocations: 10,
+        average_queue_wait_ms: 42.5,
+        queue_wait_p50_ms: Some(30.0),
+        queue_wait_p95_ms: Some(70.0),
+    };
+
+    let telemetry = PoolTelemetry::from(&stats);
+    assert_eq!(telemetry.total_isolates, 3);
+    assert_eq!(telemetry.busy_isolates, 2);
+    assert_eq!(telemetry.waiting_calls, 4);
+    assert_eq!(telemetry.queue_wait_p95_ms, Some(70.0));
 }

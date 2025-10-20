@@ -66,7 +66,9 @@ pub use bundle_manifest::{
 pub use config::{HostHooks, PyRuntimeConfig, WarmHook, WarmState};
 pub use engine::{ExecutionOutput, OverlayBlob, OverlayExport};
 pub use error::{PyRunnerError, Result};
-pub use host::{FilesystemTelemetry, NetworkTelemetry, SandboxTelemetry};
+pub use host::{
+    FilesystemTelemetry, MemoryTelemetry, NetworkTelemetry, PoolTelemetry, SandboxTelemetry,
+};
 pub use invocation::{FieldDescriptor, InvocationDescriptor, InvocationLimits, WindowConfig};
 pub use outcome::{
     Diagnostics, ExecutionOutcome, FailureKind, OutcomeStatus, ResultPayload, SharedBufferHandle,

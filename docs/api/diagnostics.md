@@ -47,6 +47,12 @@ let telemetry = outcome.sandbox_telemetry();
 if let Some(cpu_ms) = telemetry.cpu_ms_used {
     metrics::histogram!("aardvark.cpu_ms", cpu_ms as f64);
 }
+if let Some(wait_ms) = telemetry.queue_wait_ms {
+    metrics::histogram!("aardvark.queue_wait_ms", wait_ms as f64);
+}
+if let Some(rss_after) = telemetry.memory.rss_kib_after {
+    metrics::gauge!("aardvark.rss_kib", rss_after as f64);
+}
 for denied in telemetry.network.blocked.iter() {
     metrics::counter!("aardvark.network.denied", 1,
         "host" => denied.host.clone(),
@@ -55,7 +61,7 @@ for denied in telemetry.network.blocked.iter() {
 }
 ```
 
-`SandboxTelemetry::has_policy_violations()` is a quick guard for alerting.
+`SandboxTelemetry::has_policy_violations()` is a quick guard for alerting. Pair it with `PoolTelemetry::from(&pool.stats())` if you want to publish aggregate queue metrics.
 
 ## Handling policy breaches gracefully
 

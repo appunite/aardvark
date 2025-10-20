@@ -143,6 +143,14 @@ Key `PoolOptions` knobs:
 
 `PoolStats` now reports invocation counts, average queue wait, and queue wait percentiles. `ExecutionOutcome` diagnostics capture per-call queue wait, heap usage, and (on Linux) RSS snapshots so hosts can alert when an invocation runs close to the limits.
 
+```rust
+let pool_telemetry = PoolTelemetry::from(&pool.stats());
+metrics::gauge!("aardvark.pool.isolates.total", pool_telemetry.total_isolates as f64);
+if let Some(p95) = pool_telemetry.queue_wait_p95_ms {
+    metrics::histogram!("aardvark.pool.queue_wait_p95_ms", p95);
+}
+```
+
 ## Dropping down to `PyRuntime`
 
 `PythonIsolate` and `BundlePool` wrap the original `PyRuntime`. Reach for it when you need low-level hooks (custom descriptor construction, manual resets, direct access to the JS runtime):
