@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -541,7 +543,7 @@ fn bench_aardvark(
         total: timing_stats(&total),
         prepare: Some(timing_stats(&prepare)),
         run: Some(timing_stats(&run)),
-        rss_mib: max_rss_mib(),
+        rss_mib: current_rss_mib(),
         cold_total: cold_total_stats,
         cold_prepare: cold_prepare_stats,
         cold_run: cold_run_stats,
@@ -1178,24 +1180,37 @@ impl std::str::FromStr for Mode {
 }
 
 #[cfg(unix)]
-fn max_rss_mib() -> Option<f64> {
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn current_rss_mib() -> Option<f64> {
     unsafe {
-        let mut usage: libc::rusage = std::mem::zeroed();
-        if libc::getrusage(libc::RUSAGE_SELF, &mut usage) != 0 {
-            return None;
-        }
-        #[cfg(target_os = "macos")]
-        {
-            Some((usage.ru_maxrss as f64) / (1024.0 * 1024.0))
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            Some((usage.ru_maxrss as f64) / 1024.0)
+        let mut info: libc::mach_task_basic_info = std::mem::zeroed();
+        let mut count = (std::mem::size_of::<libc::mach_task_basic_info>()
+            / std::mem::size_of::<libc::integer_t>())
+            as libc::mach_msg_type_number_t;
+        let result = libc::task_info(
+            libc::mach_task_self(),
+            libc::MACH_TASK_BASIC_INFO,
+            (&mut info as *mut _) as *mut libc::integer_t,
+            &mut count,
+        );
+        if result == libc::KERN_SUCCESS {
+            Some(info.resident_size as f64 / (1024.0 * 1024.0))
+        } else {
+            None
         }
     }
 }
 
-#[cfg(not(unix))]
-fn max_rss_mib() -> Option<f64> {
+#[cfg(target_os = "linux")]
+fn current_rss_mib() -> Option<f64> {
+    let contents = fs::read_to_string("/proc/self/statm").ok()?;
+    let resident_pages: f64 = contents.split_whitespace().nth(1)?.parse().ok()?;
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as f64;
+    Some(resident_pages * page_size / (1024.0 * 1024.0))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn current_rss_mib() -> Option<f64> {
     None
 }
