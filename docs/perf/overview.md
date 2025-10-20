@@ -1,16 +1,30 @@
 # Performance Benchmarks
 
 This suite measures a few representative workloads across the Aardvark runtime
-and a native CPython interpreter:
+and a native CPython interpreter. Every workload is executed at four **load
+profiles** so we can observe how latency scales with input size:
 
-- **Echo** – returns a fixed 1 KB string.
-- **NumPy** – applies deterministic sine transforms and matrix multiplies across 200×200 arrays.
-- **Pandas** – aggregates a 50 000‑row deterministic DataFrame.
+- **None** – no explicit input; the handler uses its baked-in defaults.
+- **Low** – roughly 10² logical items (16 bytes for `echo`, 64 scalars for
+  `numpy`, 128 rows for `pandas`).
+- **Medium** – roughly 10³–10⁴ logical items (1 000 bytes / 4 096 scalars /
+  10 000 rows).
+- **High** – roughly 10⁶ logical items (1 MB / 1 000 000 scalars /
+  1 000 000 rows).
 
-Each workload is exercised through four Aardvark paths—cold start, warm
-snapshot, reset-in-place pooling, and the new persistent isolate pool—and
-through the host Python interpreter. The harness records average/min/max
-wall-clock latency per invocation and the peak RSS reported by the OS.
+Workloads:
+
+- **Echo** – echoes the provided payload.
+- **NumPy** – applies deterministic sine transforms and matrix multiplies based
+  on the requested size and returns a scalar aggregate.
+- **Pandas** – aggregates a deterministic DataFrame with repeatable groups and
+  returns a JSON summary.
+
+Each workload/profile pair is exercised through four Aardvark paths—cold
+start, warm snapshot, reset-in-place pooling, and the persistent isolate
+pool—and through the host Python interpreter. The harness records
+average/min/max wall-clock latency per invocation plus the peak RSS reported by
+the OS.
 
 ## Requirements
 
@@ -45,30 +59,30 @@ hydration step.
 From the repository root:
 
 ```sh
-make perf-all ITERATIONS=25
+make perf-all ITERATIONS=10
 ```
 
-Sample console output (5 iterations on an M2 Max):
+By default the harness iterates through every workload and load profile,
+printing a combined table. Sample console output (2 iterations per profile on
+an M2 Max):
 
 ```
-┌──────────┬──────────────────────────────┬────────────┬──────────────┬─────────┬─────────┬─────────┬───────────┐
-│ Scenario │ Mode                         │ Invocation │ Path         │ Avg ms  │ Min ms  │ Max ms  │ RSS (KiB) │
-╞══════════╪══════════════════════════════╪════════════╪══════════════╪═════════╪═════════╪═════════╪═══════════╡
-│ echo     │ aardvark-json-cold           │ json       │ cold         │ 976.21  │ 937.34  │ 1032.26 │ 417312    │
-│ echo     │ aardvark-json-warm           │ json       │ warm         │ 170.32  │ 167.79  │ 174.24  │ 567728    │
-│ echo     │ aardvark-json-persistent     │ json       │ persistent   │ 39.14   │ 4.74    │ 173.84  │ 854608    │
-│ echo     │ host-python                  │ -          │ -            │ 0.00    │ 0.00    │ 0.00    │ 12496     │
-│ numpy    │ aardvark-json-persistent     │ json       │ persistent   │ 118.36  │ 27.24   │ 479.64  │ 1413008   │
-│ pandas   │ aardvark-json-persistent     │ json       │ persistent   │ 449.08  │ 75.32   │ 1942.02 │ 1943488   │
-└──────────┴──────────────────────────────┴────────────┴──────────────┴─────────┴─────────┴─────────┴───────────┘
+┌──────────┬──────────┬──────────────────────────────┬────────────┬──────────────┬─────────┬─────────┬─────────┬───────────┐
+│ Scenario │ Profile  │ Mode                         │ Invocation │ Path         │ Avg ms  │ Min ms  │ Max ms  │ RSS (KiB) │
+╞══════════╪══════════╪══════════════════════════════╪════════════╪══════════════╪═════════╪═════════╪═════════╪═══════════╡
+│ echo     │ none     │ aardvark-json-persistent     │ json       │ persistent   │ 38.5    │ 3.8     │ 76.2    │ 620800    │
+│ echo     │ medium   │ aardvark-json-persistent     │ json       │ persistent   │ 80.7    │ 5.9     │ 155.6   │ 642448    │
+│ echo     │ high     │ aardvark-json-persistent     │ json       │ persistent   │ 35.1    │ 3.8     │ 157.5   │ 652928    │
+│ numpy    │ medium   │ aardvark-json-persistent     │ json       │ persistent   │ 246.0   │ 25.9    │ 466.1   │ 940160    │
+│ numpy    │ high     │ aardvark-rawctx-persistent   │ rawctx     │ persistent   │ 129.3   │ 37.6    │ 493.6   │ 965312    │
+│ pandas   │ medium   │ aardvark-json-persistent     │ json       │ persistent   │ 438.2   │ 72.8    │ 1897.8  │ 1765808   │
+│ pandas   │ high     │ aardvark-rawctx-persistent   │ rawctx     │ persistent   │ 450.3   │ 84.7    │ 1911.0  │ 1970048   │
+│ numpy    │ high     │ host-python                  │ -          │ -            │ 0.96    │ 0.23    │ 1.99    │ 38976     │
+└──────────┴──────────┴──────────────────────────────┴────────────┴──────────────┴─────────┴─────────┴─────────┴───────────┘
 ```
 
-The JSON/CSV files contain the same data for further analysis and live under `target/perf/`.
-
-The persistent isolate path delivers the biggest gain: despite enforcing full
-cleanup between calls, `echo` falls from ~170 ms (“warm”) to ~39 ms and `numpy`
-drops from ~475 ms to ~118 ms on the same machine. We still report the cold
-baseline in the table so you can quantify the warmup cost your workloads carry.
+The JSON/CSV artefacts live under `target/perf/` and include the same
+information (one row per scenario/profile/path/mode combination).
 
 
 ### Single Scenario
@@ -78,8 +92,9 @@ To benchmark one combination:
 ```sh
 cargo run -p aardvark-perf -- scenario \
   --scenario pandas \
-  --mode aardvark \
-  --iterations 50
+  --mode aardvark-json-persistent \
+  --profile medium \
+  --iterations 25
 ```
 
 ## Host Python Runner
@@ -88,7 +103,7 @@ The harness shells out to:
 
 ```sh
 uv run --python 3.12 --with numpy --with pandas \
-  python perf/fixtures/run_host.py --scenario pandas --iterations 25
+  python perf/fixtures/run_host.py --scenario pandas --profile medium --iterations 25
 ```
 
 `uv` ensures the requested packages are available without modifying the user’s
@@ -113,8 +128,8 @@ by scenario.
 
 ## Extending the Suite
 
-- Add new Python workloads under `perf/fixtures/scenarios/` and register them in
-  `SCENARIOS`.
+- Add new Python workloads under `perf/fixtures/scenarios/` (one module per
+  workload/profile) and list them in `perf/runner/src/perf/mod.rs`.
 - Update `Scenario` in `perf/runner/src/main.rs` with the matching metadata
   (packages, manifest).
 - For more granular metrics (per-phase timings, CPU, warm snapshot size), extend

@@ -1,23 +1,10 @@
-def _echo():
-    from . import echo
+import importlib
 
-    return echo.main
-
-
-def _numpy():
-    from . import numpy_case
-
-    return numpy_case.main
-
-
-def _pandas():
-    from . import pandas_case
-
-    return pandas_case.main
-
-
-SCENARIOS = {
-    "echo": _echo,
-    "numpy": _numpy,
-    "pandas": _pandas,
-}
+def load_handler(name: str, profile: str):
+    normalized = profile.lower()
+    module_name = f".{name.lower()}_{normalized}"
+    try:
+        module = importlib.import_module(module_name, package=__name__)
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(f"unknown scenario/profile combination: {name}/{profile}") from exc
+    return module.main

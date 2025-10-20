@@ -4,7 +4,30 @@ import resource
 import sys
 import time
 
-from scenarios import SCENARIOS
+from scenarios import load_handler
+
+
+SIZE_HINTS = {
+    "echo": {"low": 16, "medium": 1_000, "high": 1_000_000},
+    "numpy": {"low": 64, "medium": 4_096, "high": 1_000_000},
+    "pandas": {"low": 128, "medium": 10_000, "high": 1_000_000},
+}
+
+
+def build_payload(scenario: str, profile: str):
+    if profile == "none":
+        return None
+    hints = SIZE_HINTS.get(scenario)
+    if hints is None:
+        return None
+    hint = hints.get(profile, 0)
+    if scenario == "echo":
+        return "x" * hint
+    if scenario == "numpy":
+        return {"size": hint}
+    if scenario == "pandas":
+        return {"rows": hint}
+    return None
 
 
 def timing_stats(samples):
@@ -22,18 +45,20 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--iterations", type=int, default=10)
+    parser.add_argument("--profile", default="none")
     args = parser.parse_args()
 
     scenario = args.scenario.lower()
     try:
-        handler = SCENARIOS[scenario]()
-    except KeyError as exc:
-        raise SystemExit(f"unknown scenario: {scenario}") from exc
+        handler = load_handler(scenario, args.profile)
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
 
+    payload = build_payload(scenario, args.profile)
     samples = []
     for _ in range(args.iterations):
         start = time.perf_counter()
-        result = handler()
+        result = handler(payload)
         _ = result  # ensure work executes; result ignored
         samples.append(time.perf_counter() - start)
 
@@ -50,6 +75,7 @@ def main() -> None:
         "total": timing_stats(samples),
         "rss_kib": int(rss_kib),
         "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        "profile": args.profile,
     }
     json.dump(payload, fp=sys.stdout)
 

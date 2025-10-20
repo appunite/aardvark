@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use aardvark_core::{
@@ -9,16 +10,21 @@ use aardvark_core::{
     invocation::{FieldDescriptor, InvocationDescriptor},
     outcome::{OutcomeStatus, ResultPayload},
     pool::{PoolConfig, PoolResetMode, PyRuntimePool},
-    strategy::{RawCtxInput, RawCtxInvocationStrategy, RawCtxPublishBuilder},
+    strategy::{
+        JsonInvocationStrategy, RawCtxBindingBuilder, RawCtxInput, RawCtxInvocationStrategy,
+        RawCtxMetadata, RawCtxPublishBuilder,
+    },
     Bundle, BundleArtifact, BundlePool, CleanupMode, IsolateConfig, PoolOptions, PyRuntime,
-    PySession,
 };
 use anyhow::{anyhow, Context, Result};
+use bytes::Bytes;
 use comfy_table::{presets::UTF8_FULL_CONDENSED, Cell, Table};
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value as JsonValue};
 use structopt::StructOpt;
 use which::which;
+
+mod perf;
 
 #[derive(StructOpt, Debug)]
 #[structopt(
@@ -34,6 +40,8 @@ enum Cli {
         json: Option<PathBuf>,
         #[structopt(long)]
         csv: Option<PathBuf>,
+        #[structopt(long, possible_values = LoadProfile::VARIANTS, case_insensitive = true)]
+        profile: Option<LoadProfile>,
     },
     /// Run a single scenario/mode combination
     Scenario {
@@ -43,6 +51,8 @@ enum Cli {
         mode: Mode,
         #[structopt(long, default_value = "10")]
         iterations: usize,
+        #[structopt(long, possible_values = LoadProfile::VARIANTS, case_insensitive = true)]
+        profile: Option<LoadProfile>,
     },
 }
 
@@ -51,6 +61,15 @@ enum Scenario {
     Echo,
     Numpy,
     Pandas,
+}
+
+#[derive(Copy, Clone, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum LoadProfile {
+    None,
+    Low,
+    Medium,
+    High,
 }
 
 #[derive(Copy, Clone, Debug, Serialize)]
@@ -226,6 +245,7 @@ impl Mode {
 struct BenchResult {
     scenario: Scenario,
     mode: Mode,
+    profile: LoadProfile,
     #[serde(skip_serializing_if = "Option::is_none")]
     invocation: Option<InvocationKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -268,13 +288,25 @@ fn main() -> Result<()> {
             iterations,
             json,
             csv,
+            profile,
         } => {
             let mut results = Vec::new();
-            for scenario in [Scenario::Echo, Scenario::Numpy, Scenario::Pandas] {
-                for mode in Mode::aardvark_modes() {
-                    results.push(bench_aardvark(scenario, *mode, iterations)?);
+            let profiles: Vec<LoadProfile> = match profile {
+                Some(p) => vec![p],
+                None => vec![
+                    LoadProfile::None,
+                    LoadProfile::Low,
+                    LoadProfile::Medium,
+                    LoadProfile::High,
+                ],
+            };
+            for profile in profiles {
+                for scenario in [Scenario::Echo, Scenario::Numpy, Scenario::Pandas] {
+                    for mode in Mode::aardvark_modes() {
+                        results.push(bench_aardvark(scenario, *mode, iterations, profile)?);
+                    }
+                    results.push(bench_host(scenario, iterations, profile)?);
                 }
-                results.push(bench_host(scenario, iterations)?);
             }
             let expanded = expand_results(&results);
             if let Some(path) = json {
@@ -289,11 +321,13 @@ fn main() -> Result<()> {
             scenario,
             mode,
             iterations,
+            profile,
         } => {
+            let profile = profile.unwrap_or(LoadProfile::None);
             let result = if mode.is_aardvark() {
-                bench_aardvark(scenario, mode, iterations)?
+                bench_aardvark(scenario, mode, iterations, profile)?
             } else {
-                bench_host(scenario, iterations)?
+                bench_host(scenario, iterations, profile)?
             };
             let expanded = expand_results(std::slice::from_ref(&result));
             println!("{}", serde_json::to_string_pretty(&expanded)?);
@@ -302,7 +336,12 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn bench_aardvark(scenario: Scenario, mode: Mode, iterations: usize) -> Result<BenchResult> {
+fn bench_aardvark(
+    scenario: Scenario,
+    mode: Mode,
+    iterations: usize,
+    profile: LoadProfile,
+) -> Result<BenchResult> {
     let invocation = mode
         .invocation_kind()
         .ok_or_else(|| anyhow!("mode '{}' is not an Aardvark variant", mode.name()))?;
@@ -312,10 +351,13 @@ fn bench_aardvark(scenario: Scenario, mode: Mode, iterations: usize) -> Result<B
     let cleanup_kind = mode.cleanup_kind();
     let mut applied_cleanup = cleanup_kind;
 
-    let python_source = scenario_source(scenario, invocation);
+    let python_source = scenario_source(scenario, invocation, profile);
     let manifest = scenario_manifest(scenario, invocation);
-    let bundle = build_bundle(python_source, manifest.as_bytes())?;
-    let descriptor = descriptor_for(scenario, invocation);
+    let bundle = build_bundle(&python_source, manifest.as_bytes())?;
+    let descriptor = descriptor_for(scenario, invocation, profile);
+
+    let json_payload = json_payload_for(scenario, profile);
+    let raw_inputs = Arc::new(rawctx_inputs_for(scenario, profile)?);
 
     let mut prepare = Vec::with_capacity(iterations);
     let mut run = Vec::with_capacity(iterations);
@@ -335,17 +377,23 @@ fn bench_aardvark(scenario: Scenario, mode: Mode, iterations: usize) -> Result<B
                 };
                 execute_iteration(
                     &mut runtime,
-                    scenario,
                     invocation,
                     descriptor.as_ref(),
                     &bundle,
+                    json_payload.clone(),
+                    raw_inputs.as_ref(),
                     &mut buckets,
                 )?;
             }
         }
         PathKind::Warm => {
-            let (warm_state, cold_total, cold_prepare, cold_run) =
-                capture_warm_state(scenario, invocation, &bundle, descriptor.as_ref())?;
+            let (warm_state, cold_total, cold_prepare, cold_run) = capture_warm_state(
+                invocation,
+                &bundle,
+                descriptor.as_ref(),
+                json_payload.clone(),
+                raw_inputs.as_ref(),
+            )?;
             cold_total_stats = Some(cold_total);
             cold_prepare_stats = Some(cold_prepare);
             cold_run_stats = Some(cold_run);
@@ -362,17 +410,23 @@ fn bench_aardvark(scenario: Scenario, mode: Mode, iterations: usize) -> Result<B
                 };
                 execute_iteration(
                     &mut runtime,
-                    scenario,
                     invocation,
                     descriptor.as_ref(),
                     &bundle,
+                    json_payload.clone(),
+                    raw_inputs.as_ref(),
                     &mut buckets,
                 )?;
             }
         }
         PathKind::ResetInPlace => {
-            let (warm_state, cold_total, cold_prepare, cold_run) =
-                capture_warm_state(scenario, invocation, &bundle, descriptor.as_ref())?;
+            let (warm_state, cold_total, cold_prepare, cold_run) = capture_warm_state(
+                invocation,
+                &bundle,
+                descriptor.as_ref(),
+                json_payload.clone(),
+                raw_inputs.as_ref(),
+            )?;
             cold_total_stats = Some(cold_total);
             cold_prepare_stats = Some(cold_prepare);
             cold_run_stats = Some(cold_run);
@@ -397,10 +451,11 @@ fn bench_aardvark(scenario: Scenario, mode: Mode, iterations: usize) -> Result<B
                     };
                     execute_iteration(
                         runtime,
-                        scenario,
                         invocation,
                         descriptor.as_ref(),
                         &bundle,
+                        json_payload.clone(),
+                        raw_inputs.as_ref(),
                         &mut buckets,
                     )?;
                 }
@@ -408,8 +463,13 @@ fn bench_aardvark(scenario: Scenario, mode: Mode, iterations: usize) -> Result<B
             }
         }
         PathKind::Persistent => {
-            let (warm_state, cold_total, cold_prepare, cold_run) =
-                capture_warm_state(scenario, invocation, &bundle, descriptor.as_ref())?;
+            let (warm_state, cold_total, cold_prepare, cold_run) = capture_warm_state(
+                invocation,
+                &bundle,
+                descriptor.as_ref(),
+                json_payload.clone(),
+                raw_inputs.as_ref(),
+            )?;
             cold_total_stats = Some(cold_total);
             cold_prepare_stats = Some(cold_prepare);
             cold_run_stats = Some(cold_run);
@@ -437,10 +497,8 @@ fn bench_aardvark(scenario: Scenario, mode: Mode, iterations: usize) -> Result<B
             for _ in 0..iterations {
                 let start = Instant::now();
                 let outcome = match invocation {
-                    InvocationKind::Json => pool.call_json(&handler, None)?,
-                    InvocationKind::RawCtx => {
-                        pool.call_rawctx(&handler, Vec::<RawCtxInput>::new())?
-                    }
+                    InvocationKind::Json => pool.call_json(&handler, json_payload.clone())?,
+                    InvocationKind::RawCtx => pool.call_rawctx(&handler, (*raw_inputs).clone())?,
                 };
                 let total_elapsed = start.elapsed();
                 let prepare_ms = outcome.diagnostics.prepare_ms.unwrap_or(0);
@@ -465,6 +523,7 @@ fn bench_aardvark(scenario: Scenario, mode: Mode, iterations: usize) -> Result<B
     Ok(BenchResult {
         scenario,
         mode,
+        profile,
         invocation: Some(invocation),
         path: Some(path),
         cleanup: applied_cleanup,
@@ -481,10 +540,11 @@ fn bench_aardvark(scenario: Scenario, mode: Mode, iterations: usize) -> Result<B
 
 fn execute_iteration(
     runtime: &mut PyRuntime,
-    scenario: Scenario,
     invocation: InvocationKind,
     descriptor: Option<&InvocationDescriptor>,
     bundle: &Bundle,
+    json_payload: Option<JsonValue>,
+    raw_inputs: &[RawCtxInput],
     timings: &mut TimingBuckets<'_>,
 ) -> Result<()> {
     let prep_start = Instant::now();
@@ -497,29 +557,17 @@ fn execute_iteration(
     let prep_elapsed = prep_start.elapsed();
 
     let run_start = Instant::now();
-    run_invocation(runtime, &session, invocation, scenario)?;
-    let run_elapsed = run_start.elapsed();
-
-    timings.prepare.push(prep_elapsed);
-    timings.run.push(run_elapsed);
-    timings.total.push(prep_elapsed + run_elapsed);
-
-    Ok(())
-}
-
-fn run_invocation(
-    runtime: &mut PyRuntime,
-    session: &PySession,
-    invocation: InvocationKind,
-    _scenario: Scenario,
-) -> Result<()> {
     let outcome = match invocation {
-        InvocationKind::Json => runtime.run_session(session)?,
+        InvocationKind::Json => {
+            let mut strategy = JsonInvocationStrategy::new(json_payload);
+            runtime.run_session_with_strategy(&session, &mut strategy)?
+        }
         InvocationKind::RawCtx => {
-            let mut strategy = RawCtxInvocationStrategy::default();
-            runtime.run_session_with_strategy(session, &mut strategy)?
+            let mut strategy = RawCtxInvocationStrategy::new(raw_inputs.to_vec());
+            runtime.run_session_with_strategy(&session, &mut strategy)?
         }
     };
+    let run_elapsed = run_start.elapsed();
 
     if !outcome.is_success() {
         return Err(anyhow!("handler failed: {:?}", outcome.status));
@@ -534,14 +582,19 @@ fn run_invocation(
         return Err(anyhow!("rawctx run did not return shared buffers"));
     }
 
+    timings.prepare.push(prep_elapsed);
+    timings.run.push(run_elapsed);
+    timings.total.push(prep_elapsed + run_elapsed);
+
     Ok(())
 }
 
 fn capture_warm_state(
-    scenario: Scenario,
     invocation: InvocationKind,
     bundle: &Bundle,
     descriptor: Option<&InvocationDescriptor>,
+    json_payload: Option<JsonValue>,
+    raw_inputs: &[RawCtxInput],
 ) -> Result<(WarmState, TimingStats, TimingStats, TimingStats)> {
     let mut baseline_runtime = PyRuntime::new(PyRuntimeConfig::default())?;
     let mut cold_prepare = Vec::with_capacity(1);
@@ -555,10 +608,11 @@ fn capture_warm_state(
         };
         execute_iteration(
             &mut baseline_runtime,
-            scenario,
             invocation,
             descriptor,
             bundle,
+            json_payload.clone(),
+            raw_inputs,
             &mut buckets,
         )?;
     }
@@ -581,7 +635,7 @@ fn capture_warm_state(
     ))
 }
 
-fn bench_host(scenario: Scenario, iterations: usize) -> Result<BenchResult> {
+fn bench_host(scenario: Scenario, iterations: usize, profile: LoadProfile) -> Result<BenchResult> {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/run_host.py");
     let uv = which("uv")
         .context("`uv` command not found on PATH. Install from https://docs.astral.sh/uv/ or ensure it is available before running the perf suite.")?;
@@ -597,6 +651,8 @@ fn bench_host(scenario: Scenario, iterations: usize) -> Result<BenchResult> {
     cmd.arg(scenario.name());
     cmd.arg("--iterations");
     cmd.arg(iterations.to_string());
+    cmd.arg("--profile");
+    cmd.arg(profile.name());
 
     let output = cmd
         .output()
@@ -612,6 +668,7 @@ fn bench_host(scenario: Scenario, iterations: usize) -> Result<BenchResult> {
     Ok(BenchResult {
         scenario,
         mode: Mode::HostPython,
+        profile,
         invocation: None,
         path: None,
         cleanup: None,
@@ -626,26 +683,14 @@ fn bench_host(scenario: Scenario, iterations: usize) -> Result<BenchResult> {
     })
 }
 
-fn scenario_source(scenario: Scenario, invocation: InvocationKind) -> &'static str {
+fn scenario_source(scenario: Scenario, invocation: InvocationKind, profile: LoadProfile) -> String {
     match (scenario, invocation) {
-        (Scenario::Echo, InvocationKind::Json) => {
-            include_str!("../../fixtures/scenarios/echo.py")
-        }
-        (Scenario::Echo, InvocationKind::RawCtx) => {
-            include_str!("../../fixtures/scenarios/echo_rawctx.py")
-        }
-        (Scenario::Numpy, InvocationKind::Json) => {
-            include_str!("../../fixtures/scenarios/numpy_case.py")
-        }
-        (Scenario::Numpy, InvocationKind::RawCtx) => {
-            include_str!("../../fixtures/scenarios/numpy_rawctx.py")
-        }
-        (Scenario::Pandas, InvocationKind::Json) => {
-            include_str!("../../fixtures/scenarios/pandas_case.py")
-        }
-        (Scenario::Pandas, InvocationKind::RawCtx) => {
-            include_str!("../../fixtures/scenarios/pandas_rawctx.py")
-        }
+        (Scenario::Echo, InvocationKind::Json) => perf::echo_json(profile),
+        (Scenario::Echo, InvocationKind::RawCtx) => perf::echo_rawctx(profile),
+        (Scenario::Numpy, InvocationKind::Json) => perf::numpy_json(profile),
+        (Scenario::Numpy, InvocationKind::RawCtx) => perf::numpy_rawctx(profile),
+        (Scenario::Pandas, InvocationKind::Json) => perf::pandas_json(profile),
+        (Scenario::Pandas, InvocationKind::RawCtx) => perf::pandas_rawctx(profile),
     }
 }
 
@@ -664,7 +709,11 @@ fn scenario_manifest(scenario: Scenario, invocation: InvocationKind) -> String {
     manifest.to_string()
 }
 
-fn descriptor_for(scenario: Scenario, invocation: InvocationKind) -> Option<InvocationDescriptor> {
+fn descriptor_for(
+    scenario: Scenario,
+    invocation: InvocationKind,
+    profile: LoadProfile,
+) -> Option<InvocationDescriptor> {
     match invocation {
         InvocationKind::Json => None,
         InvocationKind::RawCtx => {
@@ -672,15 +721,15 @@ fn descriptor_for(scenario: Scenario, invocation: InvocationKind) -> Option<Invo
             let metadata = match scenario {
                 Scenario::Echo => RawCtxPublishBuilder::new("echo-output")
                     .transform("memoryview")
-                    .metadata(json!({"kind": "echo"}))
+                    .metadata(json!({"kind": "echo", "profile": profile.name()}))
                     .build(),
                 Scenario::Numpy => RawCtxPublishBuilder::new("numpy-output")
                     .transform("memoryview")
-                    .metadata(json!({"dtype": "float64_le"}))
+                    .metadata(json!({"dtype": "float64_le", "profile": profile.name()}))
                     .build(),
                 Scenario::Pandas => RawCtxPublishBuilder::new("pandas-output")
                     .transform("memoryview")
-                    .metadata(json!({"encoding": "utf8"}))
+                    .metadata(json!({"encoding": "utf8", "profile": profile.name()}))
                     .build(),
             };
             descriptor.outputs.push(FieldDescriptor {
@@ -688,6 +737,38 @@ fn descriptor_for(scenario: Scenario, invocation: InvocationKind) -> Option<Invo
                 type_tag: None,
                 metadata: Some(metadata),
             });
+            match scenario {
+                Scenario::Echo => descriptor.inputs.push(FieldDescriptor {
+                    name: "payload".to_owned(),
+                    type_tag: None,
+                    metadata: Some(
+                        RawCtxBindingBuilder::new()
+                            .raw_arg("payload")
+                            .optional(true)
+                            .build(),
+                    ),
+                }),
+                Scenario::Numpy => descriptor.inputs.push(FieldDescriptor {
+                    name: "control".to_owned(),
+                    type_tag: None,
+                    metadata: Some(
+                        RawCtxBindingBuilder::new()
+                            .raw_arg("payload")
+                            .optional(true)
+                            .build(),
+                    ),
+                }),
+                Scenario::Pandas => descriptor.inputs.push(FieldDescriptor {
+                    name: "control".to_owned(),
+                    type_tag: None,
+                    metadata: Some(
+                        RawCtxBindingBuilder::new()
+                            .raw_arg("payload")
+                            .optional(true)
+                            .build(),
+                    ),
+                }),
+            }
             Some(descriptor)
         }
     }
@@ -786,7 +867,7 @@ fn write_csv(path: &Path, results: &[BenchResult]) -> Result<()> {
         File::create(path).with_context(|| format!("failed to write {}", path.display()))?;
     writeln!(
         file,
-        "scenario,mode,invocation,path,cleanup,iterations,avg_ms,min_ms,max_ms,rss_kib,prepare_avg_ms,run_avg_ms"
+        "scenario,profile,mode,invocation,path,cleanup,iterations,avg_ms,min_ms,max_ms,rss_kib,prepare_avg_ms,run_avg_ms"
     )?;
     for result in results {
         let prepare_avg = result
@@ -812,8 +893,9 @@ fn write_csv(path: &Path, results: &[BenchResult]) -> Result<()> {
         let cleanup = result.cleanup.map(|kind| kind.label()).unwrap_or("-");
         writeln!(
             file,
-            "{},{},{},{},{},{},{:.2},{:.2},{:.2},{},{},{}",
+            "{},{},{},{},{},{},{},{:.2},{:.2},{:.2},{},{},{}",
             result.scenario.name(),
+            result.profile.name(),
             result.mode.name(),
             result
                 .invocation
@@ -841,10 +923,12 @@ fn print_summary(results: &[BenchResult]) {
     table.load_preset(UTF8_FULL_CONDENSED);
     table.set_header([
         "Scenario",
+        "Profile",
         "Mode",
         "Invocation",
         "Path",
         "Cleanup",
+        "Iter",
         "Avg ms",
         "Min ms",
         "Max ms",
@@ -881,10 +965,12 @@ fn print_summary(results: &[BenchResult]) {
 
         table.add_row(vec![
             Cell::new(r.scenario.name()),
+            Cell::new(r.profile.name()),
             Cell::new(r.mode.name()),
             Cell::new(invocation),
             Cell::new(path),
             Cell::new(cleanup),
+            Cell::new(r.iterations.to_string()),
             Cell::new(format!("{:.2}", r.total.avg_ms)),
             Cell::new(format!("{:.2}", r.total.min_ms)),
             Cell::new(format!("{:.2}", r.total.max_ms)),
@@ -923,6 +1009,86 @@ impl Scenario {
     const VARIANTS: &'static [&'static str] = &["echo", "numpy", "pandas"];
 }
 
+impl LoadProfile {
+    const VARIANTS: &'static [&'static str] = &["none", "low", "medium", "high"];
+
+    fn name(&self) -> &'static str {
+        match self {
+            LoadProfile::None => "none",
+            LoadProfile::Low => "low",
+            LoadProfile::Medium => "medium",
+            LoadProfile::High => "high",
+        }
+    }
+
+    fn size_hint(&self, scenario: Scenario) -> usize {
+        match (scenario, self) {
+            (_, LoadProfile::None) => 0,
+            (Scenario::Echo, LoadProfile::Low) => 16,
+            (Scenario::Echo, LoadProfile::Medium) => 1_000,
+            (Scenario::Echo, LoadProfile::High) => 1_000_000,
+            (Scenario::Numpy, LoadProfile::Low) => 64,
+            (Scenario::Numpy, LoadProfile::Medium) => 4_096,
+            (Scenario::Numpy, LoadProfile::High) => 1_000_000,
+            (Scenario::Pandas, LoadProfile::Low) => 128,
+            (Scenario::Pandas, LoadProfile::Medium) => 10_000,
+            (Scenario::Pandas, LoadProfile::High) => 1_000_000,
+        }
+    }
+}
+
+fn json_payload_for(scenario: Scenario, profile: LoadProfile) -> Option<JsonValue> {
+    match scenario {
+        Scenario::Echo => {
+            let size = profile.size_hint(scenario);
+            if size == 0 {
+                None
+            } else {
+                Some(JsonValue::String("x".repeat(size)))
+            }
+        }
+        Scenario::Numpy => {
+            let size = profile.size_hint(scenario);
+            if size == 0 {
+                None
+            } else {
+                Some(json!({"size": size}))
+            }
+        }
+        Scenario::Pandas => {
+            let rows = profile.size_hint(scenario);
+            if rows == 0 {
+                None
+            } else {
+                Some(json!({"rows": rows}))
+            }
+        }
+    }
+}
+
+fn rawctx_inputs_for(scenario: Scenario, profile: LoadProfile) -> Result<Vec<RawCtxInput>> {
+    let size = profile.size_hint(scenario);
+    if size == 0 {
+        return Ok(Vec::new());
+    }
+
+    match scenario {
+        Scenario::Echo => {
+            let data = Bytes::from(vec![b'x'; size]);
+            let meta = RawCtxMetadata::new("binary");
+            Ok(vec![RawCtxInput::new("payload", data, Some(meta))?])
+        }
+        Scenario::Numpy => {
+            let data = Bytes::copy_from_slice(&(size as u64).to_le_bytes());
+            Ok(vec![RawCtxInput::new("control", data, None)?])
+        }
+        Scenario::Pandas => {
+            let data = Bytes::copy_from_slice(&(size as u64).to_le_bytes());
+            Ok(vec![RawCtxInput::new("control", data, None)?])
+        }
+    }
+}
+
 impl std::str::FromStr for Scenario {
     type Err = String;
 
@@ -932,6 +1098,20 @@ impl std::str::FromStr for Scenario {
             "numpy" => Ok(Scenario::Numpy),
             "pandas" => Ok(Scenario::Pandas),
             other => Err(format!("unknown scenario '{other}'")),
+        }
+    }
+}
+
+impl std::str::FromStr for LoadProfile {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "none" => Ok(LoadProfile::None),
+            "low" => Ok(LoadProfile::Low),
+            "medium" => Ok(LoadProfile::Medium),
+            "high" => Ok(LoadProfile::High),
+            other => Err(format!("unknown profile '{other}'")),
         }
     }
 }
