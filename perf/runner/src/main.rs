@@ -351,7 +351,7 @@ fn bench_aardvark(
     let cleanup_kind = mode.cleanup_kind();
     let mut applied_cleanup = cleanup_kind;
 
-    let python_source = scenario_source(scenario, invocation, profile);
+    let python_source = scenario_source(scenario);
     let manifest = scenario_manifest(scenario, invocation);
     let bundle = build_bundle(&python_source, manifest.as_bytes())?;
     let descriptor = descriptor_for(scenario, invocation, profile);
@@ -683,14 +683,11 @@ fn bench_host(scenario: Scenario, iterations: usize, profile: LoadProfile) -> Re
     })
 }
 
-fn scenario_source(scenario: Scenario, invocation: InvocationKind, profile: LoadProfile) -> String {
-    match (scenario, invocation) {
-        (Scenario::Echo, InvocationKind::Json) => perf::echo_json(profile),
-        (Scenario::Echo, InvocationKind::RawCtx) => perf::echo_rawctx(profile),
-        (Scenario::Numpy, InvocationKind::Json) => perf::numpy_json(profile),
-        (Scenario::Numpy, InvocationKind::RawCtx) => perf::numpy_rawctx(profile),
-        (Scenario::Pandas, InvocationKind::Json) => perf::pandas_json(profile),
-        (Scenario::Pandas, InvocationKind::RawCtx) => perf::pandas_rawctx(profile),
+fn scenario_source(scenario: Scenario) -> String {
+    match scenario {
+        Scenario::Echo => perf::echo_script().to_owned(),
+        Scenario::Numpy => perf::numpy_script().to_owned(),
+        Scenario::Pandas => perf::pandas_script().to_owned(),
     }
 }
 
@@ -1020,70 +1017,43 @@ impl LoadProfile {
             LoadProfile::High => "high",
         }
     }
-
-    fn size_hint(&self, scenario: Scenario) -> usize {
-        match (scenario, self) {
-            (_, LoadProfile::None) => 0,
-            (Scenario::Echo, LoadProfile::Low) => 16,
-            (Scenario::Echo, LoadProfile::Medium) => 1_000,
-            (Scenario::Echo, LoadProfile::High) => 1_000_000,
-            (Scenario::Numpy, LoadProfile::Low) => 64,
-            (Scenario::Numpy, LoadProfile::Medium) => 4_096,
-            (Scenario::Numpy, LoadProfile::High) => 1_000_000,
-            (Scenario::Pandas, LoadProfile::Low) => 128,
-            (Scenario::Pandas, LoadProfile::Medium) => 10_000,
-            (Scenario::Pandas, LoadProfile::High) => 1_000_000,
-        }
-    }
 }
 
 fn json_payload_for(scenario: Scenario, profile: LoadProfile) -> Option<JsonValue> {
     match scenario {
-        Scenario::Echo => {
-            let size = profile.size_hint(scenario);
-            if size == 0 {
-                None
-            } else {
-                Some(JsonValue::String("x".repeat(size)))
-            }
-        }
-        Scenario::Numpy => {
-            let size = profile.size_hint(scenario);
-            if size == 0 {
-                None
-            } else {
-                Some(json!({"size": size}))
-            }
-        }
-        Scenario::Pandas => {
-            let rows = profile.size_hint(scenario);
-            if rows == 0 {
-                None
-            } else {
-                Some(json!({"rows": rows}))
-            }
-        }
+        Scenario::Echo => perf::echo_payload(profile).map(|bytes| {
+            let text = std::str::from_utf8(bytes)
+                .expect("echo fixtures must be valid utf-8")
+                .to_owned();
+            JsonValue::String(text)
+        }),
+        Scenario::Numpy => perf::numpy_size(profile).map(|size| json!({"size": size})),
+        Scenario::Pandas => perf::pandas_rows(profile).map(|rows| json!({"rows": rows})),
     }
 }
 
 fn rawctx_inputs_for(scenario: Scenario, profile: LoadProfile) -> Result<Vec<RawCtxInput>> {
-    let size = profile.size_hint(scenario);
-    if size == 0 {
-        return Ok(Vec::new());
-    }
-
     match scenario {
         Scenario::Echo => {
-            let data = Bytes::from(vec![b'x'; size]);
+            let Some(bytes) = perf::echo_payload(profile) else {
+                return Ok(Vec::new());
+            };
+            let data = Bytes::from_static(bytes);
             let meta = RawCtxMetadata::new("binary");
             Ok(vec![RawCtxInput::new("payload", data, Some(meta))?])
         }
         Scenario::Numpy => {
-            let data = Bytes::copy_from_slice(&(size as u64).to_le_bytes());
+            let Some(size) = perf::numpy_size(profile) else {
+                return Ok(Vec::new());
+            };
+            let data = Bytes::copy_from_slice(&size.to_le_bytes());
             Ok(vec![RawCtxInput::new("control", data, None)?])
         }
         Scenario::Pandas => {
-            let data = Bytes::copy_from_slice(&(size as u64).to_le_bytes());
+            let Some(rows) = perf::pandas_rows(profile) else {
+                return Ok(Vec::new());
+            };
+            let data = Bytes::copy_from_slice(&rows.to_le_bytes());
             Ok(vec![RawCtxInput::new("control", data, None)?])
         }
     }

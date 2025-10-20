@@ -1,5 +1,7 @@
 import argparse
+import builtins
 import json
+from pathlib import Path
 import resource
 import sys
 import time
@@ -7,27 +9,35 @@ import time
 from scenarios import load_handler
 
 
-SIZE_HINTS = {
-    "echo": {"low": 16, "medium": 1_000, "high": 1_000_000},
-    "numpy": {"low": 64, "medium": 4_096, "high": 1_000_000},
-    "pandas": {"low": 128, "medium": 10_000, "high": 1_000_000},
-}
+FIXTURE_DIR = Path(__file__).resolve().parent / "inputs"
+
+
+def _load_echo(profile: str):
+    path = FIXTURE_DIR / f"echo_{profile}.txt"
+    data = path.read_text()
+    return data
+
+
+def _load_numpy(profile: str):
+    path = FIXTURE_DIR / f"numpy_{profile}.txt"
+    return {"size": int(path.read_text().strip())}
+
+
+def _load_pandas(profile: str):
+    path = FIXTURE_DIR / f"pandas_{profile}.txt"
+    return {"rows": int(path.read_text().strip())}
 
 
 def build_payload(scenario: str, profile: str):
     if profile == "none":
         return None
-    hints = SIZE_HINTS.get(scenario)
-    if hints is None:
-        return None
-    hint = hints.get(profile, 0)
     if scenario == "echo":
-        return "x" * hint
+        return _load_echo(profile)
     if scenario == "numpy":
-        return {"size": hint}
+        return _load_numpy(profile)
     if scenario == "pandas":
-        return {"rows": hint}
-    return None
+        return _load_pandas(profile)
+    raise RuntimeError(f"unknown scenario '{scenario}'")
 
 
 def timing_stats(samples):
@@ -50,7 +60,7 @@ def main() -> None:
 
     scenario = args.scenario.lower()
     try:
-        handler = load_handler(scenario, args.profile)
+        handler = load_handler(scenario)
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
 
@@ -58,9 +68,16 @@ def main() -> None:
     samples = []
     for _ in range(args.iterations):
         start = time.perf_counter()
-        result = handler(payload)
+        if payload is not None:
+            builtins.__aardvark_input = payload
+        elif hasattr(builtins, "__aardvark_input"):
+            del builtins.__aardvark_input
+        result = handler()
         _ = result  # ensure work executes; result ignored
         samples.append(time.perf_counter() - start)
+
+    if hasattr(builtins, "__aardvark_input"):
+        del builtins.__aardvark_input
 
     usage = resource.getrusage(resource.RUSAGE_SELF)
     rss = usage.ru_maxrss

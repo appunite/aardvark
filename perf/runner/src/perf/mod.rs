@@ -1,61 +1,58 @@
 use super::LoadProfile;
 
-macro_rules! embed {
-    ($path:literal) => {
-        include_str!($path).to_string()
-    };
+pub fn echo_script() -> &'static str {
+    include_str!("../../../fixtures/scenarios/echo.py")
 }
 
-pub fn echo_json(profile: LoadProfile) -> String {
+pub fn numpy_script() -> &'static str {
+    include_str!("../../../fixtures/scenarios/numpy.py")
+}
+
+pub fn pandas_script() -> &'static str {
+    include_str!("../../../fixtures/scenarios/pandas.py")
+}
+
+pub fn echo_payload(profile: LoadProfile) -> Option<&'static [u8]> {
     match profile {
-        LoadProfile::None => embed!("../../../fixtures/scenarios/echo_none.py"),
-        LoadProfile::Low => embed!("../../../fixtures/scenarios/echo_low.py"),
-        LoadProfile::Medium => embed!("../../../fixtures/scenarios/echo_medium.py"),
-        LoadProfile::High => embed!("../../../fixtures/scenarios/echo_high.py"),
+        LoadProfile::None => None,
+        LoadProfile::Low => Some(include_bytes!("../../../fixtures/inputs/echo_low.txt")),
+        LoadProfile::Medium => Some(include_bytes!("../../../fixtures/inputs/echo_medium.txt")),
+        LoadProfile::High => Some(include_bytes!("../../../fixtures/inputs/echo_high.txt")),
     }
 }
 
-pub fn echo_rawctx(profile: LoadProfile) -> String {
+pub fn numpy_size(profile: LoadProfile) -> Option<u64> {
     match profile {
-        LoadProfile::None => embed!("../../../fixtures/scenarios/echo_rawctx_none.py"),
-        LoadProfile::Low => embed!("../../../fixtures/scenarios/echo_rawctx_low.py"),
-        LoadProfile::Medium => embed!("../../../fixtures/scenarios/echo_rawctx_medium.py"),
-        LoadProfile::High => embed!("../../../fixtures/scenarios/echo_rawctx_high.py"),
+        LoadProfile::None => None,
+        LoadProfile::Low => Some(parse_u64(include_str!(
+            "../../../fixtures/inputs/numpy_low.txt"
+        ))),
+        LoadProfile::Medium => Some(parse_u64(include_str!(
+            "../../../fixtures/inputs/numpy_medium.txt"
+        ))),
+        LoadProfile::High => Some(parse_u64(include_str!(
+            "../../../fixtures/inputs/numpy_high.txt"
+        ))),
     }
 }
 
-pub fn numpy_json(profile: LoadProfile) -> String {
+pub fn pandas_rows(profile: LoadProfile) -> Option<u64> {
     match profile {
-        LoadProfile::None => embed!("../../../fixtures/scenarios/numpy_none.py"),
-        LoadProfile::Low => embed!("../../../fixtures/scenarios/numpy_low.py"),
-        LoadProfile::Medium => embed!("../../../fixtures/scenarios/numpy_medium.py"),
-        LoadProfile::High => embed!("../../../fixtures/scenarios/numpy_high.py"),
+        LoadProfile::None => None,
+        LoadProfile::Low => Some(parse_u64(include_str!(
+            "../../../fixtures/inputs/pandas_low.txt"
+        ))),
+        LoadProfile::Medium => Some(parse_u64(include_str!(
+            "../../../fixtures/inputs/pandas_medium.txt"
+        ))),
+        LoadProfile::High => Some(parse_u64(include_str!(
+            "../../../fixtures/inputs/pandas_high.txt"
+        ))),
     }
 }
 
-pub fn numpy_rawctx(profile: LoadProfile) -> String {
-    match profile {
-        LoadProfile::None => embed!("../../../fixtures/scenarios/numpy_rawctx_none.py"),
-        LoadProfile::Low => embed!("../../../fixtures/scenarios/numpy_rawctx_low.py"),
-        LoadProfile::Medium => embed!("../../../fixtures/scenarios/numpy_rawctx_medium.py"),
-        LoadProfile::High => embed!("../../../fixtures/scenarios/numpy_rawctx_high.py"),
-    }
-}
-
-pub fn pandas_json(profile: LoadProfile) -> String {
-    match profile {
-        LoadProfile::None => embed!("../../../fixtures/scenarios/pandas_none.py"),
-        LoadProfile::Low => embed!("../../../fixtures/scenarios/pandas_low.py"),
-        LoadProfile::Medium => embed!("../../../fixtures/scenarios/pandas_medium.py"),
-        LoadProfile::High => embed!("../../../fixtures/scenarios/pandas_high.py"),
-    }
-}
-
-pub fn pandas_rawctx(profile: LoadProfile) -> String {
-    match profile {
-        LoadProfile::None => embed!("../../../fixtures/scenarios/pandas_rawctx_none.py"),
-        LoadProfile::Low => embed!("../../../fixtures/scenarios/pandas_rawctx_low.py"),
-        LoadProfile::Medium => embed!("../../../fixtures/scenarios/pandas_rawctx_medium.py"),
-        LoadProfile::High => embed!("../../../fixtures/scenarios/pandas_rawctx_high.py"),
-    }
+fn parse_u64(text: &str) -> u64 {
+    text.trim()
+        .parse::<u64>()
+        .expect("fixture values must parse as integers")
 }
