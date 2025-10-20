@@ -56,7 +56,7 @@ def _summary(rows: int):
 
 def _publish_raw(summary):
     payload = json.dumps(summary, separators=(",", ":")).encode("utf-8")
-    factory = globals().get("__aardvark_output_buffer")
+    factory = getattr(builtins, "__aardvark_output_buffer", None)
     if callable(factory):
         buffer = factory(len(payload), id="pandas-output")
         buffer[: len(payload)] = payload

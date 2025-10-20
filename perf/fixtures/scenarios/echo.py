@@ -29,7 +29,7 @@ def _json_payload() -> Optional[object]:
 
 
 def _publish_raw(data: bytes):
-    factory = globals().get("__aardvark_output_buffer")
+    factory = getattr(builtins, "__aardvark_output_buffer", None)
     if callable(factory):
         buffer = factory(len(data), id="echo-output")
         buffer[: len(data)] = data

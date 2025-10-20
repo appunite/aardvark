@@ -45,7 +45,7 @@ def _decode_size(data: Optional[bytes]) -> Optional[int]:
 
 
 def _publish_raw(total: float):
-    factory = globals().get("__aardvark_output_buffer")
+    factory = getattr(builtins, "__aardvark_output_buffer", None)
     if callable(factory):
         buffer = factory(8, id="numpy-output")
         struct.pack_into("<d", buffer, 0, float(total))
