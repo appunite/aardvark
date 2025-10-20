@@ -25,6 +25,7 @@ capnp = "0.18"
 libc.workspace = true
 url.workspace = true
 walkdir.workspace = true
+blake3.workspace = true
 
 [build-dependencies]
 anyhow = "1.0"

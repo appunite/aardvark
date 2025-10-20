@@ -10,6 +10,7 @@ Embedded multi-language runtime for executing sandboxed bundles inside V8, with 
 
 ## Why Aardvark?
 
+- **Persistent isolates** – Keep Python warm between calls, reuse shared buffers, and avoid remounting bundles unless the code changes.
 - **Snapshot-friendly runtimes** – Reuse warm isolates across requests, bake overlays into warm snapshots, and keep cold starts predictable.
 - **Deterministic sandboxing** – Enforce per-invocation budgets for wall time, CPU, heap, filesystem writes, and outbound network hosts.
 - **Self-describing bundles** – Ship code, manifest, and dependency hints together as a ZIP; hosts can honour or override the manifest contract at runtime.
@@ -84,17 +85,70 @@ Prefer to run the underlying cross-compiles yourself?
 
 ## Embedding in Rust
 
+### Quick handler execution with `PythonIsolate`
+
+```rust
+use aardvark_core::{
+    persistent::{BundleArtifact, BundleHandle, HandlerSession, PythonIsolate},
+    IsolateConfig,
+};
+
+fn execute(bundle_bytes: &[u8]) -> anyhow::Result<String> {
+    // Parse once; cloning `BundleArtifact` is cheap because entries are shared internally.
+    let artifact = BundleArtifact::from_bytes(bundle_bytes)?;
+
+    let mut isolate = PythonIsolate::new(IsolateConfig::default())?;
+    // Optionally pre-load the bundle so packages are cached before the first call.
+    let handle = BundleHandle::from_artifact(artifact.clone());
+    isolate.load_bundle(&handle)?;
+
+    // Prepare a handler session (reuse it across invocations).
+    let handler: HandlerSession = handle.prepare_default_handler();
+    let outcome = handler.invoke(&mut isolate)?;
+    Ok(outcome
+        .payload()
+        .and_then(|payload| match payload {
+            aardvark_core::ResultPayload::Text(text) => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_default())
+}
+```
+
+`HandlerSession` exposes `invoke`, `invoke_json`, `invoke_rawctx`, and `invoke_async` adapters. `PythonIsolate` also provides `run_inline_python` for one-off scripts and exposes the underlying `PyRuntime` when you need low-level control.
+
+### Serial pooling with `BundlePool`
+
+```rust
+use aardvark_core::persistent::{BundleArtifact, BundlePool, PoolOptions};
+
+fn pool_example(bundle_bytes: &[u8]) -> anyhow::Result<()> {
+    let artifact = BundleArtifact::from_bytes(bundle_bytes)?;
+    let pool = BundlePool::from_artifact(artifact.clone(), PoolOptions::default())?;
+    let handle = pool.handle();
+    let handler = handle.prepare_default_handler();
+
+    let outcome = pool.call_default(&handler)?;
+    tracing::info!(queue_wait_ms = ?outcome.diagnostics.queue_wait_ms);
+    Ok(())
+}
+```
+
+`BundlePool` currently serialises invocations through a single isolate while retaining queue-wait telemetry (future versions will grow configurable concurrency).
+
+### Still need the raw runtime?
+
+`PyRuntime` remains available for hosts that prefer to manage bundles and resets manually. The legacy example is below for completeness:
+
 ```rust
 use aardvark_core::{Bundle, PyRuntime, PyRuntimeConfig};
 
-fn execute(bytes: &[u8]) -> anyhow::Result<()> {
+fn execute_with_runtime(bytes: &[u8]) -> anyhow::Result<()> {
     let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-    // Parse once; cloning `Bundle` is cheap because entries are shared internally.
     let bundle = Bundle::from_zip_bytes(bytes)?;
     let (session, _manifest) = runtime.prepare_session_with_manifest(bundle)?;
     let outcome = runtime.run_session(&session)?;
     println!("status: {:?}", outcome.status);
-    println!("stdout: {}", outcome.diagnostics.stdout);
     Ok(())
 }
 ```
@@ -131,7 +185,7 @@ cargo run -p aardvark-core --example bench_echo -- 100 1024
 
 Arguments are `[iterations] [payload_len]` (both optional). The harness warms the runtime, captures a warm snapshot, and prints avg/min/max milliseconds for `prepare`, `run`, and `total`. Use it to correlate host-side measurements with the core runtime.
 
-`docs/api/rust-host.md` expands on pooling, invocation strategies, and telemetry export. For JavaScript bundles, pass `language = "javascript"` in the manifest or descriptor and ship a self-contained bundle produced by your JS build tool.
+`docs/api/rust-host.md` expands on persistent isolates, pooling semantics, invocation strategies, and telemetry export. For JavaScript bundles, pass `language = "javascript"` in the manifest or descriptor and ship a self-contained bundle produced by your JS build tool.
 
 ## Documentation
 

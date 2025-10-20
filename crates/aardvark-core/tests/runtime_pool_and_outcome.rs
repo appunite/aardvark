@@ -2,6 +2,9 @@ use aardvark_core::{
     config::{PyRuntimeConfig, ResetPolicy},
     invocation::{FieldDescriptor, InvocationDescriptor, InvocationLimits},
     outcome::{FailureKind, OutcomeStatus, ResetMode, ResultPayload},
+    persistent::{
+        BundleArtifact, BundleHandle, BundlePool, IsolateConfig, PoolOptions, PythonIsolate,
+    },
     pool::{PoolConfig, PoolResetMode},
     strategy::{
         JsonInvocationStrategy, RawCtxBindingBuilder, RawCtxInput, RawCtxInvocationStrategy,
@@ -50,7 +53,15 @@ fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_rawctx_table_invalid_schema()?;
     verify_after_invocation_reset_failure()?;
     verify_pool_reset_failure_removes_runtime()?;
+    verify_persistent_isolate_resets_modules()?;
+    verify_bundle_pool_executes_handlers()?;
+    verify_python_isolate_inline()?;
     Ok(())
+}
+
+#[test]
+fn bundle_pool_basic() -> Result<()> {
+    verify_bundle_pool_executes_handlers()
 }
 
 fn verify_pooled_runtime_manual_reset() -> Result<()> {
@@ -809,6 +820,79 @@ def main():
         "pool should allocate a new runtime after reset failure"
     );
     env::remove_var("AARDVARK_TEST_FORCE_RESET_FAILURE");
+    Ok(())
+}
+
+fn verify_persistent_isolate_resets_modules() -> Result<()> {
+    let bundle = bundle_with_main_and_manifest(
+        r#"
+counter = 0
+
+def handler():
+    global counter
+    counter += 1
+    return counter
+"#,
+        &json!({
+            "schemaVersion": "1.0",
+            "entrypoint": "main:handler",
+            "runtime": {"language": "python"}
+        })
+        .to_string(),
+    );
+
+    let artifact = BundleArtifact::from_bundle(bundle)?;
+    let mut isolate = PythonIsolate::new(IsolateConfig::default())?;
+    let handle = BundleHandle::from_artifact(artifact.clone());
+    isolate.load_bundle(&handle)?;
+    let handler = handle.prepare_default_handler();
+
+    let first = handler.invoke(&mut isolate)?;
+    assert_eq!(payload_text(&first), "1");
+
+    let second = handler.invoke(&mut isolate)?;
+    assert_eq!(payload_text(&second), "1");
+
+    Ok(())
+}
+
+fn verify_bundle_pool_executes_handlers() -> Result<()> {
+    let bundle = bundle_with_main_and_manifest(
+        r#"
+def handler():
+    return "hello"
+"#,
+        &json!({
+            "schemaVersion": "1.0",
+            "entrypoint": "main:handler",
+            "runtime": {"language": "python"}
+        })
+        .to_string(),
+    );
+
+    let artifact = BundleArtifact::from_bundle(bundle)?;
+    let pool = BundlePool::from_artifact(artifact.clone(), PoolOptions::default())?;
+    let handle = pool.handle();
+    let handler = handle.prepare_default_handler();
+
+    let outcome = pool.call_default(&handler)?;
+    assert_eq!(payload_text(&outcome), "'hello'");
+
+    let stats = pool.stats();
+    assert!(stats.total >= 1);
+    assert!(stats.idle <= stats.total);
+    assert_eq!(stats.invocations, 1);
+    Ok(())
+}
+
+fn verify_python_isolate_inline() -> Result<()> {
+    let mut isolate = PythonIsolate::new(IsolateConfig::default())?;
+    let code = r#"
+def handler():
+    return "inline"
+"#;
+    let outcome = isolate.run_inline_python(code, "main:handler")?;
+    assert_eq!(payload_text(&outcome), "'inline'");
     Ok(())
 }
 

@@ -28,6 +28,7 @@ fn diagnostics_to_telemetry_maps_fields() {
             message: "quota exceeded".into(),
         }],
         reset: None,
+        ..Diagnostics::default()
     };
 
     let telemetry: SandboxTelemetry = diagnostics.to_telemetry();

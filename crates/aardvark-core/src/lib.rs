@@ -48,6 +48,7 @@ pub mod host;
 pub mod invocation;
 pub mod outcome;
 mod package_metadata;
+pub mod persistent;
 pub mod pool;
 pub mod runtime;
 mod runtime_language;
@@ -56,7 +57,7 @@ pub mod strategy;
 mod engine;
 mod session;
 
-pub use bundle::Bundle;
+pub use bundle::{Bundle, BundleFingerprint};
 pub use bundle_manifest::{
     BundleManifest, ManifestPyodide, ManifestRuntime,
     MANIFEST_BASENAME as BUNDLE_MANIFEST_BASENAME, MANIFEST_SCHEMA as BUNDLE_MANIFEST_SCHEMA,
@@ -69,6 +70,10 @@ pub use host::{FilesystemTelemetry, NetworkTelemetry, SandboxTelemetry};
 pub use invocation::{FieldDescriptor, InvocationDescriptor, InvocationLimits, WindowConfig};
 pub use outcome::{
     Diagnostics, ExecutionOutcome, FailureKind, OutcomeStatus, ResultPayload, SharedBufferHandle,
+};
+pub use persistent::{
+    BundleArtifact, BundleHandle, BundlePool, CleanupMode, HandlerSession, IsolateConfig,
+    PoolOptions, PoolStats, PythonIsolate, QueueMode,
 };
 pub use pool::{PoolConfig, PyRuntimePool};
 pub use runtime::PyRuntime;

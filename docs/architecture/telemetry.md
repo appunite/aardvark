@@ -33,10 +33,13 @@ sequenceDiagram
 
 `ExecutionOutcome::sandbox_telemetry()` produces a `SandboxTelemetry` struct:
 
+- `queue_wait_ms` – Milliseconds spent waiting for a pooled isolate (if the call went through `BundlePool`).
 - `cpu_ms_used` – CPU milliseconds consumed by the Python thread (if available).
+- `prepare_ms` / `cleanup_ms` – Host-visible timings for the runtime’s prepare and cleanup phases.
 - `filesystem.bytes_written` – Bytes written under `/session` during the invocation.
 - `filesystem.violations` – Any attempts that breached filesystem policy.
 - `network.allowed` / `network.blocked` – Lists of contacted hosts and denied requests, including port, HTTPS flag, and reason codes.
+- `py_heap_kib` – Python heap usage at the end of the invocation (KiB).
 
 The telemetry snapshot is cheap to clone and is intended for metrics pipelines (Prometheus, statsd, etc.).
 

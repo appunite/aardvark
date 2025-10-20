@@ -848,6 +848,24 @@ impl JsRuntime {
         Ok(execution)
     }
 
+    /// Clears published shared buffers between invocations.
+    pub fn reset_shared_buffers(&mut self) -> Result<()> {
+        self.with_context(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let key = v8::String::new(scope, "__aardvarkResetSharedBuffers").ok_or_else(|| {
+                PyRunnerError::Execution("shared buffer reset hook unavailable".into())
+            })?;
+            if let Some(value) = global.get(scope, key.into()) {
+                if let Ok(func) = Local::<Function>::try_from(value) {
+                    func.call(scope, global.into(), &[]).ok_or_else(|| {
+                        PyRunnerError::Execution("shared buffer reset failed".into())
+                    })?;
+                }
+            }
+            Ok(())
+        })
+    }
+
     /// Resets the session scratch filesystem after an invocation completes.
     pub fn reset_filesystem(&mut self) -> Result<()> {
         self.with_context(|scope, _| {

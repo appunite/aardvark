@@ -34,104 +34,104 @@ Export `AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.28.2` (or configure
 bundle if you do not need the full wheel set, and update the URL/hash whenever
 you bump the pinned version.
 
-## Creating a runtime
+## Persistent isolates (`PythonIsolate`)
 
 ```rust
-use aardvark_core::{PyRuntime, PyRuntimeConfig};
+use aardvark_core::{
+    persistent::{BundleArtifact, BundleHandle, HandlerSession, PythonIsolate},
+    IsolateConfig,
+};
 
-fn build_runtime() -> anyhow::Result<PyRuntime> {
-    let mut config = PyRuntimeConfig::default();
-    config.reset_policy = aardvark_core::config::ResetPolicy::AfterInvocation;
-    config.snapshot.load_from = Some("/srv/snapshots/pandas.bin".into());
-    let runtime = PyRuntime::new(config)?;
-    Ok(runtime)
-}
-```
+fn build_isolate(bytes: &[u8]) -> anyhow::Result<(PythonIsolate, HandlerSession)> {
+    let artifact = BundleArtifact::from_bytes(bytes)?;
+    let handle = BundleHandle::from_artifact(artifact.clone());
 
-Key configuration knobs:
+    let mut isolate = PythonIsolate::new(IsolateConfig::default())?;
+    isolate.load_bundle(&handle)?; // optional warm-up
 
-- `snapshot.load_from` – optional warm snapshot path.
-- `snapshot.save_to` – capture a new snapshot after the first load.
-- Snapshots are cached in memory after the first read; call `config.snapshot.clear_cache()` if you regenerate the file at runtime.
-- `budget_override` – clamp descriptor limits globally (e.g., enforce platform-wide CPU ceilings).
-- `host_capabilities` – capability allowlist applied to every session unless the manifest narrows it further.
-- `default_language` – fallback guest language when descriptors/manifests omit one (defaults to `python`; set to `javascript` to prefer the preview engine).
-
-## Preparing a session
-
-```rust
-use aardvark_core::{Bundle, PyRuntime};
-
-fn load_bundle(bytes: &[u8]) -> anyhow::Result<Bundle> {
-    // Parse once and keep the value around — cloning `Bundle` is cheap.
-    Bundle::from_zip_bytes(bytes)
+    let handler = handle.prepare_default_handler();
+    Ok((isolate, handler))
 }
 
-fn prepare(runtime: &mut PyRuntime, bundle: Bundle) -> anyhow::Result<aardvark_core::PySession> {
-    let (session, manifest_opt) = runtime.prepare_session_with_manifest(bundle)?;
-    if let Some(manifest) = manifest_opt {
-        tracing::info!(packages = ?manifest.packages(), "manifest applied");
-    }
-    Ok(session)
-}
-```
-
-If you need full control, create an `InvocationDescriptor` and call `prepare_session_with_descriptor` instead. The descriptor lets you pin the language per invocation via `descriptor.language = Some(RuntimeLanguage::JavaScript);`.
-
-## Running the session
-
-```rust
-use aardvark_core::{ExecutionOutcome, FailureKind};
-
-fn invoke(runtime: &mut PyRuntime, session: &aardvark_core::PySession) -> anyhow::Result<()> {
-    let outcome = runtime.run_session(session)?;
+fn invoke(handler: &HandlerSession, isolate: &mut PythonIsolate) -> anyhow::Result<()> {
+    let outcome = handler.invoke(isolate)?;
     if outcome.is_success() {
-        let payload = outcome.payload();
-        println!("handler returned {:?}", payload);
-    } else if let FailureKind::PythonException(exc) = &outcome.status {
-        eprintln!("python raised: {:?}\nstdout:{}\nstderr:{}",
-            exc, outcome.diagnostics.stdout, outcome.diagnostics.stderr);
+        tracing::info!(stdout = %outcome.diagnostics.stdout);
+    } else {
+        tracing::warn!(?outcome.status, "handler failed");
     }
-
-    let telemetry = outcome.sandbox_telemetry();
-    tracing::info!(cpu_ms = ?telemetry.cpu_ms_used, "cpu usage");
     Ok(())
 }
 ```
 
-All payload types are supported: text, JSON, binary, and shared buffers. Use pattern matching to unwrap the one you expect.
+Key knobs via `IsolateConfig` / `PyRuntimeConfig`:
 
-## Using the runtime pool
+- `snapshot.load_from` / `snapshot.save_to` – warm snapshot management.
+- `cleanup` – choose between full cleanup, shared-buffer-only scrubbing, or no automatic cleanup.
+- `budget_override` – clamp descriptor limits globally.
+- `host_capabilities` – capability allowlist applied to every call unless a manifest narrows it further.
+
+### Inline Python without a bundle
 
 ```rust
-use aardvark_core::{PoolConfig, PoolResetMode, PyRuntimePool, PyRuntimeConfig};
+let mut isolate = PythonIsolate::new(IsolateConfig::default())?;
+let script = r#"
+def handler(user: str = "world"):
+    return f"hi {user}"
+"#;
+let outcome = isolate.run_inline_python(script, "main:handler")?;
+assert_eq!(outcome.payload().unwrap().kind(), "text");
+```
 
-fn pool_example() -> anyhow::Result<()> {
-    let mut config = PoolConfig::new(8, PyRuntimeConfig::default());
-    config.reset_mode = PoolResetMode::InPlace; // reuse isolates between checkouts
-    let pool = PyRuntimePool::new(config)?;
-    let mut handle = pool.checkout()?;
-    let bundle = Bundle::from_zip_bytes(include_bytes!("../../hello_bundle.zip"))?;
-    let session = handle.runtime().prepare_session_with_manifest(bundle)?.0;
-    let outcome = handle.runtime().run_session(&session)?;
-    drop(handle); // returns runtime to the pool; reset happens lazily in the background queue
-    assert!(outcome.is_success());
+The helper wraps the snippet into an ephemeral bundle (stored entirely in memory) so you can run smoke tests or templated code without touching the bundler.
+
+## Serial pooling (`BundlePool`)
+
+```rust
+use aardvark_core::persistent::{BundleArtifact, BundlePool, PoolOptions};
+
+fn pooled_calls(bytes: &[u8]) -> anyhow::Result<()> {
+    let artifact = BundleArtifact::from_bytes(bytes)?;
+    let pool = BundlePool::from_artifact(artifact.clone(), PoolOptions::default())?;
+    let handle = pool.handle();
+    let handler = handle.prepare_default_handler();
+
+    for _ in 0..4 {
+        let outcome = pool.call_default(&handler)?;
+        tracing::info!(queue_wait_ms = ?outcome.diagnostics.queue_wait_ms);
+    }
     Ok(())
 }
 ```
 
-Pool handles implement `Drop`; always let them go out of scope to return the runtime. If reset fails, the runtime is discarded and capacity decreases until a new runtime is created.
+The pool currently serialises invocations through one isolate while tracking queue-wait telemetry and aggregate counts (`PoolStats::invocations`, `average_queue_wait_ms`). Future revisions will expose configurable concurrency; avoid relying on the single-isolate behaviour.
 
-Returned runtimes are marked dirty and scrubbed the next time the pool needs additional capacity. That keeps the hand-off path fast while still ensuring every checkout observes a clean snapshot.
+## Dropping down to `PyRuntime`
 
-> **Pool Limitation:** resets still run on the thread that performs the next checkout. If the warm snapshot takes ~800 ms to hydrate, the first borrower after a drop still pays that cost.
+`PythonIsolate` and `BundlePool` wrap the original `PyRuntime`. Reach for it when you need low-level hooks (custom descriptor construction, manual resets, direct access to the JS runtime):
+
+```rust
+use aardvark_core::{Bundle, InvocationDescriptor, PyRuntime, PyRuntimeConfig};
+
+fn manual(bytes: &[u8]) -> anyhow::Result<()> {
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let bundle = Bundle::from_zip_bytes(bytes)?;
+    let descriptor = InvocationDescriptor::new("main:handler".into());
+    let session = runtime.prepare_session_with_descriptor(bundle, descriptor)?;
+    let outcome = runtime.run_session(&session)?;
+    tracing::info!(?outcome.status);
+    Ok(())
+}
+```
+
+`PyRuntimeConfig` still exposes `snapshot.*`, `budget_override`, `host_capabilities`, and warm snapshot hooks (`before_warm_snapshot`, `after_warm_restore`).
 
 ## Resetting a runtime explicitly
 
 - `reset_to_snapshot()` recreates the language engine from scratch. This is the slow but safest option when you want to reclaim every resource.
-- `reset_in_place()` reuses the existing isolate, wipes the context, and replays the bootstrap assets so the next invocation starts from the warm snapshot without a full teardown.
-- `PoolResetMode::InPlace` lets the pool call `reset_in_place()` automatically when a handle is dropped; use it together with `ResetPolicy::Manual`.
-- After a reset runs, the next invocation’s diagnostics include `reset.mode`, `reset.duration_ms`, and `reset.engine_generation` so hosts can export per-checkout latency metrics.
+- `reset_in_place()` reuses the existing isolate, wipes the context, and replays the bootstrap assets before the next invocation.
+- `WarmState::into_overlay_preloaded()` indicates that overlay contents were baked into the snapshot so in-place resets can skip the expensive import.
+- Every reset records `mode`, `duration_ms`, and `engine_generation` so the next invocation’s diagnostics explain how the runtime was scrubbed.
 
 ## Warm Snapshots for Faster Cold Starts
 
