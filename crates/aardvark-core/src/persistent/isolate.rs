@@ -235,8 +235,10 @@ impl PythonIsolate {
         code: &str,
         entrypoint: &str,
     ) -> Result<crate::ExecutionOutcome> {
-        let mut options = InlinePythonOptions::default();
-        options.entrypoint = Some(entrypoint.to_owned());
+        let options = InlinePythonOptions {
+            entrypoint: Some(entrypoint.to_owned()),
+            ..InlinePythonOptions::default()
+        };
         self.run_inline_python_with_options(code, options)
     }
 
