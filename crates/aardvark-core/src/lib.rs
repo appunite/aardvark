@@ -59,7 +59,8 @@ mod session;
 
 pub use bundle::{Bundle, BundleFingerprint};
 pub use bundle_manifest::{
-    BundleManifest, ManifestPyodide, ManifestRuntime,
+    BundleManifest, ManifestCpuResources, ManifestFilesystemMode, ManifestFilesystemResources,
+    ManifestNetworkResources, ManifestPyodide, ManifestResources, ManifestRuntime,
     MANIFEST_BASENAME as BUNDLE_MANIFEST_BASENAME, MANIFEST_SCHEMA as BUNDLE_MANIFEST_SCHEMA,
     MANIFEST_SCHEMA_VERSION as BUNDLE_MANIFEST_SCHEMA_VERSION,
 };
@@ -74,8 +75,8 @@ pub use outcome::{
     Diagnostics, ExecutionOutcome, FailureKind, OutcomeStatus, ResultPayload, SharedBufferHandle,
 };
 pub use persistent::{
-    BundleArtifact, BundleHandle, BundlePool, CleanupMode, HandlerSession, IsolateConfig,
-    PoolOptions, PoolStats, PythonIsolate, QueueMode,
+    BundleArtifact, BundleHandle, BundlePool, CleanupMode, HandlerSession, InlinePythonOptions,
+    IsolateConfig, PoolOptions, PoolStats, PythonIsolate, QueueMode,
 };
 pub use pool::{PoolConfig, PyRuntimePool};
 pub use runtime::PyRuntime;

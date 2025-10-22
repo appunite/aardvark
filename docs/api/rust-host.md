@@ -76,16 +76,45 @@ Key knobs via `IsolateConfig` / `PyRuntimeConfig`:
 ### Inline Python without a bundle
 
 ```rust
+use aardvark_core::{
+    BundleArtifact, BundleHandle, InlinePythonOptions, IsolateConfig, ManifestCpuResources,
+    ManifestResources, PythonIsolate,
+};
+
 let mut isolate = PythonIsolate::new(IsolateConfig::default())?;
+let mut options = InlinePythonOptions::default();
+options.entrypoint = Some("main:handler".into());
+options.packages = vec!["numpy".into()];
+options.resources = Some(ManifestResources {
+    cpu: Some(ManifestCpuResources { default_limit_ms: Some(3_000) }),
+    ..Default::default()
+});
+
 let script = r#"
+import numpy as np
+
 def handler(user: str = "world"):
-    return f"hi {user}"
+    return f"hi {user}, numpy={np.__name__}"
 "#;
-let outcome = isolate.run_inline_python(script, "main:handler")?;
+
+let outcome = isolate.run_inline_python_with_options(script, options)?;
 assert_eq!(outcome.payload().unwrap().kind(), "text");
 ```
 
-The helper wraps the snippet into an ephemeral bundle (stored entirely in memory) so you can run smoke tests or templated code without touching the bundler.
+`InlinePythonOptions` produces a manifest next to the inline module so you can request packages, tweak resource policies, or target a specific Pyodide build. `PythonIsolate::run_inline_python` remains as a shorthand for the default `main:handler` entrypoint without any extra manifest hints.
+
+If you want to reuse the inline handler across isolates or pools, build a `BundleArtifact` directly:
+
+```rust
+let artifact = BundleArtifact::from_inline_python(script, InlinePythonOptions::default())?;
+let handle = BundleHandle::from_artifact(artifact.clone());
+let handler = handle.prepare_default_handler();
+let mut isolate = PythonIsolate::new(IsolateConfig::default())?;
+isolate.load_bundle(&handle)?;
+let outcome = handler.invoke(&mut isolate)?;
+```
+
+This path keeps a normalised manifest and fingerprint so pooling, caching, and descriptor overrides work exactly the same way as ZIP-backed bundles.
 
 ## Pooling (`BundlePool`)
 

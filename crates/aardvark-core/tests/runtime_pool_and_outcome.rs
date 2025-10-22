@@ -3,8 +3,8 @@ use aardvark_core::{
     invocation::{FieldDescriptor, InvocationDescriptor, InvocationLimits},
     outcome::{FailureKind, OutcomeStatus, ResetMode, ResultPayload},
     persistent::{
-        BundleArtifact, BundleHandle, BundlePool, CallOutcome, IsolateConfig, IsolateId,
-        LifecycleHooks, PoolOptions, PythonIsolate, QueueMode, RecycleReason,
+        BundleArtifact, BundleHandle, BundlePool, CallOutcome, InlinePythonOptions, IsolateConfig,
+        IsolateId, LifecycleHooks, PoolOptions, PythonIsolate, QueueMode, RecycleReason,
     },
     pool::{PoolConfig, PoolResetMode},
     strategy::{
@@ -64,6 +64,7 @@ fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_bundle_pool_lifecycle_hooks()?;
     verify_bundle_pool_heap_quarantine()?;
     verify_python_isolate_inline()?;
+    verify_inline_python_numpy_manifest()?;
     Ok(())
 }
 
@@ -1295,6 +1296,44 @@ def handler():
 "#;
     let outcome = isolate.run_inline_python(code, "main:handler")?;
     assert_eq!(payload_text(&outcome), "'inline'");
+    Ok(())
+}
+
+fn verify_inline_python_numpy_manifest() -> Result<()> {
+    let code = r#"
+import numpy as np
+
+def handler():
+    return f"np:{np.__name__}"
+"#;
+    let options = InlinePythonOptions {
+        entrypoint: Some("analytics.numpy_runner:handler".to_string()),
+        packages: vec!["numpy".to_string()],
+        ..InlinePythonOptions::default()
+    };
+
+    let artifact = BundleArtifact::from_inline_python(code, options)?;
+    assert_eq!(artifact.entrypoint(), "analytics.numpy_runner:handler");
+    assert_eq!(artifact.language(), RuntimeLanguage::Python);
+
+    let manifest = artifact
+        .manifest()
+        .expect("inline bundle should include manifest");
+    assert_eq!(manifest.packages(), &["numpy".to_string()]);
+
+    let descriptor = artifact.default_descriptor();
+    assert_eq!(descriptor.entrypoint(), "analytics.numpy_runner:handler");
+    assert_eq!(descriptor.language, Some(RuntimeLanguage::Python));
+
+    let entry_paths: Vec<_> = artifact
+        .bundle()
+        .entries()
+        .iter()
+        .map(|entry| entry.path().to_string())
+        .collect();
+    assert!(entry_paths.contains(&"analytics/__init__.py".to_string()));
+    assert!(entry_paths.contains(&"analytics/numpy_runner.py".to_string()));
+
     Ok(())
 }
 

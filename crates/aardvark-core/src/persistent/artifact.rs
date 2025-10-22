@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use super::InlinePythonOptions;
 use crate::bundle::{Bundle, BundleFingerprint};
 use crate::bundle_manifest::BundleManifest;
 use crate::error::Result;
@@ -49,6 +50,12 @@ impl BundleArtifact {
         }))
     }
 
+    /// Builds an artifact from inline Python code and manifest-style options.
+    pub fn from_inline_python(code: &str, options: InlinePythonOptions) -> Result<Arc<Self>> {
+        let (bundle, _) = options.build_bundle(code)?;
+        Self::from_bundle(bundle)
+    }
+
     /// Returns a clone of the underlying bundle.
     pub fn bundle(&self) -> Bundle {
         self.bundle.clone()
@@ -79,5 +86,92 @@ impl BundleArtifact {
         let mut descriptor = InvocationDescriptor::new(self.entrypoint.clone());
         descriptor.language = Some(self.language);
         descriptor
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bundle_manifest::{
+        ManifestCpuResources, ManifestFilesystemMode, ManifestFilesystemResources,
+        ManifestNetworkResources, ManifestResources,
+    };
+    use crate::BUNDLE_MANIFEST_BASENAME;
+
+    #[test]
+    fn inline_artifact_embeds_manifest_and_code() -> Result<()> {
+        let options = InlinePythonOptions {
+            entrypoint: Some("analytics.echo:handler".to_string()),
+            packages: vec![
+                "NumPy".to_string(),
+                "numpy".to_string(),
+                "pandas".to_string(),
+            ],
+            resources: Some(ManifestResources {
+                cpu: Some(ManifestCpuResources {
+                    default_limit_ms: Some(750),
+                }),
+                network: Some(ManifestNetworkResources {
+                    allow: vec!["Api.Example.com".to_string()],
+                    https_only: false,
+                }),
+                filesystem: Some(ManifestFilesystemResources {
+                    mode: Some(ManifestFilesystemMode::ReadWrite),
+                    quota_bytes: Some(2048),
+                }),
+                host_capabilities: vec!["rawctx_buffers".to_string(), "RAWCTX_BUFFERS".to_string()],
+            }),
+            ..InlinePythonOptions::default()
+        };
+
+        let code = r#"import numpy as np
+
+def handler():
+    return f"numpy:{np.__name__}"
+"#;
+
+        let artifact = BundleArtifact::from_inline_python(code, options)?;
+        assert_eq!(artifact.entrypoint(), "analytics.echo:handler");
+        assert_eq!(artifact.language(), RuntimeLanguage::Python);
+
+        let manifest = artifact
+            .manifest()
+            .expect("inline artifact should embed manifest");
+        assert_eq!(
+            manifest.packages(),
+            &["NumPy".to_string(), "pandas".to_string()]
+        );
+        let resources = manifest
+            .resources()
+            .expect("resources block should be preserved");
+        assert_eq!(
+            resources.cpu.as_ref().and_then(|cpu| cpu.default_limit_ms),
+            Some(750)
+        );
+        let network = resources.network.as_ref().expect("network block present");
+        assert_eq!(network.allow, vec!["Api.Example.com".to_string()]);
+        assert!(!network.https_only);
+        let filesystem = resources
+            .filesystem
+            .as_ref()
+            .expect("filesystem block present");
+        assert_eq!(filesystem.mode, Some(ManifestFilesystemMode::ReadWrite));
+        assert_eq!(filesystem.quota_bytes, Some(2048));
+        assert_eq!(
+            resources.host_capabilities,
+            vec!["rawctx_buffers".to_string()]
+        );
+
+        let entries: Vec<_> = artifact
+            .bundle()
+            .entries()
+            .iter()
+            .map(|entry| entry.path().to_string())
+            .collect();
+        assert!(entries.contains(&"analytics/__init__.py".to_string()));
+        assert!(entries.contains(&"analytics/echo.py".to_string()));
+        assert!(entries.contains(&BUNDLE_MANIFEST_BASENAME.to_string()));
+
+        Ok(())
     }
 }

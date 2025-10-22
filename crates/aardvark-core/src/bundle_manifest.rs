@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::assets::PYODIDE_VERSION;
 use crate::error::{PyRunnerError, Result};
@@ -21,7 +21,7 @@ pub const MANIFEST_SCHEMA_VERSION: &str = "1.0";
 /// Embedded JSON schema used by tooling for validation.
 pub const MANIFEST_SCHEMA: &str = include_str!("../schemas/aardvark.bundle-manifest.schema.json");
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 /// Normalised view of `aardvark.manifest.json`.
 pub struct BundleManifest {
@@ -41,7 +41,7 @@ pub struct BundleManifest {
     pub resources: Option<ManifestResources>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 /// Runtime-specific manifest configuration selected per bundle.
 pub struct ManifestRuntime {
@@ -54,7 +54,7 @@ pub struct ManifestRuntime {
     pub pyodide: Option<ManifestPyodide>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 /// Pyodide-specific overrides applied when Python is selected.
 pub struct ManifestPyodide {
@@ -63,7 +63,7 @@ pub struct ManifestPyodide {
     pub version: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 /// Resource policy hints the runtime should enforce per invocation.
 pub struct ManifestResources {
@@ -81,7 +81,7 @@ pub struct ManifestResources {
     pub host_capabilities: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 /// CPU-related defaults.
 pub struct ManifestCpuResources {
@@ -90,7 +90,7 @@ pub struct ManifestCpuResources {
     pub default_limit_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 /// Network sandbox configuration.
 pub struct ManifestNetworkResources {
@@ -117,7 +117,7 @@ impl ManifestNetworkResources {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 /// Filesystem sandbox configuration.
 pub struct ManifestFilesystemResources {
@@ -129,7 +129,7 @@ pub struct ManifestFilesystemResources {
     pub quota_bytes: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 /// Filesystem access level requested by the bundle.
 pub enum ManifestFilesystemMode {

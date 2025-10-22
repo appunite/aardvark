@@ -1,21 +1,17 @@
-use std::io::{Cursor, Write};
 use std::sync::Arc;
 
 use crate::bundle::BundleFingerprint;
 use crate::config::PyRuntimeConfig;
 use crate::error::Result;
 use crate::invocation::InvocationDescriptor;
-use crate::persistent::BundleArtifact;
+use crate::persistent::{BundleArtifact, InlinePythonOptions};
 use crate::runtime::PyRuntime;
 use crate::runtime_language::RuntimeLanguage;
 use crate::strategy::{
     DefaultInvocationStrategy, JsonInvocationStrategy, PyInvocationStrategy, RawCtxInput,
     RawCtxInvocationStrategy,
 };
-use crate::Bundle;
 use serde_json::Value as JsonValue;
-use zip::write::FileOptions;
-use zip::CompressionMethod;
 
 /// Cleanup behaviour applied after each invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -233,35 +229,30 @@ impl PythonIsolate {
         &mut self.runtime
     }
 
-    /// Executes inline Python code by wrapping it into a temporary bundle.
+    /// Executes inline Python code using default manifest options and entrypoint.
     pub fn run_inline_python(
         &mut self,
         code: &str,
         entrypoint: &str,
     ) -> Result<crate::ExecutionOutcome> {
-        let bundle = bundle_from_inline(code)?;
-        let descriptor = InvocationDescriptor::new(entrypoint.to_owned());
-        let session = self
+        let options = InlinePythonOptions {
+            entrypoint: Some(entrypoint.to_owned()),
+            ..InlinePythonOptions::default()
+        };
+        self.run_inline_python_with_options(code, options)
+    }
+
+    /// Executes inline Python code with manifest-style configuration options.
+    pub fn run_inline_python_with_options(
+        &mut self,
+        code: &str,
+        options: InlinePythonOptions,
+    ) -> Result<crate::ExecutionOutcome> {
+        let (bundle, entrypoint) = options.build_bundle(code)?;
+        let descriptor = InvocationDescriptor::new(entrypoint);
+        let (session, _) = self
             .runtime
-            .prepare_session_with_descriptor(bundle, descriptor)?;
+            .prepare_session_with_manifest_and_descriptor(bundle, descriptor)?;
         self.runtime.run_session(&session)
     }
-}
-
-fn bundle_from_inline(code: &str) -> Result<Bundle> {
-    let cursor = Cursor::new(Vec::new());
-    let mut writer = zip::ZipWriter::new(cursor);
-    writer
-        .start_file(
-            "main.py",
-            FileOptions::default().compression_method(CompressionMethod::Stored),
-        )
-        .map_err(|err| crate::error::PyRunnerError::Bundle(err.to_string()))?;
-    writer
-        .write_all(code.as_bytes())
-        .map_err(|err| crate::error::PyRunnerError::Bundle(err.to_string()))?;
-    let cursor = writer
-        .finish()
-        .map_err(|err| crate::error::PyRunnerError::Bundle(err.to_string()))?;
-    Bundle::from_zip_bytes(cursor.into_inner())
 }

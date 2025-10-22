@@ -115,7 +115,7 @@ fn execute(bundle_bytes: &[u8]) -> anyhow::Result<String> {
 }
 ```
 
-`HandlerSession` exposes `invoke`, `invoke_json`, `invoke_rawctx`, and `invoke_async` adapters. `PythonIsolate` also provides `run_inline_python` for one-off scripts and exposes the underlying `PyRuntime` when you need low-level control.
+`HandlerSession` exposes `invoke`, `invoke_json`, `invoke_rawctx`, and `invoke_async` adapters. `PythonIsolate` also provides `run_inline_python`/`run_inline_python_with_options` for one-off scripts and exposes the underlying `PyRuntime` when you need low-level control.
 
 ### Pooling with `BundlePool`
 
