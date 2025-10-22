@@ -1306,9 +1306,11 @@ import numpy as np
 def handler():
     return f"np:{np.__name__}"
 "#;
-    let mut options = InlinePythonOptions::default();
-    options.entrypoint = Some("analytics.numpy_runner:handler".to_string());
-    options.packages = vec!["numpy".to_string()];
+    let options = InlinePythonOptions {
+        entrypoint: Some("analytics.numpy_runner:handler".to_string()),
+        packages: vec!["numpy".to_string()],
+        ..InlinePythonOptions::default()
+    };
 
     let artifact = BundleArtifact::from_inline_python(code, options)?;
     assert_eq!(artifact.entrypoint(), "analytics.numpy_runner:handler");

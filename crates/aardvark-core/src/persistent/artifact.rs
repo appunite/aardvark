@@ -100,27 +100,29 @@ mod tests {
 
     #[test]
     fn inline_artifact_embeds_manifest_and_code() -> Result<()> {
-        let mut options = InlinePythonOptions::default();
-        options.entrypoint = Some("analytics.echo:handler".to_string());
-        options.packages = vec![
-            "NumPy".to_string(),
-            "numpy".to_string(),
-            "pandas".to_string(),
-        ];
-        options.resources = Some(ManifestResources {
-            cpu: Some(ManifestCpuResources {
-                default_limit_ms: Some(750),
+        let options = InlinePythonOptions {
+            entrypoint: Some("analytics.echo:handler".to_string()),
+            packages: vec![
+                "NumPy".to_string(),
+                "numpy".to_string(),
+                "pandas".to_string(),
+            ],
+            resources: Some(ManifestResources {
+                cpu: Some(ManifestCpuResources {
+                    default_limit_ms: Some(750),
+                }),
+                network: Some(ManifestNetworkResources {
+                    allow: vec!["Api.Example.com".to_string()],
+                    https_only: false,
+                }),
+                filesystem: Some(ManifestFilesystemResources {
+                    mode: Some(ManifestFilesystemMode::ReadWrite),
+                    quota_bytes: Some(2048),
+                }),
+                host_capabilities: vec!["rawctx_buffers".to_string(), "RAWCTX_BUFFERS".to_string()],
             }),
-            network: Some(ManifestNetworkResources {
-                allow: vec!["Api.Example.com".to_string()],
-                https_only: false,
-            }),
-            filesystem: Some(ManifestFilesystemResources {
-                mode: Some(ManifestFilesystemMode::ReadWrite),
-                quota_bytes: Some(2048),
-            }),
-            host_capabilities: vec!["rawctx_buffers".to_string(), "RAWCTX_BUFFERS".to_string()],
-        });
+            ..InlinePythonOptions::default()
+        };
 
         let code = r#"import numpy as np
 
