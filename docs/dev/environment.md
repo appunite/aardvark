@@ -50,6 +50,9 @@ runtime. The following steps get you ready to develop locally.
    ```
 
    The build downloads [V8](https://v8.dev/) via `v8-rs` the first time; this may take a while.
+   We pin `EXTRA_GN_ARGS=force_pic=true` in `.cargo/config.toml` so all V8
+   objects are position-independent, which keeps downstream shared-library
+   embeddings (e.g. Elixir NIFs) linkable out of the box.
 
 ## Project Layout
 
@@ -76,3 +79,5 @@ runtime. The following steps get you ready to develop locally.
 - `AARDVARK_OVERLAY_CACHE_DIR` – directory used by overlay hydration tests.
 - `RUST_LOG` – set to `info` or `debug` to see tracing spans while running the
   CLI or tests.
+- `EXTRA_GN_ARGS` – appended to the GN invocation when rebuilding V8. We set
+  `force_pic=true` by default; export your own value to override/extend it.
