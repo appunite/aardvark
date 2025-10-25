@@ -1,4 +1,4 @@
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 //! Aardvark is an embeddable multi-language runtime for executing sandboxed bundles inside V8.
 //!
