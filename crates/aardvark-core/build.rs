@@ -71,9 +71,13 @@ fn main() -> Result<()> {
         .with_context(|| format!("create {}", pyodide_out_dir.display()))?;
 
     let archive_spec = PyodideArchiveSpec::active();
+    let docs_rs_build = env::var_os("DOCS_RS").is_some();
 
     let overwrite_sources = env::var_os("AARDVARK_PYODIDE_DIR");
-    if let Some(dir) = overwrite_sources {
+    if docs_rs_build {
+        println!("cargo:warning=DOCS_RS detected; generating placeholder Pyodide assets");
+        generate_docs_placeholders(&pyodide_out_dir)?;
+    } else if let Some(dir) = overwrite_sources {
         let dir = PathBuf::from(dir);
         copy_dir_recursive(&dir, &pyodide_out_dir)
             .with_context(|| format!("copying Pyodide assets from {}", dir.to_string_lossy()))?;
@@ -95,14 +99,18 @@ fn main() -> Result<()> {
         "cargo:rustc-env=AARDVARK_PYODIDE_DIR={}",
         pyodide_out_dir.display()
     );
-    let default_package_dir = match archive_spec.variant {
-        PyodideVariant::Full => Some(
-            pyodide_out_dir
-                .join("pyodide")
-                .join(format!("v{PYODIDE_VERSION}"))
-                .join("full"),
-        ),
-        PyodideVariant::Core => None,
+    let default_package_dir = if docs_rs_build {
+        None
+    } else {
+        match archive_spec.variant {
+            PyodideVariant::Full => Some(
+                pyodide_out_dir
+                    .join("pyodide")
+                    .join(format!("v{PYODIDE_VERSION}"))
+                    .join("full"),
+            ),
+            PyodideVariant::Core => None,
+        }
     };
     let default_package_str = default_package_dir
         .as_ref()
@@ -217,6 +225,47 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
             })?;
         }
     }
+    Ok(())
+}
+
+fn generate_docs_placeholders(out_dir: &Path) -> Result<()> {
+    const ASM_PLACEHOLDER: &str = r#"// docs.rs placeholder - Pyodide assets are unavailable in documentation builds.
+var Module = { API: {} };
+var _createPyodideModule = function () { throw new Error("Pyodide runtime is unavailable in docs.rs builds"); };
+globalThis._createPyodideModule = _createPyodideModule;
+const API=Module.API;
+reportUndefinedSymbols();
+crypto.getRandomValues(Module, []);
+new WebAssembly.Module({});
+WebAssembly.instantiate({});
+Date.now();
+eval(func);
+eval(data);
+eval(UTF8ToString(ptr));
+"#;
+
+    const MJS_PLACEHOLDER: &str = r#"export async function loadPyodide() {
+    throw new Error("Pyodide runtime is unavailable in docs.rs builds");
+}
+"#;
+
+    const JS_PLACEHOLDER: &str = r#"export function loadPyodide() {
+    throw new Error("Pyodide runtime is unavailable in docs.rs builds");
+}
+"#;
+
+    fs::write(out_dir.join("pyodide.asm.js"), ASM_PLACEHOLDER)
+        .context("write docs placeholder pyodide.asm.js")?;
+    fs::write(out_dir.join("pyodide.mjs"), MJS_PLACEHOLDER)
+        .context("write docs placeholder pyodide.mjs")?;
+    fs::write(out_dir.join("pyodide.js"), JS_PLACEHOLDER)
+        .context("write docs placeholder pyodide.js")?;
+    fs::write(out_dir.join("pyodide-lock.json"), r#"{"packages":{}}"#)
+        .context("write docs placeholder pyodide-lock.json")?;
+    fs::write(out_dir.join("pyodide.asm.wasm"), &[] as &[u8])
+        .context("write docs placeholder pyodide.asm.wasm")?;
+    fs::write(out_dir.join("python_stdlib.zip"), &[] as &[u8])
+        .context("write docs placeholder python_stdlib.zip")?;
     Ok(())
 }
 
