@@ -6,7 +6,7 @@ mod python;
 use crate::bundle::{Bundle, BundleFingerprint};
 use crate::bundle_manifest::{BundleManifest, ManifestFilesystemMode, ManifestFilesystemResources};
 use crate::config::{PyRuntimeConfig, ResetPolicy, WarmState};
-use crate::engine::{ExecutionOutput, FilesystemModeConfig, JsRuntime};
+use crate::engine::{self, ExecutionOutput, FilesystemModeConfig, JsRuntime};
 use crate::error::{PyRunnerError, Result};
 use crate::invocation::{InvocationDescriptor, InvocationLimits};
 use crate::outcome::{
@@ -125,6 +125,7 @@ struct CurrentBundleState {
 impl AardvarkRuntime {
     /// Creates a new runtime instance based on the provided configuration.
     pub fn new(config: PyRuntimeConfig) -> Result<Self> {
+        engine::set_package_root_override(config.pyodide_package_dir.clone());
         let engine = create_engine(config.default_language, &config)?;
         Ok(Self {
             config,

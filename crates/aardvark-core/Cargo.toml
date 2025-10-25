@@ -4,7 +4,15 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 rust-version.workspace = true
-authors.workspace = true
+readme.workspace = true
+keywords = ["runtime", "wasm", "v8"]
+categories = ["compilers", "development-tools"]
+repository.workspace = true
+description = "Runtime for executing sandboxed python bundles inside V8."
+
+[features]
+default = []
+full-pyodide-packages = []
 
 [dependencies]
 anyhow.workspace = true
@@ -35,3 +43,6 @@ hex = "0.4"
 sha2 = "0.10"
 tar = "0.4"
 ureq = { version = "2.10", features = ["tls"] }
+
+[dev-dependencies]
+tempfile = "3.10"

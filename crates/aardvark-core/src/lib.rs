@@ -50,6 +50,7 @@ pub mod outcome;
 mod package_metadata;
 pub mod persistent;
 pub mod pool;
+pub mod pyodide;
 pub mod runtime;
 mod runtime_language;
 pub mod strategy;

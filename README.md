@@ -44,27 +44,37 @@ The manifest bundled with the example instructs the runtime to install `numpy` a
 
 ### Preparing [Pyodide](https://pyodide.org/) assets
 
-The runtime expects a local [Pyodide](https://pyodide.org/) cache and never downloads wheels on demand.
-Stage the upstream release yourself and flatten it into
-`./.aardvark/pyodide/<version>` so every asset sits directly under that
-directory:
+The runtime expects a local [Pyodide](https://pyodide.org/) cache and never
+downloads wheels on demand. Pick whichever setup path fits your workflow:
 
-```
-mkdir -p .aardvark/pyodide/0.29.0
-curl -L -o pyodide-0.29.0.tar.bz2 \
-  https://github.com/pyodide/pyodide/releases/download/0.29.0/pyodide-0.29.0.tar.bz2
-echo "85395f34a808cc8852f3c4a5f5d47f906a8a52fa05e5cd70da33be82f4d86a58  pyodide-0.29.0.tar.bz2" | sha256sum --check
-tar -xjf pyodide-0.29.0.tar.bz2
-rsync -a pyodide/pyodide/v0.29.0/full/ .aardvark/pyodide/0.29.0/
-rm -rf pyodide pyodide-0.29.0.tar.bz2
-```
+1. **Compile with `full-pyodide-packages`.** Enabling the
+   `aardvark-core` crate feature fetches the full Pyodide 0.29.0 release during
+   `cargo build`, verifies the checksum, and points
+   `PyRuntimeConfig::default()` at the extracted cache. This is ideal for CI or
+   hosts that want zero manual staging.
+2. **Use the CLI helper.** `cargo run -p aardvark-cli -- assets stage` downloads
+   and flattens the release into `.aardvark/pyodide/0.29.0/` by default. Add
+   `--variant core` for the slim bundle, `--output <dir>` to stage elsewhere, or
+   `--force` to replace an existing cache.
+3. **Stage manually.** Download and unpack the upstream archive yourself so the
+   wheels live directly under `./.aardvark/pyodide/<version>`:
 
-Swap the archive name for `pyodide-core-0.29.0.tar.bz2` if you only need the
-core subset. Once the files are in place, set
-`AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.29.0` (or configure
-`PyRuntimeConfig::pyodide_version`). When [Pyodide](https://pyodide.org/) requests
-`pyodide/v0.29.0/full/numpy-*.whl`, the runtime will serve
-`.aardvark/pyodide/0.29.0/numpy-*.whl` straight from disk.
+       mkdir -p .aardvark/pyodide/0.29.0
+       curl -L -o pyodide-0.29.0.tar.bz2 \
+         https://github.com/pyodide/pyodide/releases/download/0.29.0/pyodide-0.29.0.tar.bz2
+       echo "85395f34a808cc8852f3c4a5f5d47f906a8a52fa05e5cd70da33be82f4d86a58  pyodide-0.29.0.tar.bz2" | sha256sum --check
+       tar -xjf pyodide-0.29.0.tar.bz2
+       rsync -a pyodide/pyodide/v0.29.0/full/ .aardvark/pyodide/0.29.0/
+       rm -rf pyodide pyodide-0.29.0.tar.bz2
+
+   Swap the archive name for `pyodide-core-0.29.0.tar.bz2` if you only need the
+   core subset.
+
+After staging, either set
+`AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.29.0` or configure
+`PyRuntimeConfig::with_pyodide_package_dir(...)` / `set_pyodide_package_dir(...)`
+so the runtime resolves requests such as
+`pyodide/v0.29.0/full/numpy-*.whl` directly from disk.
 
 ### Building CLI release binaries
 

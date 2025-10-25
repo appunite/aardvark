@@ -11,11 +11,47 @@ use sha2::{Digest, Sha256};
 use tar::Archive;
 use ureq::Agent;
 
-const PYODIDE_VERSION: &str = "0.29.0";
-const PYODIDE_ARCHIVE_URL: &str =
-    "https://github.com/pyodide/pyodide/releases/download/0.29.0/pyodide-core-0.29.0.tar.bz2";
-const PYODIDE_ARCHIVE_SHA256: &str =
-    "fe85edd0d5c9828598da14c98d2f79cea45aac5a9e6448ca65dcc2d58d4ed033";
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/pyodide_manifest.rs"));
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PyodideVariant {
+    Core,
+    Full,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PyodideArchiveSpec {
+    archive_name: &'static str,
+    sha256: &'static str,
+    variant: PyodideVariant,
+}
+
+impl PyodideArchiveSpec {
+    fn active() -> Self {
+        if cfg!(feature = "full-pyodide-packages") {
+            Self {
+                archive_name: PYODIDE_FULL_ARCHIVE_NAME,
+                sha256: PYODIDE_FULL_ARCHIVE_SHA256,
+                variant: PyodideVariant::Full,
+            }
+        } else {
+            Self {
+                archive_name: PYODIDE_CORE_ARCHIVE_NAME,
+                sha256: PYODIDE_CORE_ARCHIVE_SHA256,
+                variant: PyodideVariant::Core,
+            }
+        }
+    }
+
+    fn download_url(&self) -> String {
+        format!(
+            "{base}/{version}/{name}",
+            base = PYODIDE_RELEASE_BASE_URL,
+            version = PYODIDE_VERSION,
+            name = self.archive_name
+        )
+    }
+}
 
 fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=build.rs");
@@ -34,6 +70,8 @@ fn main() -> Result<()> {
     fs::create_dir_all(&pyodide_out_dir)
         .with_context(|| format!("create {}", pyodide_out_dir.display()))?;
 
+    let archive_spec = PyodideArchiveSpec::active();
+
     let overwrite_sources = env::var_os("AARDVARK_PYODIDE_DIR");
     if let Some(dir) = overwrite_sources {
         let dir = PathBuf::from(dir);
@@ -42,7 +80,7 @@ fn main() -> Result<()> {
     } else {
         let archive_path = match env::var_os("AARDVARK_PYODIDE_ARCHIVE") {
             Some(path) => PathBuf::from(path),
-            None => download_pyodide_archive()?,
+            None => download_pyodide_archive(&archive_spec)?,
         };
         unpack_archive(&archive_path, &pyodide_out_dir)?;
     }
@@ -57,10 +95,24 @@ fn main() -> Result<()> {
         "cargo:rustc-env=AARDVARK_PYODIDE_DIR={}",
         pyodide_out_dir.display()
     );
+    let default_package_dir = match archive_spec.variant {
+        PyodideVariant::Full => Some(
+            pyodide_out_dir
+                .join("pyodide")
+                .join(format!("v{PYODIDE_VERSION}"))
+                .join("full"),
+        ),
+        PyodideVariant::Core => None,
+    };
+    let default_package_str = default_package_dir
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    println!("cargo:rustc-env=AARDVARK_PYODIDE_DEFAULT_PACKAGES={default_package_str}");
     Ok(())
 }
 
-fn download_pyodide_archive() -> Result<PathBuf> {
+fn download_pyodide_archive(spec: &PyodideArchiveSpec) -> Result<PathBuf> {
     let tmp_dir = env::var_os("OUT_DIR")
         .map(PathBuf::from)
         .expect("OUT_DIR not set")
@@ -76,19 +128,20 @@ fn download_pyodide_archive() -> Result<PathBuf> {
         .timeout_read(Duration::from_secs(120))
         .timeout_write(Duration::from_secs(120))
         .build();
+    let url = spec.download_url();
     let mut response = agent
-        .get(PYODIDE_ARCHIVE_URL)
+        .get(&url)
         .call()
-        .with_context(|| format!("downloading {}", PYODIDE_ARCHIVE_URL))?
+        .with_context(|| format!("downloading {}", url))?
         .into_reader();
     let mut file = fs::File::create(&archive_path)?;
     io::copy(&mut response, &mut file)?;
 
-    verify_sha256(&archive_path)?;
+    verify_sha256(&archive_path, spec.sha256)?;
     Ok(archive_path)
 }
 
-fn verify_sha256(path: &Path) -> Result<()> {
+fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
     let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 16 * 1024];
@@ -101,10 +154,10 @@ fn verify_sha256(path: &Path) -> Result<()> {
     }
     let digest = hasher.finalize();
     let digest_hex = digest.encode_hex::<String>();
-    if digest_hex != PYODIDE_ARCHIVE_SHA256 {
+    if digest_hex != expected {
         anyhow::bail!(
             "Pyodide archive checksum mismatch: expected {}, got {}",
-            PYODIDE_ARCHIVE_SHA256,
+            expected,
             digest_hex
         );
     }

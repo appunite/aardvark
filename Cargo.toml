@@ -12,8 +12,10 @@ resolver = "2"
 edition = "2021"
 license = "Apache-2.0"
 version = "0.1.0"
-authors = ["Aardvark Labs <dev@aardvark.example>"]
 rust-version = "1.80"
+authors = ["Aardvark Labs <dev@aardvark.example>"]
+readme = "README.md"
+repository = "https://github.com/appunite/aardvark"
 
 [workspace.dependencies]
 anyhow = "1.0"

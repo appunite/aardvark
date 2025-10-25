@@ -15,7 +15,7 @@ use crate::asset_store::{Asset, AssetStore};
 use crate::bundle::Bundle;
 use crate::error::{PyRunnerError, Result};
 use bytes::Bytes;
-use once_cell::sync::OnceCell;
+use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -28,7 +28,7 @@ use v8::{
 };
 use walkdir::WalkDir;
 static V8_PLATFORM: OnceCell<v8::SharedRef<v8::Platform>> = OnceCell::new();
-static PACKAGE_ROOT: OnceCell<Option<PathBuf>> = OnceCell::new();
+static PACKAGE_ROOT: Lazy<RwLock<Option<PathBuf>>> = Lazy::new(|| RwLock::new(None));
 
 #[derive(Debug, Clone)]
 struct HostPattern {
@@ -212,30 +212,55 @@ pub struct OverlayExport {
     pub blobs: Vec<OverlayBlob>,
 }
 
-fn package_root_dir() -> Option<&'static Path> {
-    PACKAGE_ROOT
-        .get_or_init(|| {
-            let value = env::var_os("AARDVARK_PYODIDE_PACKAGE_DIR").map(PathBuf::from);
-            let resolved = value.map(|path| {
-                if path.is_relative() {
-                    match env::current_dir() {
-                        Ok(cwd) => cwd.join(path),
-                        Err(_) => path,
-                    }
-                } else {
-                    path
-                }
-            });
-            if let Some(ref path) = resolved {
-                tracing::debug!(
-                    target = "aardvark::packages",
-                    path = %path.display(),
-                    "initialised package root"
-                );
-            }
-            resolved
-        })
-        .as_deref()
+fn package_root_dir() -> Option<PathBuf> {
+    if let Some(path) = PACKAGE_ROOT.read().as_ref() {
+        return Some(path.clone());
+    }
+    let resolved = env::var_os("AARDVARK_PYODIDE_PACKAGE_DIR")
+        .map(PathBuf::from)
+        .map(normalize_package_root);
+    if let Some(ref path) = resolved {
+        tracing::debug!(
+            target = "aardvark::packages",
+            path = %path.display(),
+            "initialised package root"
+        );
+        *PACKAGE_ROOT.write() = Some(path.clone());
+    }
+    resolved
+}
+
+pub(crate) fn set_package_root_override(path: Option<PathBuf>) {
+    let normalized = path.map(normalize_package_root);
+    {
+        let mut guard = PACKAGE_ROOT.write();
+        *guard = normalized.clone();
+    }
+    match normalized {
+        Some(ref path) => tracing::debug!(
+            target = "aardvark::packages",
+            path = %path.display(),
+            "package root override set"
+        ),
+        None => tracing::debug!(
+            target = "aardvark::packages",
+            "cleared package root override"
+        ),
+    }
+}
+
+fn normalize_package_root(path: PathBuf) -> PathBuf {
+    if path.is_relative() {
+        if let Ok(cwd) = env::current_dir() {
+            return cwd.join(path);
+        }
+    }
+    path
+}
+
+#[cfg(test)]
+pub(crate) fn reset_package_root_for_tests() {
+    *PACKAGE_ROOT.write() = None;
 }
 
 fn resolve_local_package_path(url: &str) -> Option<PathBuf> {
@@ -292,7 +317,7 @@ fn resolve_local_package_path(url: &str) -> Option<PathBuf> {
         }
     }
     if let Some(file_name) = as_path.file_name() {
-        if let Some(found) = walk_for_file(root, file_name) {
+        if let Some(found) = walk_for_file(&root, file_name) {
             tracing::debug!(
                 target = "aardvark::packages",
                 path = %found.display(),
@@ -2704,4 +2729,64 @@ fn release_shared_buffers<'a>(
         .call(scope, global.into(), &args)
         .ok_or_else(|| PyRunnerError::Execution("release shared buffers call failed".into()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::fs;
+    use tempfile::tempdir;
+
+    struct EnvGuard {
+        original: Option<OsString>,
+    }
+
+    impl EnvGuard {
+        fn clear() -> Self {
+            let original = env::var_os("AARDVARK_PYODIDE_PACKAGE_DIR");
+            env::remove_var("AARDVARK_PYODIDE_PACKAGE_DIR");
+            Self { original }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.original.take() {
+                Some(value) => env::set_var("AARDVARK_PYODIDE_PACKAGE_DIR", value),
+                None => env::remove_var("AARDVARK_PYODIDE_PACKAGE_DIR"),
+            }
+        }
+    }
+
+    #[test]
+    fn package_root_override_takes_precedence() {
+        reset_package_root_for_tests();
+        let temp = tempdir().expect("create tempdir");
+        let cache_dir = temp.path().join("cache");
+        fs::create_dir(&cache_dir).expect("create cache dir");
+
+        let guard = EnvGuard::clear();
+        set_package_root_override(Some(cache_dir.clone()));
+        let resolved = package_root_dir().expect("package root available");
+        assert_eq!(resolved, cache_dir);
+
+        drop(guard);
+        reset_package_root_for_tests();
+    }
+
+    #[test]
+    fn package_root_falls_back_to_env() {
+        reset_package_root_for_tests();
+        let temp = tempdir().expect("create tempdir");
+        let cache_dir = temp.path().join("env-cache");
+        fs::create_dir(&cache_dir).expect("create env cache dir");
+
+        std::env::set_var("AARDVARK_PYODIDE_PACKAGE_DIR", &cache_dir);
+        let resolved = package_root_dir().expect("package root from env");
+        assert_eq!(resolved, cache_dir);
+
+        std::env::remove_var("AARDVARK_PYODIDE_PACKAGE_DIR");
+        reset_package_root_for_tests();
+    }
 }

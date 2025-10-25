@@ -8,13 +8,16 @@ version = "0.1.0"
 dependencies = [
  "aardvark-core",
  "anyhow",
+ "bzip2",
  "clap 4.5.48",
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "ureq",
 ]
 
 [[package]]
@@ -36,6 +39,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tar",
+ "tempfile",
  "thiserror",
  "timezone_provider 0.0.14",
  "tokio",

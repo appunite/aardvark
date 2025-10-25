@@ -3,9 +3,11 @@
 use crate::engine::OverlayExport;
 use crate::error::Result;
 use crate::invocation::InvocationLimits;
+use crate::pyodide::PYODIDE_VERSION;
 use crate::runtime::PyRuntime;
 use crate::runtime_language::RuntimeLanguage;
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 /// Controls how the runtime loads and captures Pyodide snapshots.
@@ -164,6 +166,12 @@ impl fmt::Debug for WarmState {
 pub struct PyRuntimeConfig {
     /// Bundled Pyodide version string (usually derived from build-time assets).
     pub pyodide_version: String,
+    /// Filesystem directory used to resolve Pyodide wheel and metadata requests.
+    ///
+    /// When the crate is compiled with the `full-pyodide-packages` feature this defaults to the
+    /// build-script managed cache extracted into `OUT_DIR`. Hosts can override it programmatically
+    /// to avoid relying on process-wide environment variables.
+    pub pyodide_package_dir: Option<PathBuf>,
     /// Default guest language selected when manifests/descriptors omit one.
     pub default_language: RuntimeLanguage,
     /// Snapshot-related configuration.
@@ -182,8 +190,18 @@ pub struct PyRuntimeConfig {
 
 impl Default for PyRuntimeConfig {
     fn default() -> Self {
+        let default_package_dir =
+            option_env!("AARDVARK_PYODIDE_DEFAULT_PACKAGES").and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(trimmed))
+                }
+            });
         Self {
-            pyodide_version: "0.29.0".to_owned(),
+            pyodide_version: PYODIDE_VERSION.to_owned(),
+            pyodide_package_dir: default_package_dir,
             default_language: RuntimeLanguage::Python,
             snapshot: SnapshotConfig::default(),
             hooks: HostHooks::default(),
@@ -192,6 +210,35 @@ impl Default for PyRuntimeConfig {
             host_capabilities: vec!["rawctx_buffers".to_string()],
             warm_state: None,
         }
+    }
+}
+
+impl PyRuntimeConfig {
+    /// Returns the configured Pyodide package directory, if any.
+    pub fn pyodide_package_dir(&self) -> Option<&PathBuf> {
+        self.pyodide_package_dir.as_ref()
+    }
+
+    /// Sets the Pyodide package directory override.
+    pub fn set_pyodide_package_dir<P: Into<PathBuf>>(&mut self, path: P) {
+        self.pyodide_package_dir = Some(path.into());
+    }
+
+    /// Clears any explicit Pyodide package directory override.
+    pub fn clear_pyodide_package_dir(&mut self) {
+        self.pyodide_package_dir = None;
+    }
+
+    /// Returns a new configuration with the provided Pyodide package directory.
+    pub fn with_pyodide_package_dir<P: Into<PathBuf>>(mut self, path: P) -> Self {
+        self.set_pyodide_package_dir(path);
+        self
+    }
+
+    /// Returns a new configuration without an explicit Pyodide package directory override.
+    pub fn without_pyodide_package_dir(mut self) -> Self {
+        self.clear_pyodide_package_dir();
+        self
     }
 }
 
