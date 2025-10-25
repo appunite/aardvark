@@ -46,7 +46,7 @@ the daily workflow.
 ### Smoke Testing the CLI
 
 ```
-AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.28.2 \
+AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.29.0 \
   cargo run -p aardvark-cli -- \
   --bundle hello_bundle.zip --entrypoint main:main --manifest
 ```

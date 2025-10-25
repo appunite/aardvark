@@ -34,13 +34,13 @@ runtime. The following steps get you ready to develop locally.
    serve wheel requests locally:
 
    ```bash
-   mkdir -p .aardvark/pyodide/0.28.2
-   curl -L -o pyodide-0.28.2.tar.bz2 \
-     https://github.com/pyodide/pyodide/releases/download/0.28.2/pyodide-0.28.2.tar.bz2
-   echo "31021174e8fdc9556c17e9d435e20d9c07f203ac542d9161ca3b8d9d5d04e7e7  pyodide-0.28.2.tar.bz2" | sha256sum --check
-   tar -xjf pyodide-0.28.2.tar.bz2
-   rsync -a pyodide/pyodide/v0.28.2/full/ .aardvark/pyodide/0.28.2/
-   rm -rf pyodide pyodide-0.28.2.tar.bz2
+   mkdir -p .aardvark/pyodide/0.29.0
+   curl -L -o pyodide-0.29.0.tar.bz2 \
+     https://github.com/pyodide/pyodide/releases/download/0.29.0/pyodide-0.29.0.tar.bz2
+   echo "85395f34a808cc8852f3c4a5f5d47f906a8a52fa05e5cd70da33be82f4d86a58  pyodide-0.29.0.tar.bz2" | sha256sum --check
+   tar -xjf pyodide-0.29.0.tar.bz2
+   rsync -a pyodide/pyodide/v0.29.0/full/ .aardvark/pyodide/0.29.0/
+   rm -rf pyodide pyodide-0.29.0.tar.bz2
    ```
 
 4. Build the workspace:

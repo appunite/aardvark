@@ -9,7 +9,7 @@
 Embedded multi-language runtime for executing sandboxed bundles inside [V8](https://v8.dev/), with hardened resource controls and structured diagnostics. The project takes clear inspiration from Cloudflare Python Workers while pursuing an embeddable library-first design for Rust hosts. **Aardvark is experimental software**: APIs, manifests, and runtime semantics may change without notice, and the system has not been hardened for production traffic yet.
 
 > [!IMPORTANT]
-> Aardvark bundles prebuilt PIC-enabled V8 142.0.0 archives that we compiled from the upstream tag with `v8_monolithic=true` and `v8_monolithic_for_shared_library=true`. The workspace’s `.cargo/config.toml` points `RUSTY_V8_MIRROR` at our GitHub release so `cargo build` uses those artifacts by default. If you package your own cdylib (for example, an Elixir NIF) you can keep this mirror, or override `RUSTY_V8_MIRROR` / `RUSTY_V8_ARCHIVE` to supply a different build.
+> Aardvark bundles prebuilt PIC-enabled V8 142.0.0 archives that we compiled from the upstream tag with `v8_monolithic=true` and `v8_monolithic_for_shared_library=true`. The workspace’s `.cargo/config.toml` points `RUSTY_V8_MIRROR` at our GitHub release so `cargo build` uses those artifacts by default. If you package your own cdylib (for example, an Elixir NIF) you can keep this mirror, or override `RUSTY_V8_MIRROR` / `RUSTY_V8_ARCHIVE` to supply a different build. The mirror is still experimental—expect churn and let us know if you hit linker surprises.
 
 ## Why Aardvark?
 
@@ -34,7 +34,7 @@ cargo run -p aardvark-cli -- \
 To preload packages, point the runtime at an unpacked [Pyodide](https://pyodide.org/) cache:
 
 ```
-AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.28.2 \
+AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.29.0 \
   cargo run -p aardvark-cli -- \
   --bundle example/pandas_numpy_bundle.zip \
   --manifest
@@ -50,21 +50,21 @@ Stage the upstream release yourself and flatten it into
 directory:
 
 ```
-mkdir -p .aardvark/pyodide/0.28.2
-curl -L -o pyodide-0.28.2.tar.bz2 \
-  https://github.com/pyodide/pyodide/releases/download/0.28.2/pyodide-0.28.2.tar.bz2
-echo "31021174e8fdc9556c17e9d435e20d9c07f203ac542d9161ca3b8d9d5d04e7e7  pyodide-0.28.2.tar.bz2" | sha256sum --check
-tar -xjf pyodide-0.28.2.tar.bz2
-rsync -a pyodide/pyodide/v0.28.2/full/ .aardvark/pyodide/0.28.2/
-rm -rf pyodide pyodide-0.28.2.tar.bz2
+mkdir -p .aardvark/pyodide/0.29.0
+curl -L -o pyodide-0.29.0.tar.bz2 \
+  https://github.com/pyodide/pyodide/releases/download/0.29.0/pyodide-0.29.0.tar.bz2
+echo "85395f34a808cc8852f3c4a5f5d47f906a8a52fa05e5cd70da33be82f4d86a58  pyodide-0.29.0.tar.bz2" | sha256sum --check
+tar -xjf pyodide-0.29.0.tar.bz2
+rsync -a pyodide/pyodide/v0.29.0/full/ .aardvark/pyodide/0.29.0/
+rm -rf pyodide pyodide-0.29.0.tar.bz2
 ```
 
-Swap the archive name for `pyodide-core-0.28.2.tar.bz2` if you only need the
+Swap the archive name for `pyodide-core-0.29.0.tar.bz2` if you only need the
 core subset. Once the files are in place, set
-`AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.28.2` (or configure
+`AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.29.0` (or configure
 `PyRuntimeConfig::pyodide_version`). When [Pyodide](https://pyodide.org/) requests
-`pyodide/v0.28.2/full/numpy-*.whl`, the runtime will serve
-`.aardvark/pyodide/0.28.2/numpy-*.whl` straight from disk.
+`pyodide/v0.29.0/full/numpy-*.whl`, the runtime will serve
+`.aardvark/pyodide/0.29.0/numpy-*.whl` straight from disk.
 
 ### Building CLI release binaries
 
@@ -233,7 +233,7 @@ Arguments are `[iterations] [payload_len]` (both optional). The harness warms th
 - Developer onboarding material is available in `docs/dev/` for contributors extending the project.
 - Performance notes and benchmark workflow live in `docs/perf/overview.md`.
 - The included `Makefile` has helpers (`make perf-all`, `make perf-md`). It
-  honours `PYODIDE_DIR` (default `./.aardvark/pyodide/0.28.2`) when wiring up
+  honours `PYODIDE_DIR` (default `./.aardvark/pyodide/0.29.0`) when wiring up
   the perf harness.
 
 ## Publishing Notes

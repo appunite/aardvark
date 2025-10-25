@@ -37,7 +37,7 @@ the OS.
   it in documentation for reproducible instructions.
 - [Pyodide](https://pyodide.org/) assets already downloaded (see [Host Integration – Preparing Pyodide assets](../api/rust-host.md#preparing-pyodide-assets)).
 
-Ensure a matching CPython is available ([Pyodide](https://pyodide.org/) 0.28.2 targets Python 3.13):
+Ensure a matching CPython is available ([Pyodide](https://pyodide.org/) 0.29.0 targets Python 3.13.2):
 
 ```sh
 mise install python@3.13
@@ -48,13 +48,13 @@ mise exec python@3.13 -- python --version
 
 The harness reads [Pyodide](https://pyodide.org/) wheels from the directory referenced by
 `AARDVARK_PYODIDE_PACKAGE_DIR` (the `Makefile` forwards `PYODIDE_DIR`, which
-defaults to `./.aardvark/pyodide/0.28.2`). Stage the upstream release and copy
-the contents of `pyodide/v0.28.2/full/` (or `core/`) into that directory so the
-runtime can serve requests like `pyodide/v0.28.2/full/numpy-….whl` from a flat
+defaults to `./.aardvark/pyodide/0.29.0`). Stage the upstream release and copy
+the contents of `pyodide/v0.29.0/full/` (or `core/`) into that directory so the
+runtime can serve requests like `pyodide/v0.29.0/full/numpy-….whl` from a flat
 layout. A quick setup looks like:
 
 ```sh
-export PYODIDE_VERSION=0.28.2
+export PYODIDE_VERSION=0.29.0
 export PYODIDE_DIR="$PWD/.aardvark/pyodide/$PYODIDE_VERSION"
 mkdir -p "$PYODIDE_DIR"
 # …download and extract the Pyodide release here…
@@ -70,8 +70,8 @@ Available targets:
   make perf-md      Generate Markdown summary (runs perf-all first).
   make setup-python Install Python 3.13 via mise (used by host runner).
 Variables:
-  PYODIDE_VERSION=0.28.2
-  PYODIDE_DIR=/…/.aardvark/pyodide/0.28.2
+  PYODIDE_VERSION=0.29.0
+  PYODIDE_DIR=/…/.aardvark/pyodide/0.29.0
   ITERATIONS=25
 ```
 

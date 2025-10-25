@@ -80,7 +80,7 @@ sequenceDiagram
 - Only Linux/macOS targets are exercised. Windows builds are untested and expected to fail.
 - Shared buffer handles present zero-copy views backed by the runtime; the host may still materialize owned copies when required.
 - JavaScript bundles must be fully self-contained. Ship pre-bundled modules (e.g., via esbuild/webpack) because the runtime does not resolve npm packages or fetch external scripts.
-- Snapshot overlays assume [Pyodide](https://pyodide.org/) 0.28.2. Future Pyodide upgrades will require regenerating overlay metadata and schema version bumping. When hosts build warm states out of band they must flag them as overlay-preloaded to avoid redundant imports.
+- Snapshot overlays assume [Pyodide](https://pyodide.org/) 0.29.0. Future Pyodide upgrades will require regenerating overlay metadata and schema version bumping. When hosts build warm states out of band they must flag them as overlay-preloaded to avoid redundant imports.
 - Network sandboxing is allowlist-based per session. There is no per-request override yet, and DNS leakage is not mitigated beyond host matching.
 - Filesystem quota enforcement only tracks writes within the virtual session directory. If code escapes to other WASM-visible mounts it will currently fail closed but without detailed accounting.
 - `BundlePool` enforces memory guard rails per isolate. If Python heap or RSS usage exceeds the configured limit the pool quarantines the isolate and spins up a replacement.
