@@ -29,11 +29,6 @@ jobs:
         with:
           save-if: ${{ github.event_name != 'pull_request' }}
 
-      - name: Prefetch Rusty V8 archive
-        run: |
-          curl -sSfL -o rusty_v8.a.gz https://github.com/denoland/rusty_v8/releases/download/v140.2.0/librusty_v8_release_x86_64-unknown-linux-gnu.a.gz
-          echo "RUSTY_V8_ARCHIVE=$PWD/rusty_v8.a.gz" >> $GITHUB_ENV
-
       - name: Format check
         run: cargo fmt --all -- --check
 
