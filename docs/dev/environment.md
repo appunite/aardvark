@@ -50,9 +50,13 @@ runtime. The following steps get you ready to develop locally.
    ```
 
   The build downloads [V8](https://v8.dev/) via `v8-rs` the first time; this may take a while.
-  If you need position-independent code for downstream shared-library
-  embeddings (e.g. Elixir NIFs), export `EXTRA_GN_ARGS=force_pic=true`
-  before rebuilding V8 so the objects are linkable out of the box.
+  Our `.cargo/config.toml` points `RUSTY_V8_MIRROR` at the PIC-enabled
+  Aardvark release of V8 142.0.0 (built with `v8_monolithic=true` and
+  `v8_monolithic_for_shared_library=true`). Override `RUSTY_V8_MIRROR` or
+  `RUSTY_V8_ARCHIVE` if you need to test alternative builds.
+
+  If you require additional GN tweaks, export `EXTRA_GN_ARGS=force_pic=true`
+  (or other options) before rebuilding V8 so the objects match your needs.
 
 ## Project Layout
 
@@ -81,3 +85,5 @@ runtime. The following steps get you ready to develop locally.
   CLI or tests.
 - `EXTRA_GN_ARGS` – appended to the GN invocation when rebuilding V8. Export
   values like `force_pic=true` to tune the V8 build for downstream needs.
+- `RUSTY_V8_MIRROR` – defaults (via `.cargo/config.toml`) to our PIC-friendly
+  V8 142.0.0 release. Override to consume a different archive or mirror.

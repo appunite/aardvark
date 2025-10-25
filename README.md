@@ -8,6 +8,9 @@
 
 Embedded multi-language runtime for executing sandboxed bundles inside [V8](https://v8.dev/), with hardened resource controls and structured diagnostics. The project takes clear inspiration from Cloudflare Python Workers while pursuing an embeddable library-first design for Rust hosts. **Aardvark is experimental software**: APIs, manifests, and runtime semantics may change without notice, and the system has not been hardened for production traffic yet.
 
+> [!IMPORTANT]
+> Aardvark bundles prebuilt PIC-enabled V8 142.0.0 archives that we compiled from the upstream tag with `v8_monolithic=true` and `v8_monolithic_for_shared_library=true`. The workspace’s `.cargo/config.toml` points `RUSTY_V8_MIRROR` at our GitHub release so `cargo build` uses those artifacts by default. If you package your own cdylib (for example, an Elixir NIF) you can keep this mirror, or override `RUSTY_V8_MIRROR` / `RUSTY_V8_ARCHIVE` to supply a different build.
+
 ## Why Aardvark?
 
 - **Persistent isolates** – Keep Python warm between calls, reuse shared buffers, and avoid remounting bundles unless the code changes.

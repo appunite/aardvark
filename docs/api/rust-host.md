@@ -4,6 +4,9 @@ This guide shows how to embed `aardvark-core` in a Rust service. It covers runti
 
 The same surface runs JavaScript bundles: set `InvocationDescriptor::runtime.language` or add `"runtime": {"language": "javascript"}` to the manifest. JavaScript bundles must ship their own modules; the runtime never resolves npm packages.
 
+> [!NOTE]
+> The workspace ships prebuilt PIC-friendly V8 142.0.0 archives built from the upstream tag with `v8_monolithic=true` and `v8_monolithic_for_shared_library=true`. `.cargo/config.toml` sets `RUSTY_V8_MIRROR` to the Aardvark GitHub release so `cargo build` links against those artifacts automatically. Hosts that produce `cdylib` outputs (e.g. NIFs) can rely on this default or override `RUSTY_V8_MIRROR` / `RUSTY_V8_ARCHIVE` to point at their own build.
+
 ## Adding the dependency
 
 ```toml
