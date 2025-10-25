@@ -183,7 +183,7 @@ pub struct PyRuntimeConfig {
 impl Default for PyRuntimeConfig {
     fn default() -> Self {
         Self {
-            pyodide_version: "0.28.2".to_owned(),
+            pyodide_version: "0.29.0".to_owned(),
             default_language: RuntimeLanguage::Python,
             snapshot: SnapshotConfig::default(),
             hooks: HostHooks::default(),

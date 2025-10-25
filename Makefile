@@ -8,7 +8,7 @@ ITERATIONS ?= 25
 PERF_JSON ?= target/perf/results.json
 PERF_CSV ?= target/perf/results.csv
 PERF_MD ?= target/perf/results.md
-PYODIDE_VERSION ?= 0.28.2
+PYODIDE_VERSION ?= 0.29.0
 PYTHON_VERSION ?= 3.13
 
 help:

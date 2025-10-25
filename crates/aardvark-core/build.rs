@@ -11,11 +11,11 @@ use sha2::{Digest, Sha256};
 use tar::Archive;
 use ureq::Agent;
 
-const PYODIDE_VERSION: &str = "0.28.2";
+const PYODIDE_VERSION: &str = "0.29.0";
 const PYODIDE_ARCHIVE_URL: &str =
-    "https://github.com/pyodide/pyodide/releases/download/0.28.2/pyodide-core-0.28.2.tar.bz2";
+    "https://github.com/pyodide/pyodide/releases/download/0.29.0/pyodide-core-0.29.0.tar.bz2";
 const PYODIDE_ARCHIVE_SHA256: &str =
-    "c9f6dd067d119e50850849f7428e3c636ecbc2684a0d2ff992f3bd48a1062b6c";
+    "fe85edd0d5c9828598da14c98d2f79cea45aac5a9e6448ca65dcc2d58d4ed033";
 
 fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=build.rs");
@@ -253,7 +253,8 @@ fn apply_pyodide_replacements(source: &str) -> Result<String> {
         ),
         (
             "const API=Module.API;",
-            "const API=Module.API||(Module.API={});".into(),
+            "const API=Module.API||(Module.API={});if(!API.runtimeEnv){API.runtimeEnv={IN_BUN:false,IN_DENO:false,IN_NODE:false,IN_SAFARI:false,IN_SHELL:false,IN_BROWSER:true,IN_BROWSER_MAIN_THREAD:true,IN_BROWSER_WEB_WORKER:false,IN_NODE_COMMONJS:false,IN_NODE_ESM:false};}"
+                .into(),
         ),
     ];
 

@@ -2082,7 +2082,7 @@ export async function loadPyRunnerPyodide(options = {}) {
   const versionTag =
     (publicApi && publicApi.version) ||
     globalThis.__pyRunnerPyodideVersion ||
-    "0.28.2";
+    "0.29.0";
   if (!api.config.packageBaseUrl) {
     api.config.packageBaseUrl = `https://cdn.jsdelivr.net/pyodide/v${versionTag}/full/`;
   }

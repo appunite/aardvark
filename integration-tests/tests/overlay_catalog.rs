@@ -15,7 +15,7 @@ fn pyodide_dir() -> PathBuf {
     if let Some(dir) = env::var_os("AARDVARK_PYODIDE_PACKAGE_DIR") {
         PathBuf::from(dir)
     } else {
-        workspace_root().join(".aardvark/pyodide/0.28.2")
+        workspace_root().join(".aardvark/pyodide/0.29.0")
     }
 }
 
@@ -52,7 +52,7 @@ fn snapshot_restore_uses_catalog() {
     let pyodide_dir = pyodide_dir();
     assert!(
         pyodide_dir.exists(),
-        "expected Pyodide cache at {:?}; set AARDVARK_PYODIDE_PACKAGE_DIR or stage .aardvark/pyodide/0.28.2",
+        "expected Pyodide cache at {:?}; set AARDVARK_PYODIDE_PACKAGE_DIR or stage .aardvark/pyodide/0.29.0",
         pyodide_dir
     );
 
@@ -140,7 +140,7 @@ fn catalog_eviction_budget_trims_cache() {
     let pyodide_dir = pyodide_dir();
     assert!(
         pyodide_dir.exists(),
-        "expected Pyodide cache at {:?}; set AARDVARK_PYODIDE_PACKAGE_DIR or stage .aardvark/pyodide/0.28.2",
+        "expected Pyodide cache at {:?}; set AARDVARK_PYODIDE_PACKAGE_DIR or stage .aardvark/pyodide/0.29.0",
         pyodide_dir
     );
 
