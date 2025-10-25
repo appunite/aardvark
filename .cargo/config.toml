@@ -1,5 +1,0 @@
-[env]
-# Force V8 GN build to emit position-independent code so downstream shared
-# libraries (e.g. Boa's NIF) can link the static objects without TLS relocation
-# failures.
-EXTRA_GN_ARGS = "force_pic=true"
