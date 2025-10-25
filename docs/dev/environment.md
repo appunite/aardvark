@@ -29,19 +29,31 @@ runtime. The following steps get you ready to develop locally.
    mise install
    ```
 
-3. Fetch [Pyodide](https://pyodide.org/) assets. Download the upstream release and copy the contents of
-   the requested variant into `.aardvark/pyodide/<version>` so the runtime can
-   serve wheel requests locally:
+3. Stage [Pyodide](https://pyodide.org/) assets. The runtime never downloads
+   wheels at execution time, so make sure a local cache exists before running
+   tests or integration scenarios. You can:
 
-   ```bash
-   mkdir -p .aardvark/pyodide/0.28.2
-   curl -L -o pyodide-0.28.2.tar.bz2 \
-     https://github.com/pyodide/pyodide/releases/download/0.28.2/pyodide-0.28.2.tar.bz2
-   echo "31021174e8fdc9556c17e9d435e20d9c07f203ac542d9161ca3b8d9d5d04e7e7  pyodide-0.28.2.tar.bz2" | sha256sum --check
-   tar -xjf pyodide-0.28.2.tar.bz2
-   rsync -a pyodide/pyodide/v0.28.2/full/ .aardvark/pyodide/0.28.2/
-   rm -rf pyodide pyodide-0.28.2.tar.bz2
-   ```
+   - Enable the `aardvark-core/full-pyodide-packages` feature when building.
+     The build script downloads the full 0.29.0 release, verifies it, and
+     points `PyRuntimeConfig::default()` at the extracted cache.
+   - Run the CLI helper: `cargo run -p aardvark-cli -- assets stage` downloads
+     and flattens the full variant into `.aardvark/pyodide/0.29.0/` (use
+     `--variant core`, `--output <dir>`, or `--force` as needed).
+   - Stage manually with the upstream tarball:
+
+     ```bash
+     mkdir -p .aardvark/pyodide/0.29.0
+     curl -L -o pyodide-0.29.0.tar.bz2 \
+       https://github.com/pyodide/pyodide/releases/download/0.29.0/pyodide-0.29.0.tar.bz2
+     echo "85395f34a808cc8852f3c4a5f5d47f906a8a52fa05e5cd70da33be82f4d86a58  pyodide-0.29.0.tar.bz2" | sha256sum --check
+     tar -xjf pyodide-0.29.0.tar.bz2
+     rsync -a pyodide/pyodide/v0.29.0/full/ .aardvark/pyodide/0.29.0/
+     rm -rf pyodide pyodide-0.29.0.tar.bz2
+     ```
+
+   In all cases, point the runtime at the cache via
+   `AARDVARK_PYODIDE_PACKAGE_DIR` or by calling
+   `PyRuntimeConfig::set_pyodide_package_dir`.
 
 4. Build the workspace:
 
@@ -49,7 +61,14 @@ runtime. The following steps get you ready to develop locally.
    cargo build
    ```
 
-   The build downloads [V8](https://v8.dev/) via `v8-rs` the first time; this may take a while.
+  The build downloads [V8](https://v8.dev/) via `v8-rs` the first time; this may take a while.
+  Our `.cargo/config.toml` points `RUSTY_V8_MIRROR` at the PIC-enabled
+  Aardvark release of V8 142.0.0 (built with `v8_monolithic=true` and
+  `v8_monolithic_for_shared_library=true`). Override `RUSTY_V8_MIRROR` or
+  `RUSTY_V8_ARCHIVE` if you need to test alternative builds.
+
+  If you require additional GN tweaks, export `EXTRA_GN_ARGS=force_pic=true`
+  (or other options) before rebuilding V8 so the objects match your needs.
 
 ## Project Layout
 
@@ -76,3 +95,7 @@ runtime. The following steps get you ready to develop locally.
 - `AARDVARK_OVERLAY_CACHE_DIR` – directory used by overlay hydration tests.
 - `RUST_LOG` – set to `info` or `debug` to see tracing spans while running the
   CLI or tests.
+- `EXTRA_GN_ARGS` – appended to the GN invocation when rebuilding V8. Export
+  values like `force_pic=true` to tune the V8 build for downstream needs.
+- `RUSTY_V8_MIRROR` – defaults (via `.cargo/config.toml`) to our PIC-friendly
+  V8 142.0.0 release. Override to consume a different archive or mirror.

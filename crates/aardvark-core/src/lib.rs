@@ -1,3 +1,5 @@
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+
 //! Aardvark is an embeddable multi-language runtime for executing sandboxed bundles inside V8.
 //!
 //! The crate targets host services that need a predictable, resource-constrained way to run
@@ -50,6 +52,7 @@ pub mod outcome;
 mod package_metadata;
 pub mod persistent;
 pub mod pool;
+pub mod pyodide;
 pub mod runtime;
 mod runtime_language;
 pub mod strategy;

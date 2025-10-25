@@ -4,6 +4,9 @@ This guide shows how to embed `aardvark-core` in a Rust service. It covers runti
 
 The same surface runs JavaScript bundles: set `InvocationDescriptor::runtime.language` or add `"runtime": {"language": "javascript"}` to the manifest. JavaScript bundles must ship their own modules; the runtime never resolves npm packages.
 
+> [!NOTE]
+> The workspace ships prebuilt PIC-friendly V8 142.0.0 archives built from the upstream tag with `v8_monolithic=true` and `v8_monolithic_for_shared_library=true`. `.cargo/config.toml` sets `RUSTY_V8_MIRROR` to the Aardvark GitHub release so `cargo build` links against those artifacts automatically. Hosts that produce `cdylib` outputs (e.g. NIFs) can rely on this default or override `RUSTY_V8_MIRROR` / `RUSTY_V8_ARCHIVE` to point at their own build. Treat this mirror as experimental and keep the team posted if your linker still objects.
+
 ## Adding the dependency
 
 ```toml
@@ -15,26 +18,36 @@ For crates.io you will depend on the published version instead of the workspace 
 
 ## Preparing [Pyodide](https://pyodide.org/) assets
 
-Before initialising the runtime you need the pinned [Pyodide](https://pyodide.org/) bundle on disk.
-Download the upstream archive, extract it, and move the desired variant into a
-flat directory so the runtime can resolve requests such as
-`pyodide/v0.28.2/full/numpy-….whl` from
-`./.aardvark/pyodide/0.28.2/numpy-….whl`:
+Before initialising the runtime you need the pinned [Pyodide](https://pyodide.org/)
+bundle on disk so requests such as `pyodide/v0.29.0/full/numpy-….whl` resolve to
+`./.aardvark/pyodide/0.29.0/numpy-….whl`. You can stage the cache in one of three
+ways:
 
-```
-mkdir -p .aardvark/pyodide/0.28.2
-curl -L -o pyodide-0.28.2.tar.bz2 \
-  https://github.com/pyodide/pyodide/releases/download/0.28.2/pyodide-0.28.2.tar.bz2
-echo "31021174e8fdc9556c17e9d435e20d9c07f203ac542d9161ca3b8d9d5d04e7e7  pyodide-0.28.2.tar.bz2" | sha256sum --check
-tar -xjf pyodide-0.28.2.tar.bz2
-rsync -a pyodide/pyodide/v0.28.2/full/ .aardvark/pyodide/0.28.2/
-rm -rf pyodide pyodide-0.28.2.tar.bz2
-```
+1. Enable the `aardvark-core/full-pyodide-packages` feature. The build script
+   downloads the full Pyodide 0.29.0 release during `cargo build`, verifies the
+   checksum, and sets `PyRuntimeConfig::default()` to point at the extracted
+   cache.
+2. Use the CLI helper: `cargo run -p aardvark-cli -- assets stage` flattens the
+   upstream release into `.aardvark/pyodide/0.29.0/` (tweak with
+   `--variant core`, `--output`, or `--force`).
+3. Download the archive manually and copy the variant you need into a flat
+   directory:
 
-Export `AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.28.2` (or configure
-`PyRuntimeConfig`) before preparing a session. Swap the archive for the core
-bundle if you do not need the full wheel set, and update the URL/hash whenever
-you bump the pinned version.
+   ```
+   mkdir -p .aardvark/pyodide/0.29.0
+   curl -L -o pyodide-0.29.0.tar.bz2 \
+     https://github.com/pyodide/pyodide/releases/download/0.29.0/pyodide-0.29.0.tar.bz2
+   echo "85395f34a808cc8852f3c4a5f5d47f906a8a52fa05e5cd70da33be82f4d86a58  pyodide-0.29.0.tar.bz2" | sha256sum --check
+   tar -xjf pyodide-0.29.0.tar.bz2
+   rsync -a pyodide/pyodide/v0.29.0/full/ .aardvark/pyodide/0.29.0/
+   rm -rf pyodide pyodide-0.29.0.tar.bz2
+   ```
+
+Once staged, set `AARDVARK_PYODIDE_PACKAGE_DIR` or call
+`PyRuntimeConfig::with_pyodide_package_dir(...)` so your runtime resolves wheel
+requests from the prepared cache. Swap the archive for the core bundle if you do
+not need the full wheel set, and update the URL/hash whenever you bump the pinned
+version.
 
 ## Persistent isolates (`PythonIsolate`)
 
@@ -72,6 +85,8 @@ Key knobs via `IsolateConfig` / `PyRuntimeConfig`:
 - `cleanup` – choose between full cleanup, shared-buffer-only scrubbing, or no automatic cleanup.
 - `budget_override` – clamp descriptor limits globally.
 - `host_capabilities` – capability allowlist applied to every call unless a manifest narrows it further.
+- `pyodide_package_dir` – override the package cache path without relying on
+  process-wide environment variables.
 
 ### Inline Python without a bundle
 

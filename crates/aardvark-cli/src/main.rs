@@ -2,30 +2,38 @@
 
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
+use aardvark_core::pyodide::{
+    PYODIDE_CORE_ARCHIVE_NAME, PYODIDE_CORE_ARCHIVE_SHA256, PYODIDE_FULL_ARCHIVE_NAME,
+    PYODIDE_FULL_ARCHIVE_SHA256, PYODIDE_RELEASE_BASE_URL, PYODIDE_VERSION,
+};
 use aardvark_core::{
     Bundle, ExecutionOutcome, FailureKind, InvocationDescriptor, JsonInvocationStrategy,
     OutcomeStatus, OverlayBlob, OverlayExport, PyRuntime, PyRuntimeConfig, ResultPayload,
 };
 use anyhow::{anyhow, bail, Context, Result};
-use clap::Parser;
+use bzip2::read::BzDecoder;
+use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map as JsonMap, Value};
 use sha2::{Digest, Sha256};
+use tar::Archive;
 use tracing::{debug, info, info_span, warn, Level};
 use tracing_subscriber::FmtSubscriber;
+use ureq::{Agent, AgentBuilder};
 
 const DEFAULT_ENTRYPOINT: &str = "main:handler";
 
 /// CLI arguments.
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
-struct Args {
+struct RunArgs {
     /// Path to a bundle archive.
     #[arg(short, long)]
     bundle: String,
@@ -63,13 +71,103 @@ struct Args {
     json_input: Option<String>,
 }
 
+/// Asset management commands.
+#[derive(Parser, Debug)]
+#[command(
+    name = "aardvark-cli assets",
+    about = "Manage Pyodide asset caches",
+    disable_help_subcommand = true
+)]
+struct AssetsCli {
+    #[command(subcommand)]
+    command: AssetsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum AssetsCommand {
+    /// Download and stage a Pyodide package cache locally.
+    Stage(AssetsStageArgs),
+}
+
+#[derive(clap::Args, Debug)]
+struct AssetsStageArgs {
+    /// Which Pyodide cache variant to stage.
+    #[arg(long, value_enum, default_value = "full")]
+    variant: StageVariant,
+
+    /// Destination directory for the staged packages (defaults to .aardvark/pyodide/<version>).
+    #[arg(long, value_name = "PATH")]
+    output: Option<PathBuf>,
+
+    /// Use an existing archive instead of downloading the release tarball.
+    #[arg(long, value_name = "PATH")]
+    archive: Option<PathBuf>,
+
+    /// Replace existing contents within the output directory.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
+enum StageVariant {
+    Core,
+    Full,
+}
+
+impl StageVariant {
+    fn archive_name(self) -> &'static str {
+        match self {
+            StageVariant::Core => PYODIDE_CORE_ARCHIVE_NAME,
+            StageVariant::Full => PYODIDE_FULL_ARCHIVE_NAME,
+        }
+    }
+
+    fn expected_sha(self) -> &'static str {
+        match self {
+            StageVariant::Core => PYODIDE_CORE_ARCHIVE_SHA256,
+            StageVariant::Full => PYODIDE_FULL_ARCHIVE_SHA256,
+        }
+    }
+
+    fn subdir(self) -> &'static str {
+        match self {
+            StageVariant::Core => "core",
+            StageVariant::Full => "full",
+        }
+    }
+
+    fn archive_url(self) -> String {
+        format!(
+            "{base}/{version}/{name}",
+            base = PYODIDE_RELEASE_BASE_URL,
+            version = PYODIDE_VERSION,
+            name = self.archive_name()
+        )
+    }
+}
+
+impl fmt::Display for StageVariant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            StageVariant::Core => "core",
+            StageVariant::Full => "full",
+        })
+    }
+}
+
 fn main() -> Result<()> {
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
         .finish();
     tracing::subscriber::set_global_default(subscriber).ok();
 
-    let args = Args::parse();
+    let argv: Vec<OsString> = std::env::args_os().collect();
+    if matches!(argv.get(1).map(|arg| arg.as_os_str()), Some(arg) if arg == OsStr::new("assets")) {
+        let assets = AssetsCli::parse_from(argv.clone());
+        return handle_assets_command(assets.command);
+    }
+
+    let args = RunArgs::parse_from(argv);
     let file = File::open(&args.bundle)?;
     let reader = BufReader::new(file);
     let bundle = Bundle::from_reader(reader)?;
@@ -1708,6 +1806,195 @@ fn collect_overlay_blobs(
             bytes,
         }])
     }
+}
+
+fn handle_assets_command(command: AssetsCommand) -> Result<()> {
+    match command {
+        AssetsCommand::Stage(args) => stage_assets(args),
+    }
+}
+
+fn stage_assets(args: AssetsStageArgs) -> Result<()> {
+    let AssetsStageArgs {
+        variant,
+        output,
+        archive,
+        force,
+    } = args;
+
+    let output_dir = output.unwrap_or_else(default_stage_output_dir);
+    let workspace = tempfile::tempdir().context("create staging workspace")?;
+    let user_supplied = archive.is_some();
+    let archive_path = match archive {
+        Some(path) => path,
+        None => download_variant_archive(variant, workspace.path())?,
+    };
+
+    if user_supplied {
+        if let Err(error) = verify_sha256(&archive_path, variant.expected_sha()) {
+            warn!(
+                target = "aardvark::assets",
+                variant = %variant,
+                archive = %archive_path.display(),
+                %error,
+                "supplied Pyodide archive failed checksum; continuing"
+            );
+        }
+    }
+
+    info!(
+        target = "aardvark::assets",
+        variant = %variant,
+        archive = %archive_path.display(),
+        "unpacking Pyodide archive"
+    );
+
+    unpack_archive(&archive_path, workspace.path())?;
+    let pyodide_root = find_pyodide_dir(workspace.path())
+        .context("expected 'pyodide' directory inside archive")?;
+    let version_dir = format!("v{PYODIDE_VERSION}");
+    let variant_dir = pyodide_root
+        .join("pyodide")
+        .join(&version_dir)
+        .join(variant.subdir());
+    if !variant_dir.exists() {
+        bail!(
+            "archive missing variant directory {}",
+            variant_dir.display()
+        );
+    }
+
+    prepare_output_dir(&output_dir, force)?;
+    copy_dir_recursive(&variant_dir, &output_dir)?;
+
+    info!(
+        target = "aardvark::assets",
+        variant = %variant,
+        output = %output_dir.display(),
+        "staged Pyodide packages"
+    );
+    Ok(())
+}
+
+fn default_stage_output_dir() -> PathBuf {
+    PathBuf::from(".aardvark/pyodide").join(PYODIDE_VERSION)
+}
+
+fn prepare_output_dir(output: &Path, force: bool) -> Result<()> {
+    if output.exists() {
+        if force {
+            fs::remove_dir_all(output)
+                .with_context(|| format!("failed to remove {}", output.display()))?;
+        } else if output.read_dir()?.next().is_some() {
+            bail!(
+                "output directory {} is not empty; re-run with --force to overwrite",
+                output.display()
+            );
+        }
+    }
+    fs::create_dir_all(output).with_context(|| format!("failed to create {}", output.display()))?;
+    Ok(())
+}
+
+fn download_variant_archive(variant: StageVariant, workspace: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(workspace)
+        .with_context(|| format!("failed to create {}", workspace.display()))?;
+    let archive_path = workspace.join(variant.archive_name());
+    let agent: Agent = AgentBuilder::new()
+        .timeout(Duration::from_secs(120))
+        .timeout_read(Duration::from_secs(120))
+        .timeout_write(Duration::from_secs(120))
+        .build();
+    let url = variant.archive_url();
+    let mut response = agent
+        .get(&url)
+        .call()
+        .with_context(|| format!("downloading {url}"))?
+        .into_reader();
+    let mut file = File::create(&archive_path)
+        .with_context(|| format!("create {}", archive_path.display()))?;
+    std::io::copy(&mut response, &mut file)
+        .with_context(|| format!("write {}", archive_path.display()))?;
+    verify_sha256(&archive_path, variant.expected_sha())?;
+    Ok(archive_path)
+}
+
+fn unpack_archive(archive_path: &Path, workspace: &Path) -> Result<()> {
+    let file =
+        File::open(archive_path).with_context(|| format!("open {}", archive_path.display()))?;
+    let decoder = BzDecoder::new(file);
+    let mut archive = Archive::new(decoder);
+    archive.unpack(workspace).with_context(|| {
+        format!(
+            "unpack {} into {}",
+            archive_path.display(),
+            workspace.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn find_pyodide_dir(base: &Path) -> Option<PathBuf> {
+    let mut stack = vec![base.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        if path.is_dir() {
+            if path
+                .file_name()
+                .map(|name| name == "pyodide")
+                .unwrap_or(false)
+            {
+                return Some(path);
+            }
+            if let Ok(entries) = fs::read_dir(&path) {
+                for entry in entries.flatten() {
+                    stack.push(entry.path());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&src_path, &dst_path).with_context(|| {
+                format!("copy {} -> {}", src_path.display(), dst_path.display())
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 16 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let digest = hasher.finalize();
+    let actual = format!("{:x}", digest);
+    if actual != expected {
+        bail!(
+            "checksum mismatch for {}: expected {}, got {}",
+            path.display(),
+            expected,
+            actual
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

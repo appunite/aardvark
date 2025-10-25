@@ -21,7 +21,7 @@ graph TD
 ## Manifest-driven packages
 
 - The manifest’s `packages` field lists [Pyodide](https://pyodide.org/) packages to preload. Names are normalised (trimmed, deduplicated, lowercase for comparisons).
-- During session preparation the JS bootstrap resolves dependencies using [Pyodide](https://pyodide.org/)’s lockfile and installs wheels from the local cache referenced by `AARDVARK_PYODIDE_PACKAGE_DIR`. The cache should contain the flattened contents of `pyodide/v0.28.2/<variant>/` so requests like `pyodide/v0.28.2/full/numpy-….whl` resolve to `<cache>/numpy-….whl`.
+- During session preparation the JS bootstrap resolves dependencies using [Pyodide](https://pyodide.org/)’s lockfile and installs wheels from the local cache referenced by `AARDVARK_PYODIDE_PACKAGE_DIR` (or the path set via `PyRuntimeConfig::with_pyodide_package_dir`). The cache should contain the flattened contents of `pyodide/v0.29.0/<variant>/` so requests like `pyodide/v0.29.0/full/numpy-….whl` resolve to `<cache>/numpy-….whl`.
 - Dynamic libraries required by those packages are preloaded immediately after installation so they remain available during snapshot capture and execution.
 
 ```mermaid
@@ -36,7 +36,7 @@ flowchart LR
 
 **Limitations**
 
-- Manifests only support the bundled [Pyodide](https://pyodide.org/) version (currently `0.28.2`). Requests for a different version fail fast.
+- Manifests only support the bundled [Pyodide](https://pyodide.org/) version (currently `0.29.0`). Requests for a different version fail fast.
 - Package installation still hits the local filesystem. Ensure hosts point `AARDVARK_PYODIDE_PACKAGE_DIR` at a prepared cache.
 
 ## Snapshots

@@ -8,6 +8,9 @@
 
 Embedded multi-language runtime for executing sandboxed bundles inside [V8](https://v8.dev/), with hardened resource controls and structured diagnostics. The project takes clear inspiration from Cloudflare Python Workers while pursuing an embeddable library-first design for Rust hosts. **Aardvark is experimental software**: APIs, manifests, and runtime semantics may change without notice, and the system has not been hardened for production traffic yet.
 
+> [!IMPORTANT]
+> Aardvark bundles prebuilt PIC-enabled V8 142.0.0 archives that we compiled from the upstream tag with `v8_monolithic=true` and `v8_monolithic_for_shared_library=true`. The workspace’s `.cargo/config.toml` points `RUSTY_V8_MIRROR` at our GitHub release so `cargo build` uses those artifacts by default. If you package your own cdylib (for example, an Elixir NIF) you can keep this mirror, or override `RUSTY_V8_MIRROR` / `RUSTY_V8_ARCHIVE` to supply a different build. The mirror is still experimental—expect churn and let us know if you hit linker surprises.
+
 ## Why Aardvark?
 
 - **Persistent isolates** – Keep Python warm between calls, reuse shared buffers, and avoid remounting bundles unless the code changes.
@@ -31,7 +34,7 @@ cargo run -p aardvark-cli -- \
 To preload packages, point the runtime at an unpacked [Pyodide](https://pyodide.org/) cache:
 
 ```
-AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.28.2 \
+AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.29.0 \
   cargo run -p aardvark-cli -- \
   --bundle example/pandas_numpy_bundle.zip \
   --manifest
@@ -41,27 +44,37 @@ The manifest bundled with the example instructs the runtime to install `numpy` a
 
 ### Preparing [Pyodide](https://pyodide.org/) assets
 
-The runtime expects a local [Pyodide](https://pyodide.org/) cache and never downloads wheels on demand.
-Stage the upstream release yourself and flatten it into
-`./.aardvark/pyodide/<version>` so every asset sits directly under that
-directory:
+The runtime expects a local [Pyodide](https://pyodide.org/) cache and never
+downloads wheels on demand. Pick whichever setup path fits your workflow:
 
-```
-mkdir -p .aardvark/pyodide/0.28.2
-curl -L -o pyodide-0.28.2.tar.bz2 \
-  https://github.com/pyodide/pyodide/releases/download/0.28.2/pyodide-0.28.2.tar.bz2
-echo "31021174e8fdc9556c17e9d435e20d9c07f203ac542d9161ca3b8d9d5d04e7e7  pyodide-0.28.2.tar.bz2" | sha256sum --check
-tar -xjf pyodide-0.28.2.tar.bz2
-rsync -a pyodide/pyodide/v0.28.2/full/ .aardvark/pyodide/0.28.2/
-rm -rf pyodide pyodide-0.28.2.tar.bz2
-```
+1. **Compile with `full-pyodide-packages`.** Enabling the
+   `aardvark-core` crate feature fetches the full Pyodide 0.29.0 release during
+   `cargo build`, verifies the checksum, and points
+   `PyRuntimeConfig::default()` at the extracted cache. This is ideal for CI or
+   hosts that want zero manual staging.
+2. **Use the CLI helper.** `cargo run -p aardvark-cli -- assets stage` downloads
+   and flattens the release into `.aardvark/pyodide/0.29.0/` by default. Add
+   `--variant core` for the slim bundle, `--output <dir>` to stage elsewhere, or
+   `--force` to replace an existing cache.
+3. **Stage manually.** Download and unpack the upstream archive yourself so the
+   wheels live directly under `./.aardvark/pyodide/<version>`:
 
-Swap the archive name for `pyodide-core-0.28.2.tar.bz2` if you only need the
-core subset. Once the files are in place, set
-`AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.28.2` (or configure
-`PyRuntimeConfig::pyodide_version`). When [Pyodide](https://pyodide.org/) requests
-`pyodide/v0.28.2/full/numpy-*.whl`, the runtime will serve
-`.aardvark/pyodide/0.28.2/numpy-*.whl` straight from disk.
+       mkdir -p .aardvark/pyodide/0.29.0
+       curl -L -o pyodide-0.29.0.tar.bz2 \
+         https://github.com/pyodide/pyodide/releases/download/0.29.0/pyodide-0.29.0.tar.bz2
+       echo "85395f34a808cc8852f3c4a5f5d47f906a8a52fa05e5cd70da33be82f4d86a58  pyodide-0.29.0.tar.bz2" | sha256sum --check
+       tar -xjf pyodide-0.29.0.tar.bz2
+       rsync -a pyodide/pyodide/v0.29.0/full/ .aardvark/pyodide/0.29.0/
+       rm -rf pyodide pyodide-0.29.0.tar.bz2
+
+   Swap the archive name for `pyodide-core-0.29.0.tar.bz2` if you only need the
+   core subset.
+
+After staging, either set
+`AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.29.0` or configure
+`PyRuntimeConfig::with_pyodide_package_dir(...)` / `set_pyodide_package_dir(...)`
+so the runtime resolves requests such as
+`pyodide/v0.29.0/full/numpy-*.whl` directly from disk.
 
 ### Building CLI release binaries
 
@@ -230,7 +243,7 @@ Arguments are `[iterations] [payload_len]` (both optional). The harness warms th
 - Developer onboarding material is available in `docs/dev/` for contributors extending the project.
 - Performance notes and benchmark workflow live in `docs/perf/overview.md`.
 - The included `Makefile` has helpers (`make perf-all`, `make perf-md`). It
-  honours `PYODIDE_DIR` (default `./.aardvark/pyodide/0.28.2`) when wiring up
+  honours `PYODIDE_DIR` (default `./.aardvark/pyodide/0.29.0`) when wiring up
   the perf harness.
 
 ## Publishing Notes

@@ -41,12 +41,13 @@ the daily workflow.
   cargo test -p integration-tests -- --nocapture
   ```
   These will mount real overlay caches. Ensure `AARDVARK_PYODIDE_PACKAGE_DIR`
-  points at an unpacked [Pyodide](https://pyodide.org/) cache.
+  points at an unpacked [Pyodide](https://pyodide.org/) cache (or run
+  `cargo run -p aardvark-cli -- assets stage` beforehand).
 
 ### Smoke Testing the CLI
 
 ```
-AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.28.2 \
+AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.29.0 \
   cargo run -p aardvark-cli -- \
   --bundle hello_bundle.zip --entrypoint main:main --manifest
 ```

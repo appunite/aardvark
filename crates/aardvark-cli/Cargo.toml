@@ -4,7 +4,7 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 rust-version.workspace = true
-authors.workspace = true
+publish = false
 
 [features]
 default = ["runtime"]
@@ -19,9 +19,10 @@ aardvark-core = { path = "../aardvark-core", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
-
-[dev-dependencies]
+bzip2 = "0.4"
+tar = "0.4"
 tempfile = "3.10"
+ureq = { version = "2.10", features = ["tls"] }
 
 [[bin]]
 name = "aardvark-cli"

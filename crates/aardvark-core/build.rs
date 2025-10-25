@@ -11,11 +11,47 @@ use sha2::{Digest, Sha256};
 use tar::Archive;
 use ureq::Agent;
 
-const PYODIDE_VERSION: &str = "0.28.2";
-const PYODIDE_ARCHIVE_URL: &str =
-    "https://github.com/pyodide/pyodide/releases/download/0.28.2/pyodide-core-0.28.2.tar.bz2";
-const PYODIDE_ARCHIVE_SHA256: &str =
-    "c9f6dd067d119e50850849f7428e3c636ecbc2684a0d2ff992f3bd48a1062b6c";
+include!(concat!(env!("CARGO_MANIFEST_DIR"), "/pyodide_manifest.rs"));
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PyodideVariant {
+    Core,
+    Full,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PyodideArchiveSpec {
+    archive_name: &'static str,
+    sha256: &'static str,
+    variant: PyodideVariant,
+}
+
+impl PyodideArchiveSpec {
+    fn active() -> Self {
+        if cfg!(feature = "full-pyodide-packages") {
+            Self {
+                archive_name: PYODIDE_FULL_ARCHIVE_NAME,
+                sha256: PYODIDE_FULL_ARCHIVE_SHA256,
+                variant: PyodideVariant::Full,
+            }
+        } else {
+            Self {
+                archive_name: PYODIDE_CORE_ARCHIVE_NAME,
+                sha256: PYODIDE_CORE_ARCHIVE_SHA256,
+                variant: PyodideVariant::Core,
+            }
+        }
+    }
+
+    fn download_url(&self) -> String {
+        format!(
+            "{base}/{version}/{name}",
+            base = PYODIDE_RELEASE_BASE_URL,
+            version = PYODIDE_VERSION,
+            name = self.archive_name
+        )
+    }
+}
 
 fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=build.rs");
@@ -34,15 +70,21 @@ fn main() -> Result<()> {
     fs::create_dir_all(&pyodide_out_dir)
         .with_context(|| format!("create {}", pyodide_out_dir.display()))?;
 
+    let archive_spec = PyodideArchiveSpec::active();
+    let docs_rs_build = env::var_os("DOCS_RS").is_some();
+
     let overwrite_sources = env::var_os("AARDVARK_PYODIDE_DIR");
-    if let Some(dir) = overwrite_sources {
+    if docs_rs_build {
+        println!("cargo:warning=DOCS_RS detected; generating placeholder Pyodide assets");
+        generate_docs_placeholders(&pyodide_out_dir)?;
+    } else if let Some(dir) = overwrite_sources {
         let dir = PathBuf::from(dir);
         copy_dir_recursive(&dir, &pyodide_out_dir)
             .with_context(|| format!("copying Pyodide assets from {}", dir.to_string_lossy()))?;
     } else {
         let archive_path = match env::var_os("AARDVARK_PYODIDE_ARCHIVE") {
             Some(path) => PathBuf::from(path),
-            None => download_pyodide_archive()?,
+            None => download_pyodide_archive(&archive_spec)?,
         };
         unpack_archive(&archive_path, &pyodide_out_dir)?;
     }
@@ -57,10 +99,28 @@ fn main() -> Result<()> {
         "cargo:rustc-env=AARDVARK_PYODIDE_DIR={}",
         pyodide_out_dir.display()
     );
+    let default_package_dir = if docs_rs_build {
+        None
+    } else {
+        match archive_spec.variant {
+            PyodideVariant::Full => Some(
+                pyodide_out_dir
+                    .join("pyodide")
+                    .join(format!("v{PYODIDE_VERSION}"))
+                    .join("full"),
+            ),
+            PyodideVariant::Core => None,
+        }
+    };
+    let default_package_str = default_package_dir
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    println!("cargo:rustc-env=AARDVARK_PYODIDE_DEFAULT_PACKAGES={default_package_str}");
     Ok(())
 }
 
-fn download_pyodide_archive() -> Result<PathBuf> {
+fn download_pyodide_archive(spec: &PyodideArchiveSpec) -> Result<PathBuf> {
     let tmp_dir = env::var_os("OUT_DIR")
         .map(PathBuf::from)
         .expect("OUT_DIR not set")
@@ -76,19 +136,20 @@ fn download_pyodide_archive() -> Result<PathBuf> {
         .timeout_read(Duration::from_secs(120))
         .timeout_write(Duration::from_secs(120))
         .build();
+    let url = spec.download_url();
     let mut response = agent
-        .get(PYODIDE_ARCHIVE_URL)
+        .get(&url)
         .call()
-        .with_context(|| format!("downloading {}", PYODIDE_ARCHIVE_URL))?
+        .with_context(|| format!("downloading {}", url))?
         .into_reader();
     let mut file = fs::File::create(&archive_path)?;
     io::copy(&mut response, &mut file)?;
 
-    verify_sha256(&archive_path)?;
+    verify_sha256(&archive_path, spec.sha256)?;
     Ok(archive_path)
 }
 
-fn verify_sha256(path: &Path) -> Result<()> {
+fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
     let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 16 * 1024];
@@ -101,10 +162,10 @@ fn verify_sha256(path: &Path) -> Result<()> {
     }
     let digest = hasher.finalize();
     let digest_hex = digest.encode_hex::<String>();
-    if digest_hex != PYODIDE_ARCHIVE_SHA256 {
+    if digest_hex != expected {
         anyhow::bail!(
             "Pyodide archive checksum mismatch: expected {}, got {}",
-            PYODIDE_ARCHIVE_SHA256,
+            expected,
             digest_hex
         );
     }
@@ -164,6 +225,47 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
             })?;
         }
     }
+    Ok(())
+}
+
+fn generate_docs_placeholders(out_dir: &Path) -> Result<()> {
+    const ASM_PLACEHOLDER: &str = r#"// docs.rs placeholder - Pyodide assets are unavailable in documentation builds.
+var Module = { API: {} };
+var _createPyodideModule = function () { throw new Error("Pyodide runtime is unavailable in docs.rs builds"); };
+globalThis._createPyodideModule = _createPyodideModule;
+const API=Module.API;
+reportUndefinedSymbols();
+crypto.getRandomValues(Module, []);
+new WebAssembly.Module({});
+WebAssembly.instantiate({});
+Date.now();
+eval(func);
+eval(data);
+eval(UTF8ToString(ptr));
+"#;
+
+    const MJS_PLACEHOLDER: &str = r#"export async function loadPyodide() {
+    throw new Error("Pyodide runtime is unavailable in docs.rs builds");
+}
+"#;
+
+    const JS_PLACEHOLDER: &str = r#"export function loadPyodide() {
+    throw new Error("Pyodide runtime is unavailable in docs.rs builds");
+}
+"#;
+
+    fs::write(out_dir.join("pyodide.asm.js"), ASM_PLACEHOLDER)
+        .context("write docs placeholder pyodide.asm.js")?;
+    fs::write(out_dir.join("pyodide.mjs"), MJS_PLACEHOLDER)
+        .context("write docs placeholder pyodide.mjs")?;
+    fs::write(out_dir.join("pyodide.js"), JS_PLACEHOLDER)
+        .context("write docs placeholder pyodide.js")?;
+    fs::write(out_dir.join("pyodide-lock.json"), r#"{"packages":{}}"#)
+        .context("write docs placeholder pyodide-lock.json")?;
+    fs::write(out_dir.join("pyodide.asm.wasm"), &[] as &[u8])
+        .context("write docs placeholder pyodide.asm.wasm")?;
+    fs::write(out_dir.join("python_stdlib.zip"), &[] as &[u8])
+        .context("write docs placeholder python_stdlib.zip")?;
     Ok(())
 }
 
@@ -253,7 +355,8 @@ fn apply_pyodide_replacements(source: &str) -> Result<String> {
         ),
         (
             "const API=Module.API;",
-            "const API=Module.API||(Module.API={});".into(),
+            "const API=Module.API||(Module.API={});if(!API.runtimeEnv){API.runtimeEnv={IN_BUN:false,IN_DENO:false,IN_NODE:false,IN_SAFARI:false,IN_SHELL:false,IN_BROWSER:true,IN_BROWSER_MAIN_THREAD:true,IN_BROWSER_WEB_WORKER:false,IN_NODE_COMMONJS:false,IN_NODE_ESM:false};}"
+                .into(),
         ),
     ];
 
