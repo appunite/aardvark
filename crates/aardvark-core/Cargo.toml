@@ -12,7 +12,6 @@ description = "Runtime for executing sandboxed python bundles inside V8."
 
 [features]
 default = []
-full-pyodide-packages = []
 docsrs = []
 
 [dependencies]
@@ -23,6 +22,7 @@ once_cell.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -41,6 +41,7 @@ hdrhistogram.workspace = true
 anyhow = "1.0"
 bzip2 = "0.4"
 hex = "0.4"
+serde_json.workspace = true
 sha2 = "0.10"
 tar = "0.4"
 ureq = { version = "2.10", features = ["tls"] }

@@ -2082,7 +2082,7 @@ export async function loadPyRunnerPyodide(options = {}) {
   const versionTag =
     (publicApi && publicApi.version) ||
     globalThis.__pyRunnerPyodideVersion ||
-    "0.29.0";
+    "0.29.4";
   if (!api.config.packageBaseUrl) {
     api.config.packageBaseUrl = `https://cdn.jsdelivr.net/pyodide/v${versionTag}/full/`;
   }
@@ -2964,6 +2964,7 @@ globalThis.__aardvarkRegisterInputBuffer = function (name, buffer, metadata) {
       const json = textDecoder.decode(metaBytes);
       const payload = JSON.parse(json);
       let tarBytes;
+      let populateDynlibsFromTar = true;
       const useCatalog =
         payload && Number(payload.version) >= 3 && payload.format === "catalog";
       if (useCatalog) {
@@ -2982,7 +2983,7 @@ globalThis.__aardvarkRegisterInputBuffer = function (name, buffer, metadata) {
         const dynlibEntries = Array.isArray(payload.dynlibs)
           ? payload.dynlibs
           : [];
-        let populateDynlibsFromTar = dynlibEntries.length === 0;
+        populateDynlibsFromTar = dynlibEntries.length === 0;
         if (!populateDynlibsFromTar) {
           for (const entry of dynlibEntries) {
             if (!entry) {
@@ -3185,6 +3186,7 @@ globalThis.__aardvarkRegisterInputBuffer = function (name, buffer, metadata) {
       }
     } catch (error) {
       console.warn("[snapshot] import overlay failed", error);
+      throw error;
     }
   };
 

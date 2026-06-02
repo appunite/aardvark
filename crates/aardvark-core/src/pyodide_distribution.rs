@@ -1,0 +1,334 @@
+use crate::assets;
+use crate::config::PyRuntimeConfig;
+use crate::error::{PyRunnerError, Result};
+use crate::pyodide::{PYODIDE_ADAPTER_VERSION, PYODIDE_VERSION};
+use once_cell::sync::Lazy;
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+pub const DISTRIBUTION_MANIFEST: &str = "aardvark-pyodide-dist.json";
+
+static VERIFIED_EXTERNAL_DISTRIBUTIONS: Lazy<Mutex<BTreeSet<String>>> =
+    Lazy::new(|| Mutex::new(BTreeSet::new()));
+
+#[derive(Clone, Debug)]
+pub struct PyodideDistribution {
+    source: DistributionSource,
+    manifest: PyodideDistributionManifest,
+    package_root: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+enum DistributionSource {
+    Embedded,
+    External { root: PathBuf },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PyodideDistributionManifest {
+    pub schema_version: u32,
+    pub aardvark_version: String,
+    pub pyodide_version: String,
+    pub adapter_version: String,
+    pub variant: PyodideDistributionVariant,
+    pub upstream: UpstreamArchives,
+    pub python: PythonCompatibility,
+    pub lockfile: LockfileManifest,
+    pub package_root: Option<String>,
+    #[serde(default)]
+    pub files: BTreeMap<String, String>,
+    pub compatibility_fingerprint: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PyodideDistributionVariant {
+    Core,
+    Full,
+}
+
+impl PyodideDistributionVariant {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Core => "core",
+            Self::Full => "full",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpstreamArchives {
+    pub base_url: String,
+    pub core: UpstreamArchive,
+    pub full: UpstreamArchive,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpstreamArchive {
+    pub name: String,
+    pub sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PythonCompatibility {
+    pub version: String,
+    pub abi: String,
+    pub platform: String,
+    pub arch: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct LockfileManifest {
+    pub path: String,
+    pub sha256: String,
+}
+
+impl PyodideDistribution {
+    pub fn resolve(config: &PyRuntimeConfig) -> Result<Self> {
+        if let Some(root) = config.pyodide_dist_dir.as_ref() {
+            return Self::external(root);
+        }
+        Self::embedded()
+    }
+
+    pub fn external(root: impl AsRef<Path>) -> Result<Self> {
+        let root = normalize_path(root.as_ref());
+        let manifest_path = root.join(DISTRIBUTION_MANIFEST);
+        let raw = fs::read_to_string(&manifest_path).map_err(|err| {
+            PyRunnerError::Init(format!(
+                "failed to read Pyodide distribution manifest {}: {err}",
+                manifest_path.display()
+            ))
+        })?;
+        let manifest: PyodideDistributionManifest = serde_json::from_str(&raw).map_err(|err| {
+            PyRunnerError::Init(format!(
+                "failed to parse Pyodide distribution manifest {}: {err}",
+                manifest_path.display()
+            ))
+        })?;
+        verify_manifest_identity(&manifest)?;
+        verify_manifest_fingerprint(&manifest)?;
+        verify_external_files(&root, &manifest)?;
+        let package_root = manifest
+            .package_root
+            .as_deref()
+            .map(|value| root.join(value))
+            .or_else(|| Some(root.clone()));
+        Ok(Self {
+            source: DistributionSource::External { root },
+            manifest,
+            package_root,
+        })
+    }
+
+    pub fn embedded() -> Result<Self> {
+        let manifest: PyodideDistributionManifest =
+            serde_json::from_str(assets::distribution_manifest_json()).map_err(|err| {
+                PyRunnerError::Init(format!(
+                    "embedded Pyodide distribution manifest is invalid: {err}"
+                ))
+            })?;
+        verify_manifest_identity(&manifest)?;
+        verify_manifest_fingerprint(&manifest)?;
+        Ok(Self {
+            source: DistributionSource::Embedded,
+            manifest,
+            package_root: None,
+        })
+    }
+
+    pub fn manifest(&self) -> &PyodideDistributionManifest {
+        &self.manifest
+    }
+
+    pub fn compatibility_fingerprint(&self) -> &str {
+        &self.manifest.compatibility_fingerprint
+    }
+
+    pub fn package_root(&self) -> Option<PathBuf> {
+        self.package_root.clone()
+    }
+
+    pub fn read_text_asset(&self, name: &str) -> Result<Arc<str>> {
+        match &self.source {
+            DistributionSource::Embedded => embedded_text_asset(name).map(Arc::<str>::from),
+            DistributionSource::External { root } => {
+                let path = root.join(name);
+                let text = fs::read_to_string(&path).map_err(|err| {
+                    PyRunnerError::Init(format!(
+                        "failed to read Pyodide text asset {}: {err}",
+                        path.display()
+                    ))
+                })?;
+                Ok(Arc::<str>::from(text))
+            }
+        }
+    }
+
+    pub fn read_binary_asset(&self, name: &str) -> Result<Arc<[u8]>> {
+        match &self.source {
+            DistributionSource::Embedded => embedded_binary_asset(name).map(Arc::<[u8]>::from),
+            DistributionSource::External { root } => {
+                let path = root.join(name);
+                let bytes = fs::read(&path).map_err(|err| {
+                    PyRunnerError::Init(format!(
+                        "failed to read Pyodide binary asset {}: {err}",
+                        path.display()
+                    ))
+                })?;
+                Ok(Arc::<[u8]>::from(bytes.into_boxed_slice()))
+            }
+        }
+    }
+}
+
+pub fn compute_compatibility_fingerprint(manifest: &PyodideDistributionManifest) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"aardvark-pyodide-distribution-v1\n");
+    hasher.update(format!("pyodide={}\n", manifest.pyodide_version).as_bytes());
+    hasher.update(format!("adapter={}\n", manifest.adapter_version).as_bytes());
+    hasher.update(format!("variant={}\n", manifest.variant.as_str()).as_bytes());
+    hasher.update(format!("python={}\n", manifest.python.version).as_bytes());
+    hasher.update(format!("abi={}\n", manifest.python.abi).as_bytes());
+    hasher.update(format!("platform={}\n", manifest.python.platform).as_bytes());
+    hasher.update(format!("arch={}\n", manifest.python.arch).as_bytes());
+    hasher.update(format!("lockfile={}\n", manifest.lockfile.sha256).as_bytes());
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn verify_manifest_identity(manifest: &PyodideDistributionManifest) -> Result<()> {
+    if manifest.schema_version != 1 {
+        return Err(PyRunnerError::Init(format!(
+            "unsupported Pyodide distribution schema version {}",
+            manifest.schema_version
+        )));
+    }
+    if manifest.pyodide_version != PYODIDE_VERSION {
+        return Err(PyRunnerError::Init(format!(
+            "Pyodide distribution version mismatch: build expects {}, distribution has {}",
+            PYODIDE_VERSION, manifest.pyodide_version
+        )));
+    }
+    if manifest.adapter_version != PYODIDE_ADAPTER_VERSION {
+        return Err(PyRunnerError::Init(format!(
+            "Pyodide adapter version mismatch: build expects {}, distribution has {}",
+            PYODIDE_ADAPTER_VERSION, manifest.adapter_version
+        )));
+    }
+    Ok(())
+}
+
+fn verify_manifest_fingerprint(manifest: &PyodideDistributionManifest) -> Result<()> {
+    let actual = compute_compatibility_fingerprint(manifest);
+    if actual != manifest.compatibility_fingerprint {
+        return Err(PyRunnerError::Init(format!(
+            "Pyodide distribution fingerprint mismatch: expected {}, computed {}",
+            manifest.compatibility_fingerprint, actual
+        )));
+    }
+    Ok(())
+}
+
+fn verify_external_files(root: &Path, manifest: &PyodideDistributionManifest) -> Result<()> {
+    let cache_key = external_verification_cache_key(root, manifest);
+    if VERIFIED_EXTERNAL_DISTRIBUTIONS.lock().contains(&cache_key) {
+        tracing::debug!(
+            target = "aardvark::packages",
+            root = %root.display(),
+            fingerprint = %manifest.compatibility_fingerprint,
+            "using cached Pyodide distribution verification"
+        );
+        return Ok(());
+    }
+    for (rel, expected) in &manifest.files {
+        let path = root.join(rel);
+        let actual = sha256_file(&path)?;
+        if actual != normalize_sha256(expected) {
+            return Err(PyRunnerError::Init(format!(
+                "Pyodide distribution file checksum mismatch for {}: expected {}, got sha256:{}",
+                path.display(),
+                expected,
+                actual
+            )));
+        }
+    }
+    VERIFIED_EXTERNAL_DISTRIBUTIONS.lock().insert(cache_key);
+    Ok(())
+}
+
+fn external_verification_cache_key(root: &Path, manifest: &PyodideDistributionManifest) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(root.to_string_lossy().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(manifest.compatibility_fingerprint.as_bytes());
+    hasher.update(b"\0");
+    for (rel, expected) in &manifest.files {
+        hasher.update(rel.as_bytes());
+        hasher.update(b"=");
+        hasher.update(expected.as_bytes());
+        hasher.update(b"\0");
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let bytes = fs::read(path).map_err(|err| {
+        PyRunnerError::Init(format!(
+            "failed to read Pyodide distribution file {}: {err}",
+            path.display()
+        ))
+    })?;
+    Ok(format!("{:x}", Sha256::digest(&bytes)))
+}
+
+fn normalize_sha256(value: &str) -> String {
+    value
+        .strip_prefix("sha256:")
+        .unwrap_or(value)
+        .to_ascii_lowercase()
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    if path.is_relative() {
+        if let Ok(cwd) = std::env::current_dir() {
+            return cwd.join(path);
+        }
+    }
+    path.to_path_buf()
+}
+
+fn embedded_text_asset(name: &str) -> Result<&'static str> {
+    match name {
+        DISTRIBUTION_MANIFEST => Ok(assets::distribution_manifest_json()),
+        "pyodide.asm.js" => Ok(assets::pyodide_asm_js()),
+        "pyodide.asm.patched.js" => Ok(assets::pyodide_asm_patched_js()),
+        "pyodide_builtin_wrappers.js" => Ok(assets::builtin_wrappers_js()),
+        "pyodide_bootstrap.js" => Ok(assets::bootstrap_js()),
+        "pyodide_emscripten_setup.js" => Ok(assets::emscripten_setup_js()),
+        "pyodide_packages.js" => Ok(assets::packages_js()),
+        "pyodide.mjs" => Ok(assets::loader_mjs()),
+        "pyodide.js" => Ok(assets::loader_js()),
+        "pyodide-lock.json" => Ok(assets::lockfile_json_raw()),
+        _ => Err(PyRunnerError::Init(format!(
+            "embedded Pyodide text asset not found: {name}"
+        ))),
+    }
+}
+
+fn embedded_binary_asset(name: &str) -> Result<&'static [u8]> {
+    match name {
+        "pyodide.asm.wasm" => Ok(assets::wasm()),
+        "python_stdlib.zip" => Ok(assets::python_stdlib_zip()),
+        _ => Err(PyRunnerError::Init(format!(
+            "embedded Pyodide binary asset not found: {name}"
+        ))),
+    }
+}

@@ -11,11 +11,11 @@ use zip::ZipWriter;
 
 const ENTRYPOINT: &str = "main:main";
 
-fn pyodide_dir() -> PathBuf {
-    if let Some(dir) = env::var_os("AARDVARK_PYODIDE_PACKAGE_DIR") {
+fn pyodide_dist_dir() -> PathBuf {
+    if let Some(dir) = env::var_os("AARDVARK_PYODIDE_DIST_DIR") {
         PathBuf::from(dir)
     } else {
-        workspace_root().join(".aardvark/pyodide/0.29.0")
+        workspace_root().join(".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full")
     }
 }
 
@@ -40,20 +40,20 @@ fn create_test_bundle(dir: &Path) -> PathBuf {
     bundle_path
 }
 
-fn cli(pyodide_dir: &PathBuf) -> Command {
+fn cli(pyodide_dist_dir: &Path) -> Command {
     let mut cmd = Command::cargo_bin("aardvark-cli").expect("build aardvark-cli");
-    cmd.env("AARDVARK_PYODIDE_PACKAGE_DIR", pyodide_dir);
+    cmd.env("AARDVARK_PYODIDE_DIST_DIR", pyodide_dist_dir);
     cmd.current_dir(workspace_root());
     cmd
 }
 
 #[test]
 fn snapshot_restore_uses_catalog() {
-    let pyodide_dir = pyodide_dir();
+    let pyodide_dist_dir = pyodide_dist_dir();
     assert!(
-        pyodide_dir.exists(),
-        "expected Pyodide cache at {:?}; set AARDVARK_PYODIDE_PACKAGE_DIR or stage .aardvark/pyodide/0.29.0",
-        pyodide_dir
+        pyodide_dist_dir.exists(),
+        "expected Pyodide distribution at {:?}; set AARDVARK_PYODIDE_DIST_DIR or run `cargo run -p aardvark-cli -- assets stage --variant full`",
+        pyodide_dist_dir
     );
 
     let integration_dir = tempdir().expect("create temp dir");
@@ -61,7 +61,7 @@ fn snapshot_restore_uses_catalog() {
     let snapshot_path = integration_dir.path().join("snapshot.bin");
     let bundle = create_test_bundle(integration_dir.path());
 
-    let mut capture = cli(&pyodide_dir);
+    let mut capture = cli(&pyodide_dist_dir);
     capture
         .env("AARDVARK_OVERLAY_CACHE_DIR", &catalog_path)
         .arg("--bundle")
@@ -101,7 +101,7 @@ fn snapshot_restore_uses_catalog() {
     let index: Value = serde_json::from_slice(&index_bytes).expect("parse catalog index");
     assert!(index["packages"].is_object(), "index missing package map");
 
-    let mut restore = cli(&pyodide_dir);
+    let mut restore = cli(&pyodide_dist_dir);
     restore
         .env("AARDVARK_OVERLAY_CACHE_DIR", &catalog_path)
         .arg("--bundle")
@@ -112,7 +112,7 @@ fn snapshot_restore_uses_catalog() {
         .arg(&snapshot_path);
     restore.assert().success();
 
-    let mut warm = cli(&pyodide_dir);
+    let mut warm = cli(&pyodide_dist_dir);
     warm.env("AARDVARK_OVERLAY_CACHE_DIR", &catalog_path)
         .arg("--bundle")
         .arg(&bundle)
@@ -137,11 +137,11 @@ fn snapshot_restore_uses_catalog() {
 
 #[test]
 fn catalog_eviction_budget_trims_cache() {
-    let pyodide_dir = pyodide_dir();
+    let pyodide_dist_dir = pyodide_dist_dir();
     assert!(
-        pyodide_dir.exists(),
-        "expected Pyodide cache at {:?}; set AARDVARK_PYODIDE_PACKAGE_DIR or stage .aardvark/pyodide/0.29.0",
-        pyodide_dir
+        pyodide_dist_dir.exists(),
+        "expected Pyodide distribution at {:?}; set AARDVARK_PYODIDE_DIST_DIR or run `cargo run -p aardvark-cli -- assets stage --variant full`",
+        pyodide_dist_dir
     );
 
     let integration_dir = tempdir().expect("create temp dir");
@@ -149,7 +149,7 @@ fn catalog_eviction_budget_trims_cache() {
     let snapshot_path = integration_dir.path().join("snapshot.bin");
     let bundle = create_test_bundle(integration_dir.path());
 
-    let mut capture = cli(&pyodide_dir);
+    let mut capture = cli(&pyodide_dist_dir);
     capture
         .env("AARDVARK_OVERLAY_CACHE_DIR", &catalog_path)
         .arg("--bundle")
@@ -188,7 +188,7 @@ fn catalog_eviction_budget_trims_cache() {
         initial_tars
     );
 
-    let mut hydrate = cli(&pyodide_dir);
+    let mut hydrate = cli(&pyodide_dist_dir);
     hydrate
         .env("AARDVARK_OVERLAY_CACHE_DIR", &catalog_path)
         .env("AARDVARK_OVERLAY_CACHE_MAX_BYTES", "1")
@@ -216,11 +216,11 @@ fn catalog_eviction_budget_trims_cache() {
 
 #[test]
 fn catalog_prunes_missing_blobs_during_hydrate() {
-    let pyodide_dir = pyodide_dir();
+    let pyodide_dist_dir = pyodide_dist_dir();
     assert!(
-        pyodide_dir.exists(),
-        "expected Pyodide cache at {:?}",
-        pyodide_dir
+        pyodide_dist_dir.exists(),
+        "expected Pyodide distribution at {:?}; set AARDVARK_PYODIDE_DIST_DIR or run `cargo run -p aardvark-cli -- assets stage --variant full`",
+        pyodide_dist_dir
     );
 
     let integration_dir = tempdir().expect("create temp dir");
@@ -228,7 +228,7 @@ fn catalog_prunes_missing_blobs_during_hydrate() {
     let snapshot_path = integration_dir.path().join("snapshot.bin");
     let bundle = create_test_bundle(integration_dir.path());
 
-    let mut capture = cli(&pyodide_dir);
+    let mut capture = cli(&pyodide_dist_dir);
     capture
         .env("AARDVARK_OVERLAY_CACHE_DIR", &catalog_path)
         .arg("--bundle")
@@ -260,7 +260,7 @@ fn catalog_prunes_missing_blobs_during_hydrate() {
         .expect("blob name");
     fs::remove_file(catalog_path.join(blob_name)).expect("remove catalog blob");
 
-    let mut hydrate = cli(&pyodide_dir);
+    let mut hydrate = cli(&pyodide_dist_dir);
     hydrate
         .env("AARDVARK_OVERLAY_CACHE_DIR", &catalog_path)
         .arg("--bundle")

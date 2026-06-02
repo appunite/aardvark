@@ -6,7 +6,7 @@ mod python;
 use crate::bundle::{Bundle, BundleFingerprint};
 use crate::bundle_manifest::{BundleManifest, ManifestFilesystemMode, ManifestFilesystemResources};
 use crate::config::{PyRuntimeConfig, ResetPolicy, WarmState};
-use crate::engine::{self, ExecutionOutput, FilesystemModeConfig, JsRuntime};
+use crate::engine::{ExecutionOutput, FilesystemModeConfig, JsRuntime};
 use crate::error::{PyRunnerError, Result};
 use crate::invocation::{InvocationDescriptor, InvocationLimits};
 use crate::outcome::{
@@ -56,7 +56,12 @@ trait LanguageEngine {
     fn load_manifest_packages(&mut self, manifest: &BundleManifest) -> Result<()>;
     fn mount_bundle(&mut self, bundle: &Bundle) -> Result<()>;
     fn reset_in_place(&mut self, config: &PyRuntimeConfig) -> Result<()>;
-    fn set_warm_state(&mut self, _state: Option<WarmState>) {}
+    fn set_warm_state(&mut self, _state: Option<WarmState>) -> Result<()> {
+        Ok(())
+    }
+    fn compatibility_fingerprint(&self) -> Option<&str> {
+        None
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -125,7 +130,6 @@ struct CurrentBundleState {
 impl AardvarkRuntime {
     /// Creates a new runtime instance based on the provided configuration.
     pub fn new(config: PyRuntimeConfig) -> Result<Self> {
-        engine::set_package_root_override(config.pyodide_package_dir.clone());
         let engine = create_engine(config.default_language, &config)?;
         Ok(Self {
             config,
@@ -315,10 +319,17 @@ impl AardvarkRuntime {
             Arc::<[u8]>::from(bytes.into_boxed_slice())
         };
         let overlay = self.engine_mut().js_mut().export_overlay()?;
-        let state = WarmState::new(snapshot_bytes, overlay);
+        let compatibility_fingerprint = self.pyodide_compatibility_fingerprint().map(str::to_owned);
+        let state = if let Some(fingerprint) = compatibility_fingerprint.as_deref() {
+            WarmState::new(snapshot_bytes, overlay, fingerprint)
+        } else {
+            WarmState::without_compatibility_fingerprint(snapshot_bytes, overlay)
+        };
         self.config.warm_state = Some(state.clone());
-        self.engine_mut().set_warm_state(Some(state.clone()));
-        self.config.snapshot.store_cached_bytes(state.snapshot());
+        self.engine_mut().set_warm_state(Some(state.clone()))?;
+        self.config
+            .snapshot
+            .store_cached_bytes(state.snapshot(), compatibility_fingerprint.as_deref());
         self.warm_restored = true;
         if let Some(hook) = self.config.hooks.after_warm_restore.clone() {
             hook(self)?;
@@ -678,6 +689,13 @@ impl AardvarkRuntime {
 
     pub fn runtime_id(&self) -> Option<&str> {
         self.runtime_id.as_deref()
+    }
+
+    /// Returns the compatibility fingerprint for the active Pyodide distribution.
+    pub fn pyodide_compatibility_fingerprint(&self) -> Option<&str> {
+        self.engine
+            .as_ref()
+            .and_then(|engine| engine.compatibility_fingerprint())
     }
 
     pub fn reset_to_snapshot(&mut self) -> Result<()> {
@@ -1148,7 +1166,7 @@ fn create_engine(
         RuntimeLanguage::Python => Box::new(PythonEngine::new(config)?),
         RuntimeLanguage::JavaScript => Box::new(JavaScriptEngine::new(config)?),
     };
-    engine.set_warm_state(config.warm_state.clone());
+    engine.set_warm_state(config.warm_state.clone())?;
     Ok(engine)
 }
 

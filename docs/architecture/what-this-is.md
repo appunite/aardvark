@@ -61,7 +61,7 @@ sequenceDiagram
 ## What You Need To Deploy It
 
 - Ship bundles as ZIP files with an optional `aardvark.manifest.json`.
-- Provide the [Pyodide](https://pyodide.org/) wheel cache on disk – the runtime never downloads packages on the fly.
+- Provide a staged Aardvark Pyodide distribution on disk when Python bundles need packages – the runtime never downloads wheels on the fly.
 - Decide on invocation strategy: JSON (serde-friendly) or RawCtx (zero-copy buffers).
 - Monitor `ExecutionOutcome.diagnostics` for policy hits; guard rails are surfaced there first.
 

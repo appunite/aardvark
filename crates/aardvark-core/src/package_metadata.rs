@@ -1,9 +1,8 @@
-use std::collections::BTreeMap;
-use std::sync::{Arc, OnceLock};
-
+use crate::assets;
 use capnp::message::Builder;
 use capnp::serialize;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Lockfile {
@@ -17,6 +16,7 @@ struct Info {
     arch: String,
     platform: String,
     python: String,
+    #[serde(default)]
     version: String,
 }
 
@@ -205,40 +205,16 @@ mod schema {
     }
 }
 
-struct MetadataCache {
-    json: Arc<str>,
-    capnp: Arc<[u8]>,
+pub(crate) fn package_metadata_from_lockfile(raw_json: &str) -> BuildResult {
+    build_metadata(raw_json)
 }
 
-static METADATA_CACHE: OnceLock<MetadataCache> = OnceLock::new();
-
-/// Returns the Pyodide package metadata encoded as Cap'n Proto bytes.
-pub fn package_metadata_capnp() -> Arc<[u8]> {
-    get_cache().capnp.clone()
+pub(crate) struct BuildResult {
+    pub(crate) json_text: String,
+    pub(crate) capnp_bytes: Vec<u8>,
 }
 
-/// Returns the Pyodide package metadata as canonical JSON (derived from the Cap'n Proto model).
-pub fn package_metadata_json() -> Arc<str> {
-    get_cache().json.clone()
-}
-
-fn get_cache() -> &'static MetadataCache {
-    METADATA_CACHE.get_or_init(|| {
-        let build = build_metadata();
-        MetadataCache {
-            json: Arc::<str>::from(build.json_text),
-            capnp: Arc::<[u8]>::from(build.capnp_bytes.into_boxed_slice()),
-        }
-    })
-}
-
-struct BuildResult {
-    json_text: String,
-    capnp_bytes: Vec<u8>,
-}
-
-fn build_metadata() -> BuildResult {
-    let raw_json = crate::assets::lockfile_json_raw();
+fn build_metadata(raw_json: &str) -> BuildResult {
     let lockfile: Lockfile =
         serde_json::from_str(raw_json).expect("pyodide lockfile JSON should be valid");
 
@@ -248,7 +224,12 @@ fn build_metadata() -> BuildResult {
 
         {
             let mut info = root.init_info();
-            info.set_version(&lockfile.info.version);
+            let version = if lockfile.info.version.trim().is_empty() {
+                assets::PYODIDE_VERSION
+            } else {
+                &lockfile.info.version
+            };
+            info.set_version(version);
             info.set_python(&lockfile.info.python);
             info.set_abi_version(&lockfile.info.abi_version);
             info.set_arch(&lockfile.info.arch);

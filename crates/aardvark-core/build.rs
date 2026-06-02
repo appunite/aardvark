@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use bzip2::read::BzDecoder;
 use hex::ToHex;
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use tar::Archive;
 use ureq::Agent;
@@ -16,7 +17,6 @@ include!(concat!(env!("CARGO_MANIFEST_DIR"), "/pyodide_manifest.rs"));
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PyodideVariant {
     Core,
-    Full,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -28,18 +28,10 @@ struct PyodideArchiveSpec {
 
 impl PyodideArchiveSpec {
     fn active() -> Self {
-        if cfg!(feature = "full-pyodide-packages") {
-            Self {
-                archive_name: PYODIDE_FULL_ARCHIVE_NAME,
-                sha256: PYODIDE_FULL_ARCHIVE_SHA256,
-                variant: PyodideVariant::Full,
-            }
-        } else {
-            Self {
-                archive_name: PYODIDE_CORE_ARCHIVE_NAME,
-                sha256: PYODIDE_CORE_ARCHIVE_SHA256,
-                variant: PyodideVariant::Core,
-            }
+        Self {
+            archive_name: PYODIDE_CORE_ARCHIVE_NAME,
+            sha256: PYODIDE_CORE_ARCHIVE_SHA256,
+            variant: PyodideVariant::Core,
         }
     }
 
@@ -58,6 +50,8 @@ fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=src/js/pyodide_builtin_wrappers.js");
     println!("cargo:rerun-if-changed=src/js/pyodide_bootstrap.js");
     println!("cargo:rerun-if-changed=src/js/pyodide_emscripten_setup.js");
+    println!("cargo:rerun-if-changed=src/js/pyodide_packages.js");
+    println!("cargo:rerun-if-env-changed=DOCS_RS");
     println!("cargo:rerun-if-env-changed=AARDVARK_PYODIDE_ARCHIVE");
     println!("cargo:rerun-if-env-changed=AARDVARK_PYODIDE_DIR");
 
@@ -92,31 +86,11 @@ fn main() -> Result<()> {
     copy_builtin_wrappers(&pyodide_out_dir)?;
     copy_bootstrap_script(&pyodide_out_dir)?;
     copy_emscripten_setup(&pyodide_out_dir)?;
+    copy_packages_script(&pyodide_out_dir)?;
     generate_patched_pyodide(&pyodide_out_dir)?;
+    generate_distribution_manifest(&pyodide_out_dir, archive_spec.variant)?;
 
     println!("cargo:rustc-env=AARDVARK_PYODIDE_VERSION={PYODIDE_VERSION}");
-    println!(
-        "cargo:rustc-env=AARDVARK_PYODIDE_DIR={}",
-        pyodide_out_dir.display()
-    );
-    let default_package_dir = if docs_rs_build {
-        None
-    } else {
-        match archive_spec.variant {
-            PyodideVariant::Full => Some(
-                pyodide_out_dir
-                    .join("pyodide")
-                    .join(format!("v{PYODIDE_VERSION}"))
-                    .join("full"),
-            ),
-            PyodideVariant::Core => None,
-        }
-    };
-    let default_package_str = default_package_dir
-        .as_ref()
-        .map(|path| path.display().to_string())
-        .unwrap_or_default();
-    println!("cargo:rustc-env=AARDVARK_PYODIDE_DEFAULT_PACKAGES={default_package_str}");
     Ok(())
 }
 
@@ -260,8 +234,13 @@ eval(UTF8ToString(ptr));
         .context("write docs placeholder pyodide.mjs")?;
     fs::write(out_dir.join("pyodide.js"), JS_PLACEHOLDER)
         .context("write docs placeholder pyodide.js")?;
-    fs::write(out_dir.join("pyodide-lock.json"), r#"{"packages":{}}"#)
-        .context("write docs placeholder pyodide-lock.json")?;
+    fs::write(
+        out_dir.join("pyodide-lock.json"),
+        format!(
+            r#"{{"info":{{"abi_version":"","arch":"","platform":"","python":"","version":"{PYODIDE_VERSION}"}},"packages":{{}}}}"#
+        ),
+    )
+    .context("write docs placeholder pyodide-lock.json")?;
     fs::write(out_dir.join("pyodide.asm.wasm"), &[] as &[u8])
         .context("write docs placeholder pyodide.asm.wasm")?;
     fs::write(out_dir.join("python_stdlib.zip"), &[] as &[u8])
@@ -293,6 +272,14 @@ fn copy_emscripten_setup(out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn copy_packages_script(out_dir: &Path) -> Result<()> {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    let src = manifest_dir.join("src/js/pyodide_packages.js");
+    let dst = out_dir.join("pyodide_packages.js");
+    fs::copy(&src, &dst).with_context(|| format!("copy {} -> {}", src.display(), dst.display()))?;
+    Ok(())
+}
+
 fn generate_patched_pyodide(out_dir: &Path) -> Result<()> {
     let original_path = out_dir.join("pyodide.asm.js");
     let target_path = out_dir.join("pyodide.asm.patched.js");
@@ -318,7 +305,7 @@ fn apply_pyodide_replacements(source: &str) -> Result<String> {
 } from "./pyodide_builtin_wrappers.js";
 "#;
 
-    let replacements: [(&str, String); 11] = [
+    let required_replacements: [(&str, String); 11] = [
         (
             "var _createPyodideModule",
             format!("{PRELUDE}export const _createPyodideModule"),
@@ -361,11 +348,11 @@ fn apply_pyodide_replacements(source: &str) -> Result<String> {
     ];
 
     let mut result = source.to_owned();
-    for (needle, replacement) in replacements {
+    for (needle, replacement) in required_replacements {
         if result.contains(needle) {
             result = result.replace(needle, &replacement);
         } else {
-            println!("cargo:warning=pyodide patch skipped missing pattern: {needle}");
+            anyhow::bail!("required Pyodide patch pattern missing: {needle}");
         }
     }
 
@@ -382,4 +369,163 @@ fn apply_pyodide_replacements(source: &str) -> Result<String> {
     }
 
     Ok(result)
+}
+
+fn generate_distribution_manifest(out_dir: &Path, variant: PyodideVariant) -> Result<()> {
+    let lock_path = out_dir.join("pyodide-lock.json");
+    let lock_raw =
+        fs::read_to_string(&lock_path).with_context(|| format!("read {}", lock_path.display()))?;
+    let lock_json: serde_json::Value =
+        serde_json::from_str(&lock_raw).context("parse pyodide-lock.json")?;
+    let info = lock_json
+        .get("info")
+        .and_then(|value| value.as_object())
+        .context("pyodide-lock.json missing info object")?;
+    let python = info
+        .get("python")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let abi = info
+        .get("abi_version")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let platform = info
+        .get("platform")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let arch = info
+        .get("arch")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let lock_sha = sha256_file(&lock_path)?;
+
+    let mut files = serde_json::Map::new();
+    for rel in required_distribution_files() {
+        let path = out_dir.join(rel);
+        if !path.exists() {
+            anyhow::bail!("distribution required file missing: {}", path.display());
+        }
+        files.insert(
+            rel.to_string(),
+            json!(format!("sha256:{}", sha256_file(&path)?)),
+        );
+    }
+
+    let mut manifest = json!({
+        "schemaVersion": 1,
+        "aardvarkVersion": env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into()),
+        "pyodideVersion": PYODIDE_VERSION,
+        "adapterVersion": PYODIDE_ADAPTER_VERSION,
+        "variant": match variant {
+            PyodideVariant::Core => "core",
+        },
+        "upstream": {
+            "baseUrl": PYODIDE_RELEASE_BASE_URL,
+            "core": {
+                "name": PYODIDE_CORE_ARCHIVE_NAME,
+                "sha256": PYODIDE_CORE_ARCHIVE_SHA256
+            },
+            "full": {
+                "name": PYODIDE_FULL_ARCHIVE_NAME,
+                "sha256": PYODIDE_FULL_ARCHIVE_SHA256
+            }
+        },
+        "python": {
+            "version": python,
+            "abi": abi,
+            "platform": platform,
+            "arch": arch
+        },
+        "lockfile": {
+            "path": "pyodide-lock.json",
+            "sha256": format!("sha256:{lock_sha}")
+        },
+        "packageRoot": serde_json::Value::Null,
+        "files": files,
+        "compatibilityFingerprint": ""
+    });
+    let fingerprint = compute_distribution_fingerprint(&manifest)?;
+    manifest["compatibilityFingerprint"] = json!(fingerprint);
+    let bytes = serde_json::to_vec_pretty(&manifest)?;
+    fs::write(out_dir.join("aardvark-pyodide-dist.json"), bytes)
+        .context("write aardvark-pyodide-dist.json")?;
+    Ok(())
+}
+
+fn required_distribution_files() -> &'static [&'static str] {
+    &[
+        "pyodide.asm.wasm",
+        "pyodide.asm.js",
+        "pyodide.asm.patched.js",
+        "pyodide_builtin_wrappers.js",
+        "pyodide_bootstrap.js",
+        "pyodide_emscripten_setup.js",
+        "pyodide_packages.js",
+        "pyodide.mjs",
+        "pyodide.js",
+        "python_stdlib.zip",
+        "pyodide-lock.json",
+    ]
+}
+
+fn compute_distribution_fingerprint(manifest: &serde_json::Value) -> Result<String> {
+    let pyodide = json_str(manifest, "pyodideVersion")?;
+    let adapter = json_str(manifest, "adapterVersion")?;
+    let variant = json_str(manifest, "variant")?;
+    let python = manifest
+        .get("python")
+        .and_then(|value| value.as_object())
+        .context("manifest missing python object")?;
+    let python_version = object_str(python, "version")?;
+    let abi = object_str(python, "abi")?;
+    let platform = object_str(python, "platform")?;
+    let arch = object_str(python, "arch")?;
+    let lockfile = manifest
+        .get("lockfile")
+        .and_then(|value| value.as_object())
+        .context("manifest missing lockfile object")?;
+    let lock_sha = object_str(lockfile, "sha256")?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"aardvark-pyodide-distribution-v1\n");
+    hasher.update(format!("pyodide={pyodide}\n").as_bytes());
+    hasher.update(format!("adapter={adapter}\n").as_bytes());
+    hasher.update(format!("variant={variant}\n").as_bytes());
+    hasher.update(format!("python={python_version}\n").as_bytes());
+    hasher.update(format!("abi={abi}\n").as_bytes());
+    hasher.update(format!("platform={platform}\n").as_bytes());
+    hasher.update(format!("arch={arch}\n").as_bytes());
+    hasher.update(format!("lockfile={lock_sha}\n").as_bytes());
+    Ok(format!("sha256:{:x}", hasher.finalize()))
+}
+
+fn json_str<'a>(value: &'a serde_json::Value, key: &str) -> Result<&'a str> {
+    value
+        .get(key)
+        .and_then(|value| value.as_str())
+        .with_context(|| format!("manifest missing string field {key}"))
+}
+
+fn object_str<'a>(
+    value: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<&'a str> {
+    value
+        .get(key)
+        .and_then(|value| value.as_str())
+        .with_context(|| format!("manifest missing string field {key}"))
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher.finalize().encode_hex::<String>())
 }

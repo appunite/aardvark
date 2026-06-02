@@ -11,7 +11,7 @@ Embedded multi-language runtime for executing sandboxed bundles inside [V8](http
 ## Why Aardvark?
 
 - **Persistent isolates** – Keep Python warm between calls, reuse shared buffers, and avoid remounting bundles unless the code changes.
-- **Snapshot-friendly runtimes** – Reuse warm isolates across requests, bake overlays into warm snapshots, and keep cold starts predictable.
+- **Snapshot-friendly runtimes** – Reuse warm isolates across requests, carry overlay metadata with snapshots, and keep cold starts predictable.
 - **Deterministic sandboxing** – Enforce per-invocation budgets for wall time, CPU, heap, filesystem writes, and outbound network hosts.
 - **Self-describing bundles** – Ship code, manifest, and dependency hints together as a ZIP; hosts can honour or override the manifest contract at runtime.
 - **First-class telemetry** – Every invocation emits structured diagnostics (stdout/stderr, exceptions, resource usage, policy violations, reset timings) that hosts can feed into their own observability stack.
@@ -24,17 +24,18 @@ The CLI is intended for local smoke tests and debugging; production setups shoul
 
 ```
 cargo run -p aardvark-cli -- assets stage --variant full
-AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.29.0 \
+AARDVARK_PYODIDE_DIST_DIR=.aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full \
   cargo run -p aardvark-cli -- \
   --bundle example/numpy_bundle.zip \
   --entrypoint main:main \
   --package numpy
 ```
 
-To preload packages, point the runtime at an unpacked [Pyodide](https://pyodide.org/) cache:
+To preload packages, point the runtime at a verified Aardvark Pyodide
+distribution:
 
 ```
-AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.29.0 \
+AARDVARK_PYODIDE_DIST_DIR=.aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full \
   cargo run -p aardvark-cli -- \
   --bundle example/pandas_numpy_bundle.zip \
   --entrypoint main:main \
@@ -47,37 +48,23 @@ before executing the handler.
 
 ### Preparing [Pyodide](https://pyodide.org/) assets
 
-The runtime expects a local [Pyodide](https://pyodide.org/) cache and never
-downloads wheels on demand. Pick whichever setup path fits your workflow:
+The runtime never downloads wheels on demand. Package loading uses a staged
+Aardvark Pyodide distribution, which combines the upstream Pyodide 0.29.4
+release with Aardvark adapter scripts and a manifest containing file hashes plus
+a compatibility fingerprint.
 
-1. **Compile with `full-pyodide-packages`.** Enabling the
-   `aardvark-core` crate feature fetches the full Pyodide 0.29.0 release during
-   `cargo build`, verifies the checksum, and points
-   `PyRuntimeConfig::default()` at the extracted cache. This is ideal for CI or
-   hosts that want zero manual staging.
-2. **Use the CLI helper.** `cargo run -p aardvark-cli -- assets stage` downloads
-   and flattens the release into `.aardvark/pyodide/0.29.0/` by default. Add
-   `--variant core` for the slim bundle, `--output <dir>` to stage elsewhere, or
-   `--force` to replace an existing cache.
-3. **Stage manually.** Download and unpack the upstream archive yourself so the
-   wheels live directly under `./.aardvark/pyodide/<version>`:
+Use the CLI helper:
 
-       mkdir -p .aardvark/pyodide/0.29.0
-       curl -L -o pyodide-0.29.0.tar.bz2 \
-         https://github.com/pyodide/pyodide/releases/download/0.29.0/pyodide-0.29.0.tar.bz2
-       echo "85395f34a808cc8852f3c4a5f5d47f906a8a52fa05e5cd70da33be82f4d86a58  pyodide-0.29.0.tar.bz2" | sha256sum --check
-       tar -xjf pyodide-0.29.0.tar.bz2
-       rsync -a pyodide/pyodide/v0.29.0/full/ .aardvark/pyodide/0.29.0/
-       rm -rf pyodide pyodide-0.29.0.tar.bz2
+```
+cargo run -p aardvark-cli -- assets stage --variant full
+cargo run -p aardvark-cli -- assets verify \
+  .aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full
+```
 
-   Swap the archive name for `pyodide-core-0.29.0.tar.bz2` if you only need the
-   core subset.
-
-After staging, either set
-`AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.29.0` or configure
-`PyRuntimeConfig::with_pyodide_package_dir(...)` / `set_pyodide_package_dir(...)`
-so the runtime resolves requests such as
-`pyodide/v0.29.0/full/numpy-*.whl` directly from disk.
+Then set `AARDVARK_PYODIDE_DIST_DIR` or configure
+`PyRuntimeConfig::with_pyodide_dist_dir(...)` / `set_pyodide_dist_dir(...)`.
+The `core` variant is only suitable for scenarios that do not install additional
+Pyodide packages.
 
 ### Building CLI release binaries
 
@@ -114,7 +101,7 @@ fn execute(bundle_bytes: &[u8]) -> anyhow::Result<String> {
     let artifact = BundleArtifact::from_bytes(bundle_bytes)?;
 
     let mut isolate = PythonIsolate::new(IsolateConfig::default())?;
-    // Optionally pre-load the bundle so packages are cached before the first call.
+    // Optionally pre-load the bundle so imports and package setup happen before the first call.
     let handle = BundleHandle::from_artifact(artifact.clone());
     isolate.load_bundle(&handle)?;
 
@@ -225,7 +212,7 @@ fn build_warm_state(bytes: &[u8]) -> anyhow::Result<(PyRuntimeConfig, Bundle)> {
 }
 ```
 
-Any new runtime (or pool) constructed with that `PyRuntimeConfig` skips the heavy [Pyodide](https://pyodide.org/) bootstrap and restores directly from the warm snapshot. Snapshots captured inside the runtime automatically mark their overlays as preloaded so in-place resets avoid re-importing site-packages.
+Any new runtime (or pool) constructed with that `PyRuntimeConfig` skips the heavy [Pyodide](https://pyodide.org/) bootstrap and restores directly from the warm snapshot. Warm states are tied to the active Pyodide distribution fingerprint; a runtime will reject a warm state captured with a different distribution. Captured warm states carry overlay metadata and normally re-import that overlay on restore. Only use `WarmState::with_overlay_preloaded` or `WarmState::into_overlay_preloaded` when you have already baked the overlay into the snapshot image.
 
 ## Benchmarking the runtime
 
@@ -246,8 +233,7 @@ Arguments are `[iterations] [payload_len]` (both optional). The harness warms th
 - Developer onboarding material is available in `docs/dev/` for contributors extending the project.
 - Performance notes and benchmark workflow live in `docs/perf/overview.md`.
 - The included `Makefile` has helpers (`make perf-all`, `make perf-md`). It
-  honours `PYODIDE_DIR` (default `./.aardvark/pyodide/0.29.0`) when wiring up
-  the perf harness.
+  honours `PYODIDE_DIST_DIR` when wiring up the perf harness.
 
 ## Publishing Notes
 
@@ -255,7 +241,7 @@ The core library is published as `aardvark-core`. Before cutting any experimenta
 
 - Audit the bundled [Pyodide](https://pyodide.org/) version and rebuild snapshots if needed.
 - Decide whether to ship the CLI (`aardvark-cli`) alongside or keep it workspace-only.
-- Ensure `AARDVARK_PYODIDE_PACKAGE_DIR` points at a cache available on the target system; the crate never downloads wheels at runtime.
+- Ensure `AARDVARK_PYODIDE_DIST_DIR` points at a verified distribution available on the target system; the crate never downloads wheels at runtime.
 - Regenerate the bundle manifest schema if new fields were added.
 
 ## Limitations and Open Work
@@ -266,7 +252,7 @@ The core library is published as `aardvark-core`. Before cutting any experimenta
 - Network sandboxing is allowlist-based per session; there is no per-request override yet.
 - Filesystem quota enforcement only covers the `/session` tree.
 - Streaming outputs and incremental logs are not available; handlers must return a single payload.
-- Warm snapshots are tied to the [Pyodide](https://pyodide.org/) build and manifest used when you captured them; changing either requires baking a new snapshot. When you assemble warm states manually, remember to flag them as `overlay_preloaded` so resets avoid redundant imports.
+- Warm snapshots are tied to the [Pyodide](https://pyodide.org/) distribution fingerprint used when you captured them; changing the distribution requires baking a new snapshot. When you assemble warm states manually, pass the matching fingerprint and only flag them as `overlay_preloaded` when the overlay was baked into the snapshot.
 - Runtime pool resets still execute synchronously on the thread that next checks out a runtime; there is no background reset worker yet.
 - API stability is not guaranteed; expect breaking changes while the runtime matures.
 

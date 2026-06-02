@@ -27,13 +27,20 @@ impl SnapshotConfig {
         *guard = None;
     }
 
-    pub(crate) fn cached_bytes(&self) -> Option<Arc<[u8]>> {
+    pub(crate) fn cached_bytes(&self) -> Option<CachedSnapshot> {
         self.cache.bytes.lock().unwrap().clone()
     }
 
-    pub(crate) fn store_cached_bytes(&self, bytes: Arc<[u8]>) {
+    pub(crate) fn store_cached_bytes(
+        &self,
+        bytes: Arc<[u8]>,
+        compatibility_fingerprint: Option<&str>,
+    ) {
         let mut guard = self.cache.bytes.lock().unwrap();
-        *guard = Some(bytes);
+        *guard = Some(CachedSnapshot {
+            bytes,
+            compatibility_fingerprint: compatibility_fingerprint.map(ToOwned::to_owned),
+        });
     }
 }
 
@@ -59,12 +66,23 @@ impl fmt::Debug for SnapshotConfig {
 
 #[derive(Default)]
 struct SnapshotCache {
-    bytes: Mutex<Option<Arc<[u8]>>>,
+    bytes: Mutex<Option<CachedSnapshot>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct CachedSnapshot {
+    pub(crate) bytes: Arc<[u8]>,
+    pub(crate) compatibility_fingerprint: Option<String>,
 }
 
 impl fmt::Debug for SnapshotCache {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let cached = self.bytes.lock().unwrap().as_ref().map(|arc| arc.len());
+        let cached = self.bytes.lock().unwrap().as_ref().map(|snapshot| {
+            (
+                snapshot.bytes.len(),
+                snapshot.compatibility_fingerprint.clone(),
+            )
+        });
         f.debug_struct("SnapshotCache")
             .field("bytes", &cached)
             .finish()
@@ -103,25 +121,50 @@ impl fmt::Debug for HostHooks {
 pub struct WarmState {
     snapshot: Arc<[u8]>,
     overlay: Arc<OverlayExport>,
+    compatibility_fingerprint: Option<String>,
     overlay_preloaded: bool,
 }
 
 impl WarmState {
-    /// Constructs a warm state from raw components.
-    pub fn new(snapshot: Arc<[u8]>, overlay: OverlayExport) -> Self {
+    /// Constructs a warm state from raw components and its Pyodide distribution fingerprint.
+    pub fn new(
+        snapshot: Arc<[u8]>,
+        overlay: OverlayExport,
+        compatibility_fingerprint: impl Into<String>,
+    ) -> Self {
         Self {
             snapshot,
             overlay: Arc::new(overlay),
+            compatibility_fingerprint: Some(compatibility_fingerprint.into()),
             overlay_preloaded: false,
         }
     }
 
     /// Constructs a warm state that already includes the overlay in the snapshot image.
-    pub fn with_overlay_preloaded(snapshot: Arc<[u8]>, overlay: OverlayExport) -> Self {
+    ///
+    /// Use this only when the overlay contents were hydrated before snapshot capture.
+    pub fn with_overlay_preloaded(
+        snapshot: Arc<[u8]>,
+        overlay: OverlayExport,
+        compatibility_fingerprint: impl Into<String>,
+    ) -> Self {
         Self {
             snapshot,
             overlay: Arc::new(overlay),
+            compatibility_fingerprint: Some(compatibility_fingerprint.into()),
             overlay_preloaded: true,
+        }
+    }
+
+    pub(crate) fn without_compatibility_fingerprint(
+        snapshot: Arc<[u8]>,
+        overlay: OverlayExport,
+    ) -> Self {
+        Self {
+            snapshot,
+            overlay: Arc::new(overlay),
+            compatibility_fingerprint: None,
+            overlay_preloaded: false,
         }
     }
 
@@ -144,6 +187,11 @@ impl WarmState {
         self.overlay.clone()
     }
 
+    /// Returns the Pyodide distribution fingerprint this warm state was captured with.
+    pub fn compatibility_fingerprint(&self) -> Option<&str> {
+        self.compatibility_fingerprint.as_deref()
+    }
+
     /// Indicates whether the overlay contents were baked into the snapshot, allowing
     /// the runtime to skip `import_overlay` when restoring the warm state.
     pub fn overlay_preloaded(&self) -> bool {
@@ -156,6 +204,10 @@ impl fmt::Debug for WarmState {
         f.debug_struct("WarmState")
             .field("snapshot_len", &self.snapshot.len())
             .field("overlay_blobs", &self.overlay.blobs.len())
+            .field(
+                "compatibility_fingerprint",
+                &self.compatibility_fingerprint.as_deref(),
+            )
             .field("overlay_preloaded", &self.overlay_preloaded)
             .finish()
     }
@@ -166,12 +218,12 @@ impl fmt::Debug for WarmState {
 pub struct PyRuntimeConfig {
     /// Bundled Pyodide version string (usually derived from build-time assets).
     pub pyodide_version: String,
-    /// Filesystem directory used to resolve Pyodide wheel and metadata requests.
+    /// Optional Aardvark Pyodide distribution directory.
     ///
-    /// When the crate is compiled with the `full-pyodide-packages` feature this defaults to the
-    /// build-script managed cache extracted into `OUT_DIR`. Hosts can override it programmatically
-    /// to avoid relying on process-wide environment variables.
-    pub pyodide_package_dir: Option<PathBuf>,
+    /// When set, the runtime verifies `aardvark-pyodide-dist.json` and loads both
+    /// core Pyodide assets and package wheels from this distribution. This is the
+    /// preferred production contract.
+    pub pyodide_dist_dir: Option<PathBuf>,
     /// Default guest language selected when manifests/descriptors omit one.
     pub default_language: RuntimeLanguage,
     /// Snapshot-related configuration.
@@ -190,18 +242,12 @@ pub struct PyRuntimeConfig {
 
 impl Default for PyRuntimeConfig {
     fn default() -> Self {
-        let default_package_dir =
-            option_env!("AARDVARK_PYODIDE_DEFAULT_PACKAGES").and_then(|value| {
-                let trimmed = value.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(PathBuf::from(trimmed))
-                }
-            });
+        let default_dist_dir = std::env::var_os("AARDVARK_PYODIDE_DIST_DIR")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
         Self {
             pyodide_version: PYODIDE_VERSION.to_owned(),
-            pyodide_package_dir: default_package_dir,
+            pyodide_dist_dir: default_dist_dir,
             default_language: RuntimeLanguage::Python,
             snapshot: SnapshotConfig::default(),
             hooks: HostHooks::default(),
@@ -214,30 +260,24 @@ impl Default for PyRuntimeConfig {
 }
 
 impl PyRuntimeConfig {
-    /// Returns the configured Pyodide package directory, if any.
-    pub fn pyodide_package_dir(&self) -> Option<&PathBuf> {
-        self.pyodide_package_dir.as_ref()
+    /// Returns the configured Aardvark Pyodide distribution directory, if any.
+    pub fn pyodide_dist_dir(&self) -> Option<&PathBuf> {
+        self.pyodide_dist_dir.as_ref()
     }
 
-    /// Sets the Pyodide package directory override.
-    pub fn set_pyodide_package_dir<P: Into<PathBuf>>(&mut self, path: P) {
-        self.pyodide_package_dir = Some(path.into());
+    /// Sets the Aardvark Pyodide distribution directory override.
+    pub fn set_pyodide_dist_dir<P: Into<PathBuf>>(&mut self, path: P) {
+        self.pyodide_dist_dir = Some(path.into());
     }
 
-    /// Clears any explicit Pyodide package directory override.
-    pub fn clear_pyodide_package_dir(&mut self) {
-        self.pyodide_package_dir = None;
+    /// Clears any explicit Aardvark Pyodide distribution directory override.
+    pub fn clear_pyodide_dist_dir(&mut self) {
+        self.pyodide_dist_dir = None;
     }
 
-    /// Returns a new configuration with the provided Pyodide package directory.
-    pub fn with_pyodide_package_dir<P: Into<PathBuf>>(mut self, path: P) -> Self {
-        self.set_pyodide_package_dir(path);
-        self
-    }
-
-    /// Returns a new configuration without an explicit Pyodide package directory override.
-    pub fn without_pyodide_package_dir(mut self) -> Self {
-        self.clear_pyodide_package_dir();
+    /// Returns a new configuration with the provided Aardvark Pyodide distribution directory.
+    pub fn with_pyodide_dist_dir<P: Into<PathBuf>>(mut self, path: P) -> Self {
+        self.set_pyodide_dist_dir(path);
         self
     }
 }

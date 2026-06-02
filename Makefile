@@ -2,13 +2,14 @@
 
 .DEFAULT_GOAL := help
 
-# Default location for manually downloaded Pyodide assets.
-PYODIDE_DIR ?= $(PWD)/.aardvark/pyodide/$(PYODIDE_VERSION)
+# Default location for the staged Aardvark Pyodide distribution.
+AARDVARK_VERSION ?= 0.1.1
+PYODIDE_DIST_DIR ?= $(PWD)/.aardvark/pyodide-distributions/aardvark-$(AARDVARK_VERSION)-pyodide-v$(PYODIDE_VERSION)-full
 ITERATIONS ?= 25
 PERF_JSON ?= target/perf/results.json
 PERF_CSV ?= target/perf/results.csv
 PERF_MD ?= target/perf/results.md
-PYODIDE_VERSION ?= 0.29.0
+PYODIDE_VERSION ?= 0.29.4
 PYTHON_VERSION ?= 3.13
 
 help:
@@ -18,7 +19,7 @@ help:
 	@printf "  make setup-python Install Python %s via mise (used by host runner).\n" "$(PYTHON_VERSION)"
 	@printf "Variables:\n"
 	@printf "  PYODIDE_VERSION=%s\n" "$(PYODIDE_VERSION)"
-	@printf "  PYODIDE_DIR=%s\n" "$(PYODIDE_DIR)"
+	@printf "  PYODIDE_DIST_DIR=%s\n" "$(PYODIDE_DIST_DIR)"
 	@printf "  ITERATIONS=%s\n" "$(ITERATIONS)"
 
 setup-python:
@@ -27,7 +28,7 @@ setup-python:
 
 perf-all:
 	@mkdir -p $(dir $(PERF_JSON))
-	AARDVARK_PYODIDE_PACKAGE_DIR=$(PYODIDE_DIR) cargo run -p aardvark-perf -- \
+	AARDVARK_PYODIDE_DIST_DIR=$(PYODIDE_DIST_DIR) cargo run -p aardvark-perf -- \
 		all --iterations $(ITERATIONS) --json $(PERF_JSON) --csv $(PERF_CSV)
 
 perf-md: perf-all

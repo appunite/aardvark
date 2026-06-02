@@ -33,21 +33,21 @@ the daily workflow.
   ```
 - Workspace tests without the slower integration crate:
   ```bash
-  AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.29.0 \
+  AARDVARK_PYODIDE_DIST_DIR=.aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full \
     cargo test --workspace --exclude integration-tests
   ```
 - Integration tests:
   ```bash
   cargo test -p integration-tests -- --nocapture
   ```
-  These will mount real overlay caches. Ensure `AARDVARK_PYODIDE_PACKAGE_DIR`
-  points at an unpacked [Pyodide](https://pyodide.org/) cache (or run
-  `cargo run -p aardvark-cli -- assets stage` beforehand).
+  These will mount real overlay caches. Ensure `AARDVARK_PYODIDE_DIST_DIR`
+  points at a verified Aardvark Pyodide distribution (or run
+  `cargo run -p aardvark-cli -- assets stage --variant full` beforehand).
 
 ### Smoke Testing the CLI
 
 ```
-AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.29.0 \
+AARDVARK_PYODIDE_DIST_DIR=.aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full \
   cargo run -p aardvark-cli -- \
   --bundle example/numpy_bundle.zip --entrypoint main:main --package numpy
 ```

@@ -40,7 +40,7 @@ graph TD
 4. **Watchdogs** – Wall-clock and CPU watchdogs arm before calling into the guest. Heap usage is checked both before and after execution.
 5. **Sandbox enforcement** – The JS layer enforces network allowlists (HTTPS by default), filesystem mode/quota, and host capability gates for native bridges. Violations are raised back to Rust.
 6. **Outcome synthesis** – Captured stdout/stderr, console messages, payloads, sandbox telemetry, and policy violations are combined into `ExecutionOutcome`.
-7. **Reset** – Depending on `ResetPolicy`, runtimes either rebuild the engine (`reset_to_snapshot`) or scrub it in place (`reset_in_place`). Warm states captured inside the runtime bake the overlay into the snapshot, so in-place resets reuse site-packages without rehydrating tarballs. `BundlePool` queues calls, fans them out across isolates, and hides resets behind the queue wait time.
+7. **Reset** – Depending on `ResetPolicy`, runtimes either rebuild the engine (`reset_to_snapshot`) or scrub it in place (`reset_in_place`). Warm states captured inside the runtime carry overlay metadata and the active distribution fingerprint so restores can reject incompatible snapshots before rehydrating site-packages. `BundlePool` queues calls, fans them out across isolates, and hides resets behind the queue wait time.
 
 The same flow is used whether the runtime comes from a pool or is standalone. Pooling only changes lifecycle management around steps 2 and 7.
 
@@ -80,7 +80,7 @@ sequenceDiagram
 - Only Linux/macOS targets are exercised. Windows builds are untested and expected to fail.
 - Shared buffer handles present zero-copy views backed by the runtime; the host may still materialize owned copies when required.
 - JavaScript bundles must be fully self-contained. Ship pre-bundled modules (e.g., via esbuild/webpack) because the runtime does not resolve npm packages or fetch external scripts.
-- Snapshot overlays assume [Pyodide](https://pyodide.org/) 0.29.0. Future Pyodide upgrades will require regenerating overlay metadata and schema version bumping. When hosts build warm states out of band they must flag them as overlay-preloaded to avoid redundant imports.
+- Snapshot overlays are tied to the active [Pyodide](https://pyodide.org/) distribution compatibility fingerprint. Explicit snapshot loads, cached snapshot bytes, and warm states fail on fingerprint mismatch, while stale overlay catalog entries are ignored and rebuilt.
 - Network sandboxing is allowlist-based per session. There is no per-request override yet, and DNS leakage is not mitigated beyond host matching.
 - Filesystem quota enforcement only tracks writes within the virtual session directory. If code escapes to other WASM-visible mounts it will currently fail closed but without detailed accounting.
 - `BundlePool` enforces memory guard rails per isolate. If Python heap or RSS usage exceeds the configured limit the pool quarantines the isolate and spins up a replacement.

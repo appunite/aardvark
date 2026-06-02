@@ -35,9 +35,9 @@ the OS.
 - `uv` for ephemeral Python environments: <https://docs.astral.sh/uv/>
 - `mise` (or any toolchain manager capable of installing Python 3.13) – we use
   it in documentation for reproducible instructions.
-- [Pyodide](https://pyodide.org/) assets already downloaded (see [Host Integration – Preparing Pyodide assets](../api/rust-host.md#preparing-pyodide-assets)).
+- [Pyodide](https://pyodide.org/) assets already staged (see [Host Integration – Preparing Pyodide assets](../api/rust-host.md#preparing-pyodide-assets)).
 
-Ensure a matching CPython is available ([Pyodide](https://pyodide.org/) 0.29.0 targets Python 3.13.2):
+Ensure a matching CPython is available ([Pyodide](https://pyodide.org/) 0.29.4 targets Python 3.13.2):
 
 ```sh
 mise install python@3.13
@@ -46,18 +46,15 @@ mise exec python@3.13 -- python --version
 
 ## Running the Benchmarks
 
-The harness reads [Pyodide](https://pyodide.org/) wheels from the directory referenced by
-`AARDVARK_PYODIDE_PACKAGE_DIR` (the `Makefile` forwards `PYODIDE_DIR`, which
-defaults to `./.aardvark/pyodide/0.29.0`). Stage the upstream release and copy
-the contents of `pyodide/v0.29.0/full/` (or `core/`) into that directory so the
-runtime can serve requests like `pyodide/v0.29.0/full/numpy-….whl` from a flat
-layout. A quick setup looks like:
+The harness reads [Pyodide](https://pyodide.org/) runtime files and wheels from the
+directory referenced by `AARDVARK_PYODIDE_DIST_DIR` (the `Makefile` forwards
+`PYODIDE_DIST_DIR`, which defaults to the full staged distribution for the
+pinned Aardvark/Pyodide versions). A quick setup looks like:
 
 ```sh
-export PYODIDE_VERSION=0.29.0
-export PYODIDE_DIR="$PWD/.aardvark/pyodide/$PYODIDE_VERSION"
-mkdir -p "$PYODIDE_DIR"
-# …download and extract the Pyodide release here…
+cargo run -p aardvark-cli -- assets stage --variant full
+export PYODIDE_DIST_DIR="$PWD/.aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full"
+cargo run -p aardvark-cli -- assets verify "$PYODIDE_DIST_DIR"
 ```
 
 The top-level `Makefile` now exposes helper targets. Run `make help` to see the
@@ -70,8 +67,8 @@ Available targets:
   make perf-md      Generate Markdown summary (runs perf-all first).
   make setup-python Install Python 3.13 via mise (used by host runner).
 Variables:
-  PYODIDE_VERSION=0.29.0
-  PYODIDE_DIR=/…/.aardvark/pyodide/0.29.0
+  PYODIDE_VERSION=0.29.4
+  PYODIDE_DIST_DIR=/.../.aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full
   ITERATIONS=25
 ```
 
@@ -84,7 +81,7 @@ directly call `make perf-md`, which invokes the same run and pipes the JSON into
 `perf/scripts/render_markdown.py`.
 
 For the cold and warm paths each iteration spins up a fresh runtime, installs
-the requested packages from the local cache, prepares the bundle, and executes
+the requested packages from the staged distribution, prepares the bundle, and executes
 the entrypoint. The persistent rows keep a `BundlePool` isolate hot between
 calls (`CleanupMode::Full` unless noted), highlighting the latency win from
 skipping the hydration step.
@@ -109,11 +106,11 @@ information (one row per scenario/profile/path/mode combination).
 
 ### Single Scenario
 
-To benchmark one combination set `AARDVARK_PYODIDE_PACKAGE_DIR` (or export
-`PYODIDE_DIR` before invoking make) and run:
+To benchmark one combination set `AARDVARK_PYODIDE_DIST_DIR` (or export
+`PYODIDE_DIST_DIR` before invoking make) and run:
 
 ```sh
-AARDVARK_PYODIDE_PACKAGE_DIR=$PYODIDE_DIR cargo run -p aardvark-perf -- scenario \
+AARDVARK_PYODIDE_DIST_DIR=$PYODIDE_DIST_DIR cargo run -p aardvark-perf -- scenario \
   --scenario pandas \
   --mode aardvark-json-persistent \
   --profile medium \

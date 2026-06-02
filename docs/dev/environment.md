@@ -32,30 +32,18 @@ runtime. The following steps get you ready to develop locally.
    ```
 
 3. Stage [Pyodide](https://pyodide.org/) assets. The runtime never downloads
-   wheels at execution time, so make sure a local cache exists before running
-   tests or integration scenarios. You can:
+   wheels at execution time, so make sure a local Aardvark Pyodide distribution
+   exists before running package-loading tests or integration scenarios:
 
-   - Enable the `aardvark-core/full-pyodide-packages` feature when building.
-     The build script downloads the full 0.29.0 release, verifies it, and
-     points `PyRuntimeConfig::default()` at the extracted cache.
-   - Run the CLI helper: `cargo run -p aardvark-cli -- assets stage` downloads
-     and flattens the full variant into `.aardvark/pyodide/0.29.0/` (use
-     `--variant core`, `--output <dir>`, or `--force` as needed).
-   - Stage manually with the upstream tarball:
+   ```bash
+   cargo run -p aardvark-cli -- assets stage --variant full
+   cargo run -p aardvark-cli -- assets verify \
+     .aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full
+   ```
 
-     ```bash
-     mkdir -p .aardvark/pyodide/0.29.0
-     curl -L -o pyodide-0.29.0.tar.bz2 \
-       https://github.com/pyodide/pyodide/releases/download/0.29.0/pyodide-0.29.0.tar.bz2
-     echo "85395f34a808cc8852f3c4a5f5d47f906a8a52fa05e5cd70da33be82f4d86a58  pyodide-0.29.0.tar.bz2" | sha256sum --check
-     tar -xjf pyodide-0.29.0.tar.bz2
-     rsync -a pyodide/pyodide/v0.29.0/full/ .aardvark/pyodide/0.29.0/
-     rm -rf pyodide pyodide-0.29.0.tar.bz2
-     ```
-
-   In all cases, point the runtime at the cache via
-   `AARDVARK_PYODIDE_PACKAGE_DIR` or by calling
-   `PyRuntimeConfig::set_pyodide_package_dir`.
+   Point the runtime at that directory with `AARDVARK_PYODIDE_DIST_DIR` or by
+   calling `PyRuntimeConfig::set_pyodide_dist_dir`. Use `--variant core` only
+   for scenarios that do not need the full wheel set.
 
 4. Build the workspace:
 
@@ -73,7 +61,7 @@ runtime. The following steps get you ready to develop locally.
   pooling.
 - `docs/` – public and developer documentation.
 - `internal_docs/` – historical research notes (ignored in git).
-- `scripts/` – utility scripts for cache maintenance and asset syncing.
+- `scripts/` – utility scripts for asset and overlay maintenance.
 
 ## IDE Hints
 
@@ -85,12 +73,13 @@ runtime. The following steps get you ready to develop locally.
 
 ## Common Environment Variables
 
-- `AARDVARK_PYODIDE_PACKAGE_DIR` – path to a [Pyodide](https://pyodide.org/) wheel cache; required for
-  package-loading tests.
+- `AARDVARK_PYODIDE_DIST_DIR` – path to a staged Aardvark Pyodide distribution;
+  required for package-loading tests that use external assets.
 - `AARDVARK_PYODIDE_ARCHIVE` – local [Pyodide](https://pyodide.org/) archive consumed by
   `crates/aardvark-core/build.rs` instead of downloading one.
 - `AARDVARK_PYODIDE_DIR` – local unpacked [Pyodide](https://pyodide.org/) asset directory copied by
-  `crates/aardvark-core/build.rs` instead of downloading an archive.
+  `crates/aardvark-core/build.rs` instead of downloading an archive. This is a
+  build-time contributor override, not the runtime package contract.
 - `AARDVARK_OVERLAY_CACHE_DIR` – directory used by overlay hydration tests.
 - `RUST_LOG` – set to `info` or `debug` to see tracing spans while running the
   CLI or tests.
