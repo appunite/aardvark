@@ -1,3 +1,0 @@
-[env]
-# Default mirror hosting Aardvark's PIC-enabled V8 archives.
-RUSTY_V8_MIRROR = "https://github.com/appunite/aardvark/releases/download"

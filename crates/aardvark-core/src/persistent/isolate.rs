@@ -14,17 +14,12 @@ use crate::strategy::{
 use serde_json::Value as JsonValue;
 
 /// Cleanup behaviour applied after each invocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CleanupMode {
+    #[default]
     Full,
     SharedBuffersOnly,
     None,
-}
-
-impl Default for CleanupMode {
-    fn default() -> Self {
-        Self::Full
-    }
 }
 
 /// Configuration applied when constructing a [`PythonIsolate`].

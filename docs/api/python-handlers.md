@@ -89,7 +89,7 @@ For zero-copy outputs, allocate buffers via `builtins.__aardvark_output_buffer(s
 
 ## Testing handlers locally
 
-- Use the CLI to load your bundle: `cargo run -p aardvark-cli -- --bundle my_bundle.zip --manifest`.
+- Use the CLI to load your bundle: `cargo run -p aardvark-cli -- --bundle my_bundle.zip --entrypoint main:main`.
 - Provide `--descriptor` when testing descriptor-only bundles.
 - For unit tests, load the same module under CPython and invoke the handler with representative payloads. Ensure any [Pyodide](https://pyodide.org/)-specific APIs are guarded behind runtime checks.
 

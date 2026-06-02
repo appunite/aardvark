@@ -5,14 +5,17 @@ information about the moving parts you are likely to touch.
 
 ## High-Level Stack
 
-1. **Rust runtime (`crates/aardvark-core/src/runtime.rs`)** – orchestrates
-   session preparation, watchdogs, and diagnostics.
+1. **Rust runtime (`crates/aardvark-core/src/runtime/mod.rs`)** – orchestrates
+   session preparation, language engine selection, watchdogs, and diagnostics.
 2. **JS engine wrapper (`crates/aardvark-core/src/engine.rs`)** – embeds [V8](https://v8.dev/) and
   exposes a safe Rust façade for evaluating scripts, mounting bundles, and
   configuring policies.
-3. **Bootstrap assets (`crates/aardvark-core/src/js/`)** – JavaScript injected
+3. **Language engines (`crates/aardvark-core/src/runtime/python.rs` and
+   `crates/aardvark-core/src/runtime/javascript.rs`)** – adapt the shared V8
+   wrapper to Python/[Pyodide](https://pyodide.org/) or standalone JavaScript.
+4. **Bootstrap assets (`crates/aardvark-core/src/js/`)** – JavaScript injected
    into [Pyodide](https://pyodide.org/) to enforce sandboxing and provide host hooks.
-4. **Python support (`crates/aardvark-core/src/py/`)** – small utilities copied
+5. **Python support (`crates/aardvark-core/src/py/`)** – small utilities copied
    into the virtual filesystem to patch [Pyodide](https://pyodide.org/) behaviour where necessary.
 
 ## Rust ↔ JS Bridge
@@ -28,11 +31,10 @@ information about the moving parts you are likely to touch.
 
 - Entry point is `pyodide_bootstrap.js`. It mounts packages, wires network and
   filesystem policies, and exposes capability guards.
-- The bootstrap exports a small API that Rust calls through `JsRuntime`:
-  - `loadPyodide(opts)`
-  - `setNetworkPolicy(allow, httpsOnly)`
-  - `setFilesystemPolicy(mode, quota)`
-  - `executeInvocation(descriptor, strategy)`
+- Rust loads `pyodide_bootstrap.js` as an ES module and calls
+  `loadPyRunnerPyodide(options)`. The bootstrap then installs global hooks used
+  by `JsRuntime`, including filesystem policy/reset hooks, host capability
+  hooks, and shared-buffer collection/reset hooks.
 - When adding new host capabilities, introduce string constants in both the JS
   and Rust sides. The policy list flows from manifest → runtime → JS shim.
 
@@ -41,7 +43,7 @@ information about the moving parts you are likely to touch.
 - Network contacts, blocked hosts, filesystem writes, and violations are recorded
   inside the JS layer and drained by Rust after execution.
 - When extending telemetry, update:
-  - `CollectedDiagnostics` in `runtime.rs`
+  - `CollectedDiagnostics` in `runtime/mod.rs`
   - `Diagnostics` and `SandboxTelemetry` in `outcome.rs` / `host.rs`
   - Any integration tests using `assert_eq!` on diagnostics.
 
@@ -49,9 +51,9 @@ information about the moving parts you are likely to touch.
 
 - Wall watchdog uses [V8](https://v8.dev/)’s interrupt mechanism. The guard object returned by
   `arm_watchdog` must be dropped explicitly to avoid spurious interrupts.
-- CPU measurement relies on `thread_cpu_time_ns()` from `std::time::Instant`.
-  Platforms that lack it return `None`, so code should handle the absence
-  gracefully.
+- CPU measurement uses `thread_cpu_time_ns()` and platform `getrusage`
+  support. Platforms that lack it return `None`, so code should handle the
+  absence gracefully.
 
 ## Snapshot Lifecycle
 
@@ -64,9 +66,13 @@ information about the moving parts you are likely to touch.
 
 ## JS Asset Updates
 
-- After editing JS files, run `npm run lint:js` (or equivalent) and ensure the
-  assets still load in Node. The JS bundle is not transpiled; stick to syntax
-  supported by the embedded [V8](https://v8.dev/) version.
+- The JS bundle is not transpiled; stick to syntax supported by the embedded
+  [V8](https://v8.dev/) version.
+- Rebuild `aardvark-core` after editing assets. [Pyodide](https://pyodide.org/)-facing
+  shims are copied by `build.rs` into `OUT_DIR`, while other JS helpers are
+  embedded directly from `src/js/`.
+- There is no root npm lint/test harness in-tree today. Use Rust regression
+  tests and CLI smoke tests for behavioural coverage.
 - Keep modules self-contained: no dynamic `import()` without embedding the
   dependency alongside the bootstrap file.
 
@@ -74,8 +80,8 @@ information about the moving parts you are likely to touch.
 
 - Located under `crates/aardvark-core/src/py/`. These patches adjust behaviour
   such as entropy sources or dynamic imports.
-- When updating, regenerate the hashed asset list if necessary (see comments in
-  `assets.rs`).
+- When updating, rebuild the core crate so `build.rs` refreshes generated
+  [Pyodide](https://pyodide.org/) assets under `OUT_DIR`.
 
 ## Adding New Capabilities or Policies
 

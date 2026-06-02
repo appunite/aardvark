@@ -9,8 +9,6 @@ organised so you can jump straight to the task at hand:
   formatting, linting, and running the test matrix.
 - [`runtime-internals.md`](runtime-internals.md) – deep dive into the Rust ↔ JS
   bridge, [Pyodide](https://pyodide.org/) boot sequence, and sandbox shims.
-- [`release.md`](release.md) – tagging, changelog hygiene, and crates.io publish
-  checklist.
 
 These documents mirror the public architecture notes but focus on *how* to make
 changes safely, not just on what the runtime does.

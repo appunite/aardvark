@@ -12,8 +12,7 @@ the daily workflow.
   ```
 - **Format everything**:
   ```bash
-  cargo fmt
-  npm run lint:js   # if you have local npm scripts; otherwise run prettier/eslint manually
+  cargo fmt --all
   ```
 - **Clippy**:
   ```bash
@@ -32,9 +31,10 @@ the daily workflow.
   ```bash
   cargo test -p aardvark-core --test runtime_pool_and_outcome
   ```
-- JS shim tests (run under Node with mocked [Pyodide](https://pyodide.org/)):
+- Workspace tests without the slower integration crate:
   ```bash
-  node crates/aardvark-core/tests/js/run-tests.mjs
+  AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.29.0 \
+    cargo test --workspace --exclude integration-tests
   ```
 - Integration tests:
   ```bash
@@ -49,7 +49,7 @@ the daily workflow.
 ```
 AARDVARK_PYODIDE_PACKAGE_DIR=.aardvark/pyodide/0.29.0 \
   cargo run -p aardvark-cli -- \
-  --bundle hello_bundle.zip --entrypoint main:main --manifest
+  --bundle example/numpy_bundle.zip --entrypoint main:main --package numpy
 ```
 
 Set `RUST_LOG=aardvark::telemetry=info` to verify tracing and sandbox telemetry output.
@@ -58,8 +58,10 @@ Set `RUST_LOG=aardvark::telemetry=info` to verify tracing and sandbox telemetry 
 
 - Edit the bootstrap code under `crates/aardvark-core/src/js/`.
 - Keep the assets ASCII-only to simplify embedding.
-- After changes, rebuild the core crate. The JS is bundled into the Rust
-  binary via `include_str!` and hashed for cache busting.
+- After changes, rebuild the core crate. JS assets are embedded through
+  `include_str!` or copied into generated [Pyodide](https://pyodide.org/) assets by `build.rs`.
+- There is no standalone Node test harness in-tree today. Cover behavioural
+  changes with Rust regression tests and run a CLI smoke test.
 
 ## Manifest Schema Updates
 
@@ -87,4 +89,4 @@ Set `RUST_LOG=aardvark::telemetry=info` to verify tracing and sandbox telemetry 
 - [ ] JS shims evaluated or lightly smoke tested via CLI.
 - [ ] Docs updated (`docs/api`, `docs/architecture`, and `docs/dev`) when
       behaviour changes.
-- [ ] Changelog entry added (see `release.md`).
+- [ ] Release notes or changelog updated when published behaviour changes.

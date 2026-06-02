@@ -7,6 +7,7 @@ use crate::strategy::RawCtxInput;
 use hdrhistogram::Histogram;
 use parking_lot::{Condvar, Mutex};
 use serde_json::Value as JsonValue;
+use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -20,16 +21,11 @@ use std::fs::File;
 use std::io::Read;
 
 /// Queue backpressure strategy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum QueueMode {
+    #[default]
     Block,
     FailFast,
-}
-
-impl Default for QueueMode {
-    fn default() -> Self {
-        Self::Block
-    }
 }
 
 pub type IsolateId = u64;
@@ -879,7 +875,7 @@ impl BundlePoolInner {
                     })
                 })
                 .collect();
-            isolates.sort_by(|a, b| b.0.cmp(&a.0));
+            isolates.sort_by_key(|item| Reverse(item.0));
 
             let mut indices_to_remove = Vec::with_capacity(removable);
             for (id, index, is_idle) in isolates {
