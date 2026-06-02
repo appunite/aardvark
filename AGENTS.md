@@ -20,10 +20,12 @@
 
 ## Testing Guidelines
 - Rust tests use `cargo test`; place new unit tests beside implementation files and integration tests under `integration-tests/tests/` with descriptive filenames (e.g., `runtime_pool_and_outcome.rs`).
-- When modifying JS sandboxing, add or update assertions in `crates/aardvark-core/tests/js/` and rerun the Node harness.
+- When modifying JS sandboxing, add or update Rust regression tests and run a
+  CLI smoke test; there is no standalone Node harness in-tree.
 - Ensure new features expose telemetry or policy changes via tests before merging.
 
 ## Commit & Pull Request Guidelines
 - Follow the existing imperative tone (e.g., "Add manifest parser", "Document developer workflow"). Group related doc and code edits together.
 - Each PR should include: summary of changes, testing evidence (`cargo test` output or notes), updated docs when behaviour changes, and references to tracked issues or feature requests if applicable.
-- Squash merge by default; release commits should be tagged (see `docs/dev/release.md`).
+- Squash merge by default; release commits should be tagged and include release
+  notes or changelog updates when published behaviour changes.

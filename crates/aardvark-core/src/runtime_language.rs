@@ -4,8 +4,9 @@ use std::str::FromStr;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 /// Supported guest language runtimes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RuntimeLanguage {
+    #[default]
     Python,
     JavaScript,
 }
@@ -17,12 +18,6 @@ impl RuntimeLanguage {
             Self::Python => "python",
             Self::JavaScript => "javascript",
         }
-    }
-}
-
-impl Default for RuntimeLanguage {
-    fn default() -> Self {
-        Self::Python
     }
 }
 

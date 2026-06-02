@@ -5,12 +5,14 @@ runtime. The following steps get you ready to develop locally.
 
 ## Prerequisites
 
-- **Rust**: Install via `rustup` and ensure the toolchain matches
-  `rust-toolchain.toml` (nightly features are not required).
-- **Node.js**: Needed for bundling the [Pyodide](https://pyodide.org/) bootstrap assets. Use `mise` or
-  another version manager to match the version pinned in `.mise.toml`.
-- **Python 3.11+**: Only required for regenerating [Pyodide](https://pyodide.org/) metadata and running
-  certain integration helpers.
+- **Rust**: The workspace pins Rust in `.mise.toml` and `Cargo.toml`
+  `rust-version`. Run `mise install`, or install the same version with
+  `rustup`; nightly features are not required.
+- **Node.js** *(optional)*: Pinned in `.mise.toml` for ad-hoc JavaScript
+  inspection. The checked-in build does not have root npm scripts, and `cargo
+  build` embeds JavaScript assets directly.
+- **Python 3.13**: Used by the perf host runner and helper scripts. `mise
+  install` installs the pinned version.
 - **wasm-pack** *(optional)*: Handy when inspecting [Pyodide](https://pyodide.org/) builds, but not part
   of the default build.
 
@@ -62,14 +64,6 @@ runtime. The following steps get you ready to develop locally.
    ```
 
   The build downloads [V8](https://v8.dev/) via `v8-rs` the first time; this may take a while.
-  Our `.cargo/config.toml` points `RUSTY_V8_MIRROR` at the PIC-enabled
-  Aardvark release `https://github.com/appunite/aardvark/releases/tag/v142.0.0`
-  (built with `v8_monolithic=true` and
-  `v8_monolithic_for_shared_library=true`). Override `RUSTY_V8_MIRROR` or
-  `RUSTY_V8_ARCHIVE` if you need to test alternative builds.
-
-  If you require additional GN tweaks, export `EXTRA_GN_ARGS=force_pic=true`
-  (or other options) before rebuilding V8 so the objects match your needs.
 
 ## Project Layout
 
@@ -93,11 +87,10 @@ runtime. The following steps get you ready to develop locally.
 
 - `AARDVARK_PYODIDE_PACKAGE_DIR` – path to a [Pyodide](https://pyodide.org/) wheel cache; required for
   package-loading tests.
+- `AARDVARK_PYODIDE_ARCHIVE` – local [Pyodide](https://pyodide.org/) archive consumed by
+  `crates/aardvark-core/build.rs` instead of downloading one.
+- `AARDVARK_PYODIDE_DIR` – local unpacked [Pyodide](https://pyodide.org/) asset directory copied by
+  `crates/aardvark-core/build.rs` instead of downloading an archive.
 - `AARDVARK_OVERLAY_CACHE_DIR` – directory used by overlay hydration tests.
 - `RUST_LOG` – set to `info` or `debug` to see tracing spans while running the
   CLI or tests.
-- `EXTRA_GN_ARGS` – appended to the GN invocation when rebuilding V8. Export
-  values like `force_pic=true` to tune the V8 build for downstream needs.
-- `RUSTY_V8_MIRROR` – defaults (via `.cargo/config.toml`) to our PIC-friendly
-  V8 142.0.0 release (`https://github.com/appunite/aardvark/releases/tag/v142.0.0`).
-  Override to consume a different archive or mirror.
