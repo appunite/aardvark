@@ -21,23 +21,23 @@ graph TD
 ## Manifest-driven packages
 
 - The manifest’s `packages` field lists [Pyodide](https://pyodide.org/) packages to preload. Names are normalised (trimmed, deduplicated, lowercase for comparisons).
-- During session preparation the JS bootstrap resolves dependencies using [Pyodide](https://pyodide.org/)’s lockfile and installs wheels from the local cache referenced by `AARDVARK_PYODIDE_PACKAGE_DIR` (or the path set via `PyRuntimeConfig::with_pyodide_package_dir`). The cache should contain the flattened contents of `pyodide/v0.29.0/<variant>/` so requests like `pyodide/v0.29.0/full/numpy-….whl` resolve to `<cache>/numpy-….whl`.
+- During session preparation the JS bootstrap resolves dependencies using [Pyodide](https://pyodide.org/)’s lockfile from the staged Aardvark Pyodide distribution and installs wheels from `AARDVARK_PYODIDE_DIST_DIR` (or the path set via `PyRuntimeConfig::with_pyodide_dist_dir`). The distribution manifest verifies the runtime files, package files, adapter version, lockfile hash, and compatibility fingerprint before use.
 - Dynamic libraries required by those packages are preloaded immediately after installation so they remain available during snapshot capture and execution.
 
 ```mermaid
 flowchart LR
     ManifestPackages --> Resolver[Resolve dependencies]
-    Resolver --> Cache{Wheel exists in cache?}
-    Cache -- yes --> Install[Install into /session/site-packages]
-    Cache -- no --> FailFast[error: cache missing]
+    Resolver --> Distribution{Wheel exists in distribution?}
+    Distribution -- yes --> Install[Install into /session/site-packages]
+    Distribution -- no --> FailFast[error: distribution missing package]
     Install --> Dynlib[Preload dynlibs]
     Dynlib --> Ready[Packages ready]
 ```
 
 **Limitations**
 
-- Manifests only support the bundled [Pyodide](https://pyodide.org/) version (currently `0.29.0`). Requests for a different version fail fast.
-- Package installation still hits the local filesystem. Ensure hosts point `AARDVARK_PYODIDE_PACKAGE_DIR` at a prepared cache.
+- Manifests only support the bundled [Pyodide](https://pyodide.org/) version (currently `0.29.4`). Requests for a different version fail fast.
+- Package installation still hits the local filesystem. Ensure hosts point `AARDVARK_PYODIDE_DIST_DIR` at a prepared distribution.
 
 ## Snapshots
 
@@ -45,8 +45,9 @@ flowchart LR
 - When `snapshot.save_to` is set, `PyRuntime::prepare_session_with_descriptor` writes a new snapshot after the first load, including overlay metadata.
 - Snapshot exports generate:
   - the main memory image,
+  - a snapshot sidecar with the active Pyodide compatibility fingerprint,
   - a content-addressed TarFS blob containing `/session/site-packages` and `/usr/lib` deltas,
-  - a JSON index describing the overlay contents and preload instructions.
+  - a JSON index describing the overlay contents, preload instructions, and compatibility fingerprint.
 
 ```mermaid
 flowchart TD
@@ -60,8 +61,9 @@ flowchart TD
 
 **Limitations**
 
-- Overlay hydration currently assumes a single overlay catalog. Hosts must coordinate manual cache invalidation when pruning blobs.
+- Overlay hydration currently assumes a single overlay catalog per overlay cache root. Stale entries are ignored on fingerprint mismatch, but hosts must still coordinate manual pruning when deleting blobs out of band.
 - Snapshots are architecture-specific. Do not share them across mismatched CPU features.
+- Explicit snapshot loads, cached snapshot bytes, and `WarmState` restores fail when the compatibility fingerprint is missing or does not match the active distribution. Stale overlay catalog entries are ignored and rebuilt.
 
 ## Using Multiple Bundles
 

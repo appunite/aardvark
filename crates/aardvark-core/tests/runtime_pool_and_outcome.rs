@@ -11,7 +11,8 @@ use aardvark_core::{
         JsonInvocationStrategy, RawCtxBindingBuilder, RawCtxInput, RawCtxInvocationStrategy,
         RawCtxMetadata, RawCtxPublishBuilder, RawCtxTableColumnBuilder, RawCtxTableSpecBuilder,
     },
-    Bundle, ExecutionOutcome, PyRunnerError, PyRuntime, PyRuntimePool, Result, RuntimeLanguage,
+    Bundle, ExecutionOutcome, OverlayExport, PyRunnerError, PyRuntime, PyRuntimePool, Result,
+    RuntimeLanguage, WarmState,
 };
 use bytes::Bytes;
 use serde_json::json;
@@ -267,12 +268,41 @@ fn verify_warm_state_imports_overlay() -> Result<()> {
     let mut runtime = PyRuntime::new(config)?;
     let outcome = run_main(&mut runtime, SIMPLE_SUCCESS)?;
     assert!(outcome.is_success(), "expected success outcome");
+    let active_fingerprint = runtime
+        .pyodide_compatibility_fingerprint()
+        .expect("python runtime should expose a Pyodide fingerprint")
+        .to_string();
 
     let warm_state = runtime.capture_warm_state()?;
+    assert_eq!(
+        warm_state.compatibility_fingerprint(),
+        Some(active_fingerprint.as_str())
+    );
     assert!(
         !warm_state.overlay_preloaded(),
         "warm state should require overlay import to restore packages"
     );
+
+    let stale_warm_state = WarmState::new(
+        warm_state.snapshot(),
+        OverlayExport {
+            metadata: Vec::new(),
+            blobs: Vec::new(),
+        },
+        "sha256:stale",
+    );
+    let mut stale_config = PyRuntimeConfig::default();
+    stale_config.warm_state = Some(stale_warm_state);
+    let err = match PyRuntime::new(stale_config) {
+        Ok(_) => panic!("warm state with stale fingerprint should fail during restore"),
+        Err(error) => error,
+    };
+    match err {
+        PyRunnerError::Init(message) => {
+            assert!(message.contains("warm state compatibility fingerprint mismatch"));
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
 
     let mut config = PyRuntimeConfig::default();
     config.warm_state = Some(warm_state.clone());

@@ -1,17 +1,18 @@
 //! Python-specific engine backed by the embedded Pyodide runtime.
 
-use crate::assets;
 use crate::bundle::Bundle;
 use crate::bundle_manifest::BundleManifest;
 use crate::config::{PyRuntimeConfig, WarmState};
 use crate::engine::{JsRuntime, PyodideLoadOptions};
 use crate::error::{PyRunnerError, Result};
 use crate::package_metadata;
+use crate::pyodide_distribution::PyodideDistribution;
 use crate::runtime_language::RuntimeLanguage;
 use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use v8;
 
@@ -19,6 +20,7 @@ use super::LanguageEngine;
 
 pub struct PythonEngine {
     js: JsRuntime,
+    distribution: PyodideDistribution,
     snapshot_bytes: Option<Arc<[u8]>>,
     warm_state: Option<WarmState>,
     installed_packages: HashSet<String>,
@@ -27,14 +29,18 @@ pub struct PythonEngine {
 impl PythonEngine {
     pub fn new(config: &PyRuntimeConfig) -> Result<Self> {
         let js = JsRuntime::new()?;
+        let distribution = PyodideDistribution::resolve(config)?;
+        crate::engine::set_package_root_override(distribution.package_root());
         let warm_state = config.warm_state.clone();
+        let snapshot_bytes = load_snapshot_bytes(config, distribution.compatibility_fingerprint())?;
         let mut engine = Self {
             js,
-            snapshot_bytes: load_snapshot_bytes(config)?,
+            distribution,
+            snapshot_bytes,
             warm_state,
             installed_packages: HashSet::new(),
         };
-        engine.register_core_assets();
+        engine.register_core_assets()?;
         engine.inject_version_globals(config)?;
         Ok(engine)
     }
@@ -56,40 +62,92 @@ impl PythonEngine {
         })
     }
 
-    fn register_core_assets(&self) {
+    fn register_core_assets(&self) -> Result<()> {
         let js = &self.js;
-        js.insert_binary_asset("pyodide.asm.wasm", assets::wasm());
-        js.insert_text_asset("pyodide.asm.js", assets::pyodide_asm_js());
-        js.insert_text_asset("pyodide.asm.patched.js", assets::pyodide_asm_patched_js());
-        js.insert_text_asset("pyodide_builtin_wrappers.js", assets::builtin_wrappers_js());
-        js.insert_text_asset("pyodide_bootstrap.js", assets::bootstrap_js());
-        js.insert_text_asset("pyodide_emscripten_setup.js", assets::emscripten_setup_js());
-        js.insert_text_asset("pyodide_packages.js", assets::packages_js());
-        js.insert_text_asset("pyodide.mjs", assets::loader_mjs());
-        js.insert_text_asset("pyodide.js", assets::loader_js());
-        js.insert_binary_asset("python_stdlib.zip", assets::python_stdlib_zip());
-        js.insert_text_asset(
-            "pyodide-lock.json",
-            package_metadata::package_metadata_json(),
+        js.insert_binary_asset_owned(
+            "pyodide.asm.wasm",
+            self.distribution
+                .read_binary_asset("pyodide.asm.wasm")?
+                .as_ref()
+                .to_vec(),
         );
-        let capnp_lock = package_metadata::package_metadata_capnp();
-        js.insert_binary_asset_owned("pyodide-lock.capnp", capnp_lock.as_ref().to_vec());
-        js.insert_text_asset("entropy/allow_entropy.py", assets::entropy_allow_py());
+        js.insert_text_asset(
+            "pyodide.asm.js",
+            self.distribution.read_text_asset("pyodide.asm.js")?,
+        );
+        js.insert_text_asset(
+            "pyodide.asm.patched.js",
+            self.distribution
+                .read_text_asset("pyodide.asm.patched.js")?,
+        );
+        js.insert_text_asset(
+            "pyodide_builtin_wrappers.js",
+            self.distribution
+                .read_text_asset("pyodide_builtin_wrappers.js")?,
+        );
+        js.insert_text_asset(
+            "pyodide_bootstrap.js",
+            self.distribution.read_text_asset("pyodide_bootstrap.js")?,
+        );
+        js.insert_text_asset(
+            "pyodide_emscripten_setup.js",
+            self.distribution
+                .read_text_asset("pyodide_emscripten_setup.js")?,
+        );
+        js.insert_text_asset(
+            "pyodide_packages.js",
+            self.distribution.read_text_asset("pyodide_packages.js")?,
+        );
+        js.insert_text_asset(
+            "pyodide.mjs",
+            self.distribution.read_text_asset("pyodide.mjs")?,
+        );
+        js.insert_text_asset(
+            "pyodide.js",
+            self.distribution.read_text_asset("pyodide.js")?,
+        );
+        js.insert_binary_asset_owned(
+            "python_stdlib.zip",
+            self.distribution
+                .read_binary_asset("python_stdlib.zip")?
+                .as_ref()
+                .to_vec(),
+        );
+        let lockfile = self.distribution.read_text_asset("pyodide-lock.json")?;
+        let metadata = package_metadata::package_metadata_from_lockfile(&lockfile);
+        js.insert_text_asset("pyodide-lock.json", metadata.json_text);
+        js.insert_binary_asset_owned("pyodide-lock.capnp", metadata.capnp_bytes);
+        js.insert_text_asset(
+            "entropy/allow_entropy.py",
+            crate::assets::entropy_allow_py(),
+        );
         js.insert_text_asset(
             "entropy/entropy_import_context.py",
-            assets::entropy_import_context_py(),
+            crate::assets::entropy_import_context_py(),
         );
-        js.insert_text_asset("entropy/entropy_patches.py", assets::entropy_patches_py());
+        js.insert_text_asset(
+            "entropy/entropy_patches.py",
+            crate::assets::entropy_patches_py(),
+        );
         js.insert_text_asset(
             "entropy/import_patch_manager.py",
-            assets::entropy_import_patch_manager_py(),
+            crate::assets::entropy_import_patch_manager_py(),
         );
+        Ok(())
+    }
+
+    pub(crate) fn compatibility_fingerprint(&self) -> &str {
+        self.distribution.compatibility_fingerprint()
     }
 }
 
 impl LanguageEngine for PythonEngine {
     fn language(&self) -> RuntimeLanguage {
         RuntimeLanguage::Python
+    }
+
+    fn compatibility_fingerprint(&self) -> Option<&str> {
+        Some(self.compatibility_fingerprint())
     }
 
     fn js_mut(&mut self) -> &mut JsRuntime {
@@ -153,6 +211,11 @@ impl LanguageEngine for PythonEngine {
         if missing.is_empty() {
             return Ok(());
         }
+        if self.distribution.package_root().is_none() {
+            return Err(PyRunnerError::Init(
+                "Pyodide package loading requires AARDVARK_PYODIDE_DIST_DIR or PyRuntimeConfig::with_pyodide_dist_dir".into(),
+            ));
+        }
         tracing::info!(target: "aardvark::packages", packages = ?missing, "loading packages from manifest");
         self.js.load_packages(&missing)?;
         for package in missing {
@@ -168,36 +231,116 @@ impl LanguageEngine for PythonEngine {
 
     fn reset_in_place(&mut self, config: &PyRuntimeConfig) -> Result<()> {
         self.js.reset()?;
-        self.snapshot_bytes = load_snapshot_bytes(config)?;
+        self.snapshot_bytes =
+            load_snapshot_bytes(config, self.distribution.compatibility_fingerprint())?;
         self.warm_state = config.warm_state.clone();
         self.installed_packages.clear();
-        self.register_core_assets();
+        self.register_core_assets()?;
         self.inject_version_globals(config)?;
         Ok(())
     }
 
-    fn set_warm_state(&mut self, state: Option<WarmState>) {
+    fn set_warm_state(&mut self, state: Option<WarmState>) -> Result<()> {
+        if let Some(state) = state.as_ref() {
+            validate_warm_state(state, self.distribution.compatibility_fingerprint())?;
+        }
         self.warm_state = state;
         self.snapshot_bytes = self.warm_state.as_ref().map(|s| s.snapshot());
         if self.warm_state.is_some() {
             self.installed_packages.clear();
         }
+        Ok(())
     }
 }
 
-fn load_snapshot_bytes(config: &PyRuntimeConfig) -> Result<Option<Arc<[u8]>>> {
+fn load_snapshot_bytes(
+    config: &PyRuntimeConfig,
+    expected_fingerprint: &str,
+) -> Result<Option<Arc<[u8]>>> {
     if let Some(state) = config.warm_state.as_ref() {
+        validate_warm_state(state, expected_fingerprint)?;
         return Ok(Some(state.snapshot()));
     }
     if let Some(cached) = config.snapshot.cached_bytes() {
-        return Ok(Some(cached));
+        validate_cached_snapshot(
+            cached.compatibility_fingerprint.as_deref(),
+            expected_fingerprint,
+        )?;
+        return Ok(Some(cached.bytes));
     }
     let Some(path) = config.snapshot.load_from.as_ref() else {
         return Ok(None);
     };
+    validate_snapshot_metadata(path, expected_fingerprint)?;
     let bytes = read_snapshot_bytes(path)?;
-    config.snapshot.store_cached_bytes(bytes.clone());
+    config
+        .snapshot
+        .store_cached_bytes(bytes.clone(), Some(expected_fingerprint));
     Ok(Some(bytes))
+}
+
+fn validate_warm_state(state: &WarmState, expected_fingerprint: &str) -> Result<()> {
+    validate_compatibility_fingerprint(
+        "warm state",
+        state.compatibility_fingerprint(),
+        expected_fingerprint,
+    )
+}
+
+fn validate_cached_snapshot(found: Option<&str>, expected_fingerprint: &str) -> Result<()> {
+    validate_compatibility_fingerprint("cached snapshot", found, expected_fingerprint)
+}
+
+fn validate_compatibility_fingerprint(
+    label: &str,
+    found: Option<&str>,
+    expected_fingerprint: &str,
+) -> Result<()> {
+    let found = found.unwrap_or_default();
+    if found != expected_fingerprint {
+        return Err(PyRunnerError::Init(format!(
+            "{label} compatibility fingerprint mismatch: expected {}, found {}",
+            expected_fingerprint,
+            if found.is_empty() { "<missing>" } else { found }
+        )));
+    }
+    Ok(())
+}
+
+fn validate_snapshot_metadata(path: &Path, expected_fingerprint: &str) -> Result<()> {
+    let metadata_path = snapshot_metadata_path(path);
+    let raw = fs::read_to_string(&metadata_path).map_err(|err| {
+        PyRunnerError::Init(format!(
+            "snapshot {} is missing compatibility metadata {}: {err}",
+            path.display(),
+            metadata_path.display()
+        ))
+    })?;
+    let value: serde_json::Value = serde_json::from_str(&raw).map_err(|err| {
+        PyRunnerError::Init(format!(
+            "failed to parse snapshot metadata {}: {err}",
+            metadata_path.display()
+        ))
+    })?;
+    let found = value
+        .get("compatibilityFingerprint")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    if found != expected_fingerprint {
+        return Err(PyRunnerError::Init(format!(
+            "snapshot {} compatibility fingerprint mismatch: expected {}, found {}",
+            path.display(),
+            expected_fingerprint,
+            if found.is_empty() { "<missing>" } else { found }
+        )));
+    }
+    Ok(())
+}
+
+fn snapshot_metadata_path(path: &Path) -> PathBuf {
+    let mut os = path.as_os_str().to_os_string();
+    os.push(".aardvark.json");
+    PathBuf::from(os)
 }
 
 fn read_snapshot_bytes(path: &Path) -> Result<Arc<[u8]>> {

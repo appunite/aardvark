@@ -1,6 +1,6 @@
 //! Minimal CLI wrapper for the Pyodide runtime.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -10,8 +10,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use aardvark_core::pyodide::{
-    PYODIDE_CORE_ARCHIVE_NAME, PYODIDE_CORE_ARCHIVE_SHA256, PYODIDE_FULL_ARCHIVE_NAME,
-    PYODIDE_FULL_ARCHIVE_SHA256, PYODIDE_RELEASE_BASE_URL, PYODIDE_VERSION,
+    PYODIDE_ADAPTER_VERSION, PYODIDE_CORE_ARCHIVE_NAME, PYODIDE_CORE_ARCHIVE_SHA256,
+    PYODIDE_FULL_ARCHIVE_NAME, PYODIDE_FULL_ARCHIVE_SHA256, PYODIDE_RELEASE_BASE_URL,
+    PYODIDE_VERSION,
+};
+use aardvark_core::pyodide_distribution::{
+    compute_compatibility_fingerprint, LockfileManifest, PyodideDistribution,
+    PyodideDistributionManifest, PyodideDistributionVariant, PythonCompatibility, UpstreamArchive,
+    UpstreamArchives, DISTRIBUTION_MANIFEST,
 };
 use aardvark_core::{
     Bundle, ExecutionOutcome, FailureKind, InvocationDescriptor, JsonInvocationStrategy,
@@ -75,7 +81,7 @@ struct RunArgs {
 #[derive(Parser, Debug)]
 #[command(
     name = "aardvark-cli assets",
-    about = "Manage Pyodide asset caches",
+    about = "Manage Aardvark Pyodide distributions",
     disable_help_subcommand = true
 )]
 struct AssetsCli {
@@ -85,13 +91,15 @@ struct AssetsCli {
 
 #[derive(Subcommand, Debug)]
 enum AssetsCommand {
-    /// Download and stage a Pyodide package cache locally.
+    /// Download and stage an Aardvark Pyodide distribution locally.
     Stage(AssetsStageArgs),
+    /// Verify a staged Aardvark Pyodide distribution.
+    Verify(AssetsVerifyArgs),
 }
 
 #[derive(clap::Args, Debug)]
 struct AssetsStageArgs {
-    /// Which Pyodide cache variant to stage.
+    /// Which Pyodide distribution variant to stage.
     #[arg(long, value_enum, default_value = "full")]
     variant: StageVariant,
 
@@ -106,6 +114,13 @@ struct AssetsStageArgs {
     /// Replace existing contents within the output directory.
     #[arg(long)]
     force: bool,
+}
+
+#[derive(clap::Args, Debug)]
+struct AssetsVerifyArgs {
+    /// Path to an unpacked Aardvark Pyodide distribution.
+    #[arg(value_name = "PATH")]
+    path: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
@@ -163,7 +178,12 @@ fn main() -> Result<()> {
 
     let argv: Vec<OsString> = std::env::args_os().collect();
     if matches!(argv.get(1).map(|arg| arg.as_os_str()), Some(arg) if arg == OsStr::new("assets")) {
-        let assets = AssetsCli::parse_from(argv.clone());
+        let mut assets_argv = Vec::with_capacity(argv.len().saturating_sub(1));
+        if let Some(program) = argv.first() {
+            assets_argv.push(program.clone());
+        }
+        assets_argv.extend(argv.iter().skip(2).cloned());
+        let assets = AssetsCli::parse_from(assets_argv);
         return handle_assets_command(assets.command);
     }
 
@@ -209,7 +229,16 @@ fn main() -> Result<()> {
         }
     }
 
+    if !packages.is_empty() && config.pyodide_dist_dir().is_none() {
+        bail!(
+            "Pyodide package loading requires AARDVARK_PYODIDE_DIST_DIR or PyRuntimeConfig::with_pyodide_dist_dir"
+        );
+    }
+
     let mut runtime = PyRuntime::new(config)?;
+    let active_fingerprint = runtime
+        .pyodide_compatibility_fingerprint()
+        .map(str::to_string);
     let session = runtime.prepare_session_with_descriptor(bundle, descriptor)?;
 
     let mut overlay_restored = false;
@@ -222,24 +251,41 @@ fn main() -> Result<()> {
             match fs::read(&overlay_path) {
                 Ok(meta_bytes) => match serde_json::from_slice::<Value>(&meta_bytes) {
                     Ok(metadata_value) => {
-                        match collect_overlay_blobs(snapshot_path, &overlay_path, &metadata_value) {
-                            Ok(blob_list) => {
-                                match runtime.js_runtime().import_overlay(&meta_bytes, &blob_list) {
-                                    Ok(()) => {
-                                        let package_count = metadata_package_count(&metadata_value);
-                                        overlay_restored = package_count > 0;
-                                        let blob_bytes: usize =
-                                            blob_list.iter().map(|blob| blob.bytes.len()).sum();
-                                        tracing::info!(
-                                            target = "aardvark::overlay",
-                                            overlay.restored = true,
-                                            overlay.packages = package_count,
-                                            overlay.meta_bytes = meta_bytes.len(),
-                                            overlay.blob_bytes = blob_bytes,
-                                            overlay.blob_count = blob_list.len(),
-                                            "overlay import completed"
-                                        );
-                                        info!(
+                        if !metadata_fingerprint_matches(
+                            &metadata_value,
+                            active_fingerprint.as_deref(),
+                        ) {
+                            warn!(
+                                "overlay metadata {} has stale or missing compatibility fingerprint; skipping",
+                                overlay_path.display()
+                            );
+                        } else {
+                            match collect_overlay_blobs(
+                                snapshot_path,
+                                &overlay_path,
+                                &metadata_value,
+                            ) {
+                                Ok(blob_list) => {
+                                    match runtime
+                                        .js_runtime()
+                                        .import_overlay(&meta_bytes, &blob_list)
+                                    {
+                                        Ok(()) => {
+                                            let package_count =
+                                                metadata_package_count(&metadata_value);
+                                            overlay_restored = package_count > 0;
+                                            let blob_bytes: usize =
+                                                blob_list.iter().map(|blob| blob.bytes.len()).sum();
+                                            tracing::info!(
+                                                target = "aardvark::overlay",
+                                                overlay.restored = true,
+                                                overlay.packages = package_count,
+                                                overlay.meta_bytes = meta_bytes.len(),
+                                                overlay.blob_bytes = blob_bytes,
+                                                overlay.blob_count = blob_list.len(),
+                                                "overlay import completed"
+                                            );
+                                            info!(
                                         "restored overlay from {} (meta {} bytes, {} blobs, {} bytes total, {} packages)",
                                         overlay_path.display(),
                                         meta_bytes.len(),
@@ -247,20 +293,21 @@ fn main() -> Result<()> {
                                         blob_bytes,
                                         package_count
                                     );
-                                    }
-                                    Err(error) => {
-                                        warn!(
-                                            "failed to import overlay {}: {error}",
-                                            overlay_path.display()
-                                        );
+                                        }
+                                        Err(error) => {
+                                            warn!(
+                                                "failed to import overlay {}: {error}",
+                                                overlay_path.display()
+                                            );
+                                        }
                                     }
                                 }
-                            }
-                            Err(error) => {
-                                warn!(
-                                    "overlay blobs unavailable for {}: {error}",
-                                    overlay_path.display()
-                                );
+                                Err(error) => {
+                                    warn!(
+                                        "overlay blobs unavailable for {}: {error}",
+                                        overlay_path.display()
+                                    );
+                                }
                             }
                         }
                     }
@@ -287,7 +334,7 @@ fn main() -> Result<()> {
     }
 
     if !overlay_restored && !packages.is_empty() {
-        match hydrate_overlay_from_catalog(&mut runtime, &packages) {
+        match hydrate_overlay_from_catalog(&mut runtime, &packages, active_fingerprint.as_deref()) {
             Ok(true) => {
                 overlay_hydrated = true;
                 runtime.js_runtime().prepare_dynlibs()?;
@@ -341,6 +388,14 @@ fn main() -> Result<()> {
             Ok(bytes) => {
                 std::fs::write(path, &bytes)?;
                 info!("wrote snapshot to {}", path.display());
+                if let Some(fingerprint) = active_fingerprint.as_deref() {
+                    if let Err(error) = write_snapshot_metadata(path, fingerprint) {
+                        warn!(
+                            "failed to write snapshot metadata for {}: {error}",
+                            path.display()
+                        );
+                    }
+                }
             }
             Err(error) => {
                 warn!("snapshot collection failed: {error}");
@@ -455,6 +510,12 @@ fn main() -> Result<()> {
                         .as_object_mut()
                         .unwrap()
                         .insert("format".to_string(), json!("catalog"));
+                    if let Some(fingerprint) = active_fingerprint.as_deref() {
+                        metadata_value
+                            .as_object_mut()
+                            .unwrap()
+                            .insert("compatibilityFingerprint".to_string(), json!(fingerprint));
+                    }
 
                     let mut available_digests: HashSet<String> = HashSet::new();
                     for (digest, info) in &digest_entries {
@@ -562,7 +623,11 @@ fn main() -> Result<()> {
                         "overlay export completed"
                     );
 
-                    if let Err(error) = update_overlay_index(&cache_config.root, &index_updates) {
+                    if let Err(error) = update_overlay_index(
+                        &cache_config.root,
+                        &index_updates,
+                        active_fingerprint.as_deref(),
+                    ) {
                         warn!(
                             "failed to update overlay index at {}: {error}",
                             cache_config.root.display()
@@ -625,6 +690,33 @@ fn snapshot_overlay_path(path: &Path) -> PathBuf {
     let mut os = path.as_os_str().to_os_string();
     os.push(".overlay.json");
     PathBuf::from(os)
+}
+
+fn snapshot_metadata_path(path: &Path) -> PathBuf {
+    let mut os = path.as_os_str().to_os_string();
+    os.push(".aardvark.json");
+    PathBuf::from(os)
+}
+
+fn write_snapshot_metadata(path: &Path, compatibility_fingerprint: &str) -> Result<()> {
+    let metadata_path = snapshot_metadata_path(path);
+    let payload = json!({
+        "version": 1,
+        "compatibilityFingerprint": compatibility_fingerprint,
+    });
+    fs::write(&metadata_path, serde_json::to_vec_pretty(&payload)?)
+        .with_context(|| format!("write {}", metadata_path.display()))?;
+    Ok(())
+}
+
+fn metadata_fingerprint_matches(metadata: &Value, expected: Option<&str>) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+    metadata
+        .get("compatibilityFingerprint")
+        .and_then(Value::as_str)
+        == Some(expected)
 }
 
 fn load_descriptor_from_path(path: &str) -> Result<InvocationDescriptor> {
@@ -950,6 +1042,8 @@ struct OverlayEvictionStats {
 
 #[derive(Debug, Deserialize, Serialize, Default)]
 struct OverlayIndex {
+    #[serde(default, rename = "compatibilityFingerprint")]
+    compatibility_fingerprint: Option<String>,
     #[serde(default)]
     packages: HashMap<String, OverlayIndexEntry>,
 }
@@ -1127,7 +1221,7 @@ fn canonicalize_package_name(name: &str) -> String {
 }
 
 fn load_lockfile() -> Result<Option<PyodideLockfile>> {
-    let package_dir = match env_var_os("AARDVARK_PYODIDE_PACKAGE_DIR") {
+    let package_dir = match env_var_os("AARDVARK_PYODIDE_DIST_DIR") {
         Some(value) => PathBuf::from(value),
         None => return Ok(None),
     };
@@ -1326,9 +1420,24 @@ fn save_overlay_index(cache_root: &Path, index: &OverlayIndex) -> Result<()> {
 fn update_overlay_index(
     cache_root: &Path,
     updates: &HashMap<String, OverlayIndexEntry>,
+    compatibility_fingerprint: Option<&str>,
 ) -> Result<()> {
     let mut index = load_overlay_index(cache_root)?;
     let mut changed = false;
+    if index.compatibility_fingerprint.as_deref() != compatibility_fingerprint {
+        if !index.packages.is_empty() {
+            tracing::info!(
+                target = "aardvark::overlay",
+                overlay.cache_root = %cache_root.display(),
+                overlay.previous_fingerprint = index.compatibility_fingerprint.as_deref().unwrap_or("<missing>"),
+                overlay.current_fingerprint = compatibility_fingerprint.unwrap_or("<missing>"),
+                "clearing stale overlay catalog index"
+            );
+        }
+        index.packages.clear();
+        index.compatibility_fingerprint = compatibility_fingerprint.map(ToOwned::to_owned);
+        changed = true;
+    }
     for (canonical, update_entry) in updates {
         if update_entry.digest.is_empty() || update_entry.blob.is_empty() {
             continue;
@@ -1424,7 +1533,11 @@ fn collect_index_updates(
     updates
 }
 
-fn hydrate_overlay_from_catalog(runtime: &mut PyRuntime, packages: &[String]) -> Result<bool> {
+fn hydrate_overlay_from_catalog(
+    runtime: &mut PyRuntime,
+    packages: &[String],
+    compatibility_fingerprint: Option<&str>,
+) -> Result<bool> {
     let span = info_span!(
         target: "aardvark::overlay",
         "overlay.catalog.hydrate",
@@ -1477,7 +1590,11 @@ fn hydrate_overlay_from_catalog(runtime: &mut PyRuntime, packages: &[String]) ->
         }
 
         let prune_updates: HashMap<String, OverlayIndexEntry> = HashMap::new();
-        if let Err(error) = update_overlay_index(&cache_config.root, &prune_updates) {
+        if let Err(error) = update_overlay_index(
+            &cache_config.root,
+            &prune_updates,
+            compatibility_fingerprint,
+        ) {
             tracing::warn!(
                 target = "aardvark::overlay",
                 overlay.event = "index-prune",
@@ -1489,6 +1606,11 @@ fn hydrate_overlay_from_catalog(runtime: &mut PyRuntime, packages: &[String]) ->
 
         let cache_root = cache_config.root.clone();
         let index = load_overlay_index(&cache_root)?;
+        if index.compatibility_fingerprint.as_deref() != compatibility_fingerprint {
+            let empty_updates: HashMap<String, OverlayIndexEntry> = HashMap::new();
+            update_overlay_index(&cache_root, &empty_updates, compatibility_fingerprint)?;
+            return Ok(false);
+        }
         debug!(
             target = "aardvark::overlay",
             overlay.index_entries = index.packages.len(),
@@ -1573,6 +1695,12 @@ fn hydrate_overlay_from_catalog(runtime: &mut PyRuntime, packages: &[String]) ->
         let mut metadata_obj = JsonMap::new();
         metadata_obj.insert("version".into(), Value::Number(3.into()));
         metadata_obj.insert("format".into(), Value::String("catalog".into()));
+        if let Some(fingerprint) = compatibility_fingerprint {
+            metadata_obj.insert(
+                "compatibilityFingerprint".into(),
+                Value::String(fingerprint.to_string()),
+            );
+        }
         metadata_obj.insert("packages".into(), Value::Array(package_entries));
         metadata_obj.insert("blobs".into(), Value::Object(blob_map));
         if !dynlib_accumulator.is_empty() {
@@ -1811,6 +1939,7 @@ fn collect_overlay_blobs(
 fn handle_assets_command(command: AssetsCommand) -> Result<()> {
     match command {
         AssetsCommand::Stage(args) => stage_assets(args),
+        AssetsCommand::Verify(args) => verify_assets(args),
     }
 }
 
@@ -1822,7 +1951,7 @@ fn stage_assets(args: AssetsStageArgs) -> Result<()> {
         force,
     } = args;
 
-    let output_dir = output.unwrap_or_else(default_stage_output_dir);
+    let output_dir = output.unwrap_or_else(|| default_stage_output_dir(variant));
     let workspace = tempfile::tempdir().context("create staging workspace")?;
     let user_supplied = archive.is_some();
     let archive_path = match archive {
@@ -1831,15 +1960,12 @@ fn stage_assets(args: AssetsStageArgs) -> Result<()> {
     };
 
     if user_supplied {
-        if let Err(error) = verify_sha256(&archive_path, variant.expected_sha()) {
-            warn!(
-                target = "aardvark::assets",
-                variant = %variant,
-                archive = %archive_path.display(),
-                %error,
-                "supplied Pyodide archive failed checksum; continuing"
-            );
-        }
+        verify_sha256(&archive_path, variant.expected_sha()).with_context(|| {
+            format!(
+                "supplied Pyodide archive failed checksum for {}",
+                archive_path.display()
+            )
+        })?;
     }
 
     info!(
@@ -1852,32 +1978,284 @@ fn stage_assets(args: AssetsStageArgs) -> Result<()> {
     unpack_archive(&archive_path, workspace.path())?;
     let pyodide_root = find_pyodide_dir(workspace.path())
         .context("expected 'pyodide' directory inside archive")?;
-    let version_dir = format!("v{PYODIDE_VERSION}");
-    let variant_dir = pyodide_root
-        .join("pyodide")
-        .join(&version_dir)
-        .join(variant.subdir());
-    if !variant_dir.exists() {
-        bail!(
-            "archive missing variant directory {}",
-            variant_dir.display()
-        );
-    }
+    let source_dir = pyodide_variant_source_dir(&pyodide_root, variant)?;
 
     prepare_output_dir(&output_dir, force)?;
-    copy_dir_recursive(&variant_dir, &output_dir)?;
+    copy_dir_recursive(&source_dir, &output_dir)?;
+    copy_adapter_assets(&output_dir)?;
+    generate_patched_pyodide(&output_dir)?;
+    write_distribution_manifest(&output_dir, variant)?;
+    let verified = PyodideDistribution::external(&output_dir)
+        .with_context(|| format!("verify staged distribution {}", output_dir.display()))?;
 
     info!(
         target = "aardvark::assets",
         variant = %variant,
         output = %output_dir.display(),
-        "staged Pyodide packages"
+        fingerprint = verified.compatibility_fingerprint(),
+        "staged Aardvark Pyodide distribution"
     );
     Ok(())
 }
 
-fn default_stage_output_dir() -> PathBuf {
-    PathBuf::from(".aardvark/pyodide").join(PYODIDE_VERSION)
+fn default_stage_output_dir(variant: StageVariant) -> PathBuf {
+    PathBuf::from(".aardvark/pyodide-distributions").join(format!(
+        "aardvark-{}-pyodide-v{}-{}",
+        env!("CARGO_PKG_VERSION"),
+        PYODIDE_VERSION,
+        variant
+    ))
+}
+
+fn verify_assets(args: AssetsVerifyArgs) -> Result<()> {
+    let dist = PyodideDistribution::external(&args.path)
+        .with_context(|| format!("verify distribution {}", args.path.display()))?;
+    println!(
+        "verified {} ({}, fingerprint {})",
+        args.path.display(),
+        dist.manifest().variant.as_str(),
+        dist.compatibility_fingerprint()
+    );
+    Ok(())
+}
+
+fn pyodide_variant_source_dir(pyodide_root: &Path, variant: StageVariant) -> Result<PathBuf> {
+    let nested = pyodide_root
+        .join("pyodide")
+        .join(format!("v{PYODIDE_VERSION}"))
+        .join(variant.subdir());
+    if nested.exists() {
+        return Ok(nested);
+    }
+    if pyodide_root.join("pyodide-lock.json").exists() {
+        return Ok(pyodide_root.to_path_buf());
+    }
+    bail!(
+        "archive missing Pyodide distribution files under {}",
+        pyodide_root.display()
+    )
+}
+
+fn copy_adapter_assets(output_dir: &Path) -> Result<()> {
+    let embedded =
+        PyodideDistribution::embedded().context("load embedded Aardvark Pyodide adapter assets")?;
+    for file in [
+        "pyodide_builtin_wrappers.js",
+        "pyodide_bootstrap.js",
+        "pyodide_emscripten_setup.js",
+        "pyodide_packages.js",
+    ] {
+        let dst = output_dir.join(file);
+        let text = embedded
+            .read_text_asset(file)
+            .with_context(|| format!("read embedded adapter asset {file}"))?;
+        fs::write(&dst, text.as_ref()).with_context(|| format!("write {}", dst.display()))?;
+    }
+    Ok(())
+}
+
+fn generate_patched_pyodide(output_dir: &Path) -> Result<()> {
+    let source_path = output_dir.join("pyodide.asm.js");
+    let target_path = output_dir.join("pyodide.asm.patched.js");
+    let source = fs::read_to_string(&source_path)
+        .with_context(|| format!("read {}", source_path.display()))?;
+    let patched = apply_pyodide_replacements(&source)?;
+    fs::write(&target_path, patched).with_context(|| format!("write {}", target_path.display()))?;
+    Ok(())
+}
+
+fn apply_pyodide_replacements(source: &str) -> Result<String> {
+    const PRELUDE: &str = r#"import {
+    addEventListener,
+    getRandomValues,
+    location,
+    monotonicDateNow,
+    newWasmModule,
+    patchedApplyFunc,
+    patchDynlibLookup,
+    reportUndefinedSymbolsPatched,
+    wasmInstantiate,
+    patched_PyEM_CountFuncParams,
+} from "./pyodide_builtin_wrappers.js";
+"#;
+
+    let required_replacements: [(&str, String); 11] = [
+        (
+            "var _createPyodideModule",
+            format!("{PRELUDE}export const _createPyodideModule"),
+        ),
+        (
+            "globalThis._createPyodideModule = _createPyodideModule;",
+            String::new(),
+        ),
+        ("new WebAssembly.Module", "newWasmModule".into()),
+        ("WebAssembly.instantiate", "wasmInstantiate".into()),
+        ("Date.now", "monotonicDateNow".into()),
+        (
+            "reportUndefinedSymbols()",
+            "reportUndefinedSymbolsPatched(Module)".into(),
+        ),
+        ("crypto.getRandomValues(", "getRandomValues(Module, ".into()),
+        (
+            "eval(func)",
+            r#"(() => {throw new Error('Internal Emscripten code tried to eval, this should not happen, please file a bug report with your requirements.txt file\'s contents')})()"#
+                .into(),
+        ),
+        (
+            "eval(data)",
+            r#"(() => {throw new Error('Internal Emscripten code tried to eval, this should not happen, please file a bug report with your requirements.txt file\'s contents')})()"#
+                .into(),
+        ),
+        (
+            "eval(UTF8ToString(ptr))",
+            r#"(() => {throw new Error('Internal Emscripten code tried to eval, this should not happen, please file a bug report with your requirements.txt file\'s contents')})()"#
+                .into(),
+        ),
+        (
+            "const API=Module.API;",
+            "const API=Module.API||(Module.API={});if(!API.runtimeEnv){API.runtimeEnv={IN_BUN:false,IN_DENO:false,IN_NODE:false,IN_SAFARI:false,IN_SHELL:false,IN_BROWSER:true,IN_BROWSER_MAIN_THREAD:true,IN_BROWSER_WEB_WORKER:false,IN_NODE_COMMONJS:false,IN_NODE_ESM:false};}"
+                .into(),
+        ),
+    ];
+
+    let mut result = source.to_owned();
+    for (needle, replacement) in required_replacements {
+        if !result.contains(needle) {
+            bail!("required Pyodide patch pattern missing: {needle}");
+        }
+        result = result.replace(needle, &replacement);
+    }
+
+    let table_needle = "var tableBase=metadata.tableSize?wasmTable.length:0;";
+    if result.contains(table_needle) {
+        result = result.replace(
+            table_needle,
+            &format!(
+                "{table_needle}\nModule.snapshotDebug && console.log('loadWebAssemblyModule', libName, memoryBase, tableBase);"
+            ),
+        );
+    } else {
+        warn!(
+            target = "aardvark::assets",
+            "optional Pyodide table-base debug patch pattern missing"
+        );
+    }
+
+    Ok(result)
+}
+
+fn write_distribution_manifest(output_dir: &Path, variant: StageVariant) -> Result<()> {
+    let lockfile_path = output_dir.join("pyodide-lock.json");
+    let lockfile_raw = fs::read_to_string(&lockfile_path)
+        .with_context(|| format!("read {}", lockfile_path.display()))?;
+    let lockfile_value: Value = serde_json::from_str(&lockfile_raw)
+        .with_context(|| format!("parse {}", lockfile_path.display()))?;
+    let info = lockfile_value
+        .get("info")
+        .and_then(Value::as_object)
+        .context("pyodide-lock.json missing info object")?;
+
+    let mut files = BTreeMap::new();
+    collect_distribution_file_hashes(output_dir, output_dir, &mut files)?;
+
+    let mut manifest = PyodideDistributionManifest {
+        schema_version: 1,
+        aardvark_version: env!("CARGO_PKG_VERSION").to_string(),
+        pyodide_version: PYODIDE_VERSION.to_string(),
+        adapter_version: PYODIDE_ADAPTER_VERSION.to_string(),
+        variant: match variant {
+            StageVariant::Core => PyodideDistributionVariant::Core,
+            StageVariant::Full => PyodideDistributionVariant::Full,
+        },
+        upstream: UpstreamArchives {
+            base_url: PYODIDE_RELEASE_BASE_URL.to_string(),
+            core: UpstreamArchive {
+                name: PYODIDE_CORE_ARCHIVE_NAME.to_string(),
+                sha256: PYODIDE_CORE_ARCHIVE_SHA256.to_string(),
+            },
+            full: UpstreamArchive {
+                name: PYODIDE_FULL_ARCHIVE_NAME.to_string(),
+                sha256: PYODIDE_FULL_ARCHIVE_SHA256.to_string(),
+            },
+        },
+        python: PythonCompatibility {
+            version: info
+                .get("python")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            abi: info
+                .get("abi_version")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            platform: info
+                .get("platform")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            arch: info
+                .get("arch")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        },
+        lockfile: LockfileManifest {
+            path: "pyodide-lock.json".to_string(),
+            sha256: format!("sha256:{}", sha256_file_hex(&lockfile_path)?),
+        },
+        package_root: Some(".".to_string()),
+        files,
+        compatibility_fingerprint: String::new(),
+    };
+    manifest.compatibility_fingerprint = compute_compatibility_fingerprint(&manifest);
+    let serialized = serde_json::to_vec_pretty(&manifest)?;
+    fs::write(output_dir.join(DISTRIBUTION_MANIFEST), serialized)
+        .context("write distribution manifest")?;
+    Ok(())
+}
+
+fn collect_distribution_file_hashes(
+    root: &Path,
+    dir: &Path,
+    files: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    for entry in fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_distribution_file_hashes(root, &path, files)?;
+        } else if file_type.is_file() {
+            if path.file_name().and_then(|name| name.to_str()) == Some(DISTRIBUTION_MANIFEST) {
+                continue;
+            }
+            let rel = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            files.insert(rel, format!("sha256:{}", sha256_file_hex(&path)?));
+        }
+    }
+    Ok(())
+}
+
+fn sha256_file_hex(path: &Path) -> Result<String> {
+    let mut file =
+        File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 131_072];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn prepare_output_dir(output: &Path, force: bool) -> Result<()> {
@@ -2115,9 +2493,15 @@ mod tests {
                 dynlibs: None,
             },
         );
-        update_overlay_index(dir.path(), &updates).unwrap();
+        update_overlay_index(dir.path(), &updates, Some("sha256:test")).unwrap();
         let index_path = dir.path().join("index.json");
         assert!(index_path.exists(), "expected index.json to be written");
+        let index: OverlayIndex =
+            serde_json::from_slice(&fs::read(index_path).unwrap()).expect("parse overlay index");
+        assert_eq!(
+            index.compatibility_fingerprint.as_deref(),
+            Some("sha256:test")
+        );
     }
 
     #[test]

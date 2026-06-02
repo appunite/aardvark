@@ -33,6 +33,14 @@ pub(crate) fn lockfile_json_raw() -> &'static str {
     include_str!(concat!(env!("OUT_DIR"), "/pyodide/pyodide-lock.json"))
 }
 
+/// Returns the Aardvark Pyodide distribution manifest generated at build time.
+pub fn distribution_manifest_json() -> &'static str {
+    include_str!(concat!(
+        env!("OUT_DIR"),
+        "/pyodide/aardvark-pyodide-dist.json"
+    ))
+}
+
 /// Returns the stock `pyodide.js` loader JavaScript (unused for now).
 pub fn loader_js() -> &'static str {
     include_str!(concat!(env!("OUT_DIR"), "/pyodide/pyodide.js"))
@@ -66,10 +74,7 @@ pub fn emscripten_setup_js() -> &'static str {
 
 /// Returns helper utilities for package loading and sys.path tweaks.
 pub fn packages_js() -> &'static str {
-    include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/js/pyodide_packages.js"
-    ))
+    include_str!(concat!(env!("OUT_DIR"), "/pyodide/pyodide_packages.js"))
 }
 
 /// Returns the `_cloudflare/allow_entropy.py` helper.

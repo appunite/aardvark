@@ -213,21 +213,7 @@ pub struct OverlayExport {
 }
 
 fn package_root_dir() -> Option<PathBuf> {
-    if let Some(path) = PACKAGE_ROOT.read().as_ref() {
-        return Some(path.clone());
-    }
-    let resolved = env::var_os("AARDVARK_PYODIDE_PACKAGE_DIR")
-        .map(PathBuf::from)
-        .map(normalize_package_root);
-    if let Some(ref path) = resolved {
-        tracing::debug!(
-            target = "aardvark::packages",
-            path = %path.display(),
-            "initialised package root"
-        );
-        *PACKAGE_ROOT.write() = Some(path.clone());
-    }
-    resolved
+    PACKAGE_ROOT.read().as_ref().cloned()
 }
 
 pub(crate) fn set_package_root_override(path: Option<PathBuf>) {
@@ -327,6 +313,29 @@ fn resolve_local_package_path(url: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn is_pyodide_package_asset_url(url: &str) -> bool {
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str().map(|host| host.to_ascii_lowercase()) else {
+        return false;
+    };
+    let path = parsed.path().to_ascii_lowercase();
+    let has_package_extension = matches!(
+        Path::new(&path).extension().and_then(|ext| ext.to_str()),
+        Some("whl" | "zip" | "tar")
+    ) || path.ends_with(".tar.gz")
+        || path.ends_with(".tar.bz2");
+    if !has_package_extension {
+        return false;
+    }
+    host.contains("pyodide")
+        || path.contains("/pyodide/")
+        || path.starts_with("/pyodide/")
+        || path.starts_with("/pyodide@")
+        || path.contains("/pyodide@")
 }
 
 fn strip_variant_prefix(path: &Path) -> Option<PathBuf> {
@@ -2044,6 +2053,19 @@ fn native_fetch_callback(
                 );
             }
         }
+    } else if is_pyodide_package_asset_url(&url) {
+        warn!(
+            target = "aardvark::packages",
+            %url,
+            "Pyodide package asset missing from local distribution"
+        );
+        let message = v8::String::new(
+            scope,
+            "Pyodide package asset is missing from AARDVARK_PYODIDE_DIST_DIR",
+        )
+        .unwrap();
+        scope.throw_exception(message.into());
+        return;
     }
 
     let Some(context_state) = scope.get_slot::<Rc<RuntimeContext>>() else {
@@ -2734,59 +2756,36 @@ fn release_shared_buffers<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsString;
     use std::fs;
     use tempfile::tempdir;
 
-    struct EnvGuard {
-        original: Option<OsString>,
-    }
-
-    impl EnvGuard {
-        fn clear() -> Self {
-            let original = env::var_os("AARDVARK_PYODIDE_PACKAGE_DIR");
-            env::remove_var("AARDVARK_PYODIDE_PACKAGE_DIR");
-            Self { original }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match self.original.take() {
-                Some(value) => env::set_var("AARDVARK_PYODIDE_PACKAGE_DIR", value),
-                None => env::remove_var("AARDVARK_PYODIDE_PACKAGE_DIR"),
-            }
-        }
-    }
-
     #[test]
-    fn package_root_override_takes_precedence() {
+    fn package_root_override_sets_local_distribution_root() {
         reset_package_root_for_tests();
         let temp = tempdir().expect("create tempdir");
         let cache_dir = temp.path().join("cache");
         fs::create_dir(&cache_dir).expect("create cache dir");
 
-        let guard = EnvGuard::clear();
         set_package_root_override(Some(cache_dir.clone()));
         let resolved = package_root_dir().expect("package root available");
         assert_eq!(resolved, cache_dir);
 
-        drop(guard);
         reset_package_root_for_tests();
     }
 
     #[test]
-    fn package_root_falls_back_to_env() {
-        reset_package_root_for_tests();
-        let temp = tempdir().expect("create tempdir");
-        let cache_dir = temp.path().join("env-cache");
-        fs::create_dir(&cache_dir).expect("create env cache dir");
-
-        std::env::set_var("AARDVARK_PYODIDE_PACKAGE_DIR", &cache_dir);
-        let resolved = package_root_dir().expect("package root from env");
-        assert_eq!(resolved, cache_dir);
-
-        std::env::remove_var("AARDVARK_PYODIDE_PACKAGE_DIR");
-        reset_package_root_for_tests();
+    fn pyodide_package_asset_url_matches_pyodide_archives_only() {
+        assert!(is_pyodide_package_asset_url(
+            "https://cdn.jsdelivr.net/pyodide/v0.29.4/full/numpy-2.2.5-cp313-cp313-pyodide_2025_0_wasm32.whl"
+        ));
+        assert!(is_pyodide_package_asset_url(
+            "https://github.com/pyodide/pyodide/releases/download/0.29.4/pyodide-core-0.29.4.tar.bz2"
+        ));
+        assert!(!is_pyodide_package_asset_url(
+            "https://cdn.jsdelivr.net/npm/some-package/dist/archive.tar.gz"
+        ));
+        assert!(!is_pyodide_package_asset_url(
+            "https://cdn.jsdelivr.net/gh/example/project/data.zip"
+        ));
     }
 }

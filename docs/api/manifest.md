@@ -17,7 +17,7 @@
 ```
 "runtime": {
   "language": "javascript",
-"pyodide": {"version": "0.29.0"}
+  "pyodide": {"version": "0.29.4"}
 }
 ```
 
@@ -61,7 +61,7 @@
   "packages": ["numpy", "pandas"],
   "runtime": {
     "language": "python",
-    "pyodide": {"version": "0.29.0"}
+    "pyodide": {"version": "0.29.4"}
   },
   "resources": {
     "cpu": {"defaultLimitMs": 8000},

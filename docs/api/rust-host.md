@@ -15,36 +15,29 @@ For crates.io you will depend on the published version instead of the workspace 
 
 ## Preparing [Pyodide](https://pyodide.org/) assets
 
-Before initialising the runtime you need the pinned [Pyodide](https://pyodide.org/)
-bundle on disk so requests such as `pyodide/v0.29.0/full/numpy-….whl` resolve to
-`./.aardvark/pyodide/0.29.0/numpy-….whl`. You can stage the cache in one of three
-ways:
+Before initialising a Python runtime, stage the pinned Aardvark Pyodide
+distribution on disk. The distribution contains the upstream Pyodide 0.29.4
+runtime files, package files, Aardvark adapter scripts, a manifest, and a
+compatibility fingerprint.
 
-1. Enable the `aardvark-core/full-pyodide-packages` feature. The build script
-   downloads the full Pyodide 0.29.0 release during `cargo build`, verifies the
-   checksum, and sets `PyRuntimeConfig::default()` to point at the extracted
-   cache.
-2. Use the CLI helper: `cargo run -p aardvark-cli -- assets stage` flattens the
-   upstream release into `.aardvark/pyodide/0.29.0/` (tweak with
-   `--variant core`, `--output`, or `--force`).
-3. Download the archive manually and copy the variant you need into a flat
-   directory:
+Use the CLI helper:
 
-   ```
-   mkdir -p .aardvark/pyodide/0.29.0
-   curl -L -o pyodide-0.29.0.tar.bz2 \
-     https://github.com/pyodide/pyodide/releases/download/0.29.0/pyodide-0.29.0.tar.bz2
-   echo "85395f34a808cc8852f3c4a5f5d47f906a8a52fa05e5cd70da33be82f4d86a58  pyodide-0.29.0.tar.bz2" | sha256sum --check
-   tar -xjf pyodide-0.29.0.tar.bz2
-   rsync -a pyodide/pyodide/v0.29.0/full/ .aardvark/pyodide/0.29.0/
-   rm -rf pyodide pyodide-0.29.0.tar.bz2
-   ```
+```bash
+cargo run -p aardvark-cli -- assets stage --variant full
+cargo run -p aardvark-cli -- assets verify \
+  .aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full
+```
 
-Once staged, set `AARDVARK_PYODIDE_PACKAGE_DIR` or call
-`PyRuntimeConfig::with_pyodide_package_dir(...)` so your runtime resolves wheel
-requests from the prepared cache. Swap the archive for the core bundle if you do
-not need the full wheel set, and update the URL/hash whenever you bump the pinned
-version.
+Then either set `AARDVARK_PYODIDE_DIST_DIR` or configure the runtime directly:
+
+```rust
+let config = PyRuntimeConfig::default()
+    .with_pyodide_dist_dir(".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full");
+```
+
+The `core` variant is useful for runtimes that do not need the full wheel set.
+Package loading is resolved exclusively through the verified distribution; flat
+wheel-cache directories are not a supported runtime contract.
 
 ## Persistent isolates (`PythonIsolate`)
 
@@ -82,8 +75,8 @@ Key knobs via `IsolateConfig` / `PyRuntimeConfig`:
 - `cleanup` – choose between full cleanup, shared-buffer-only scrubbing, or no automatic cleanup.
 - `budget_override` – clamp descriptor limits globally.
 - `host_capabilities` – capability allowlist applied to every call unless a manifest narrows it further.
-- `pyodide_package_dir` – override the package cache path without relying on
-  process-wide environment variables.
+- `pyodide_dist_dir` – override the staged Aardvark Pyodide distribution path
+  without relying on process-wide environment variables.
 
 ### Inline Python without a bundle
 
@@ -249,7 +242,7 @@ fn manual(bytes: &[u8]) -> anyhow::Result<()> {
 
 - `reset_to_snapshot()` recreates the language engine from scratch. This is the slow but safest option when you want to reclaim every resource.
 - `reset_in_place()` reuses the existing isolate, wipes the context, and replays the bootstrap assets before the next invocation.
-- `WarmState::into_overlay_preloaded()` indicates that overlay contents were baked into the snapshot so in-place resets can skip the expensive import.
+- `WarmState::into_overlay_preloaded()` indicates that overlay contents were baked into the snapshot so restores can skip the expensive import.
 - Every reset records `mode`, `duration_ms`, and `engine_generation` so the next invocation’s diagnostics explain how the runtime was scrubbed.
 
 ## Warm Snapshots for Faster Cold Starts
@@ -275,9 +268,9 @@ fn host_with_warm_state(warm: WarmState) -> anyhow::Result<PyRuntime> {
 }
 ```
 
-The saved `WarmState` bundles a Pyodide memory snapshot with its overlay. Runtimes constructed with it skip package installation and restore the filesystem/DLLs immediately. Call `config.snapshot.clear_cache()` or set `config.warm_state = None` if you regenerate the warm state at runtime.
+The saved `WarmState` bundles a Pyodide memory snapshot with its overlay and the active distribution compatibility fingerprint. Runtimes constructed with it skip package installation and reject the state if the fingerprint does not match the configured distribution. Call `config.snapshot.clear_cache()` or set `config.warm_state = None` if you regenerate the warm state at runtime.
 
-Warm states captured via `capture_warm_state()` mark the overlay as preloaded, so `reset_in_place()` skips the heavy overlay import. If you assemble a warm state manually, call `WarmState::with_overlay_preloaded` (or `WarmState::into_overlay_preloaded`) after hydrating the overlay to unlock the same fast path.
+Warm states captured via `capture_warm_state()` include overlay metadata and normally import that overlay during restore. If you persist or index warm states outside the runtime, keep `WarmState::compatibility_fingerprint()` with the snapshot record; hosts can compare it with `PyRuntime::pyodide_compatibility_fingerprint()` before reuse. If you assemble a warm state manually, construct it with the matching Pyodide distribution fingerprint and call `WarmState::with_overlay_preloaded` (or `WarmState::into_overlay_preloaded`) only after hydrating the overlay into the snapshot image.
 
 ### Warm Snapshot Hooks
 
@@ -330,7 +323,7 @@ sequenceDiagram
 ```
 
 > **Warm Snapshot Limitations**
-> - Warm states are version- and manifest-specific. Changing Pyodide builds or required packages requires capturing a new snapshot; the runtime does not validate mismatches for you.
+> - Warm states are distribution-specific. Changing Pyodide builds, adapter versions, or required packages requires capturing a new snapshot; the runtime rejects missing or mismatched distribution fingerprints.
 > - Hooks and restoration run synchronously; long-running work will block the thread performing the reset.
 
 ## Custom strategies
@@ -381,7 +374,7 @@ Arguments are `[iterations] [payload_len]`. The harness warms the runtime, captu
 - There is no async API; integrate with async runtimes by wrapping the blocking calls in thread pools.
 - Shared buffers expose zero-copy views via `SharedBufferHandle::as_slice()`; call `into_bytes()` only if you need an owned copy.
 - JavaScript bundles are “bring your own modules”: package resolution is not performed at runtime, so ship a single self-contained bundle produced by your JS bundler.
-- Manifest-driven package caches must be prepared out of band. The core crate does not download wheels from the network.
+- Manifest-driven package distributions must be staged out of band. The core crate does not download wheels from the network.
 
 ## Stability & Release Readiness
 

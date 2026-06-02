@@ -119,7 +119,7 @@ function createModuleConfig(options, stdlibBytes, wasmBytes, lockfile) {
     hasLockfile: !!lockfile,
   });
 
-  const versionTag = globalThis.__pyRunnerPyodideVersion ?? "0.29.0";
+  const versionTag = globalThis.__pyRunnerPyodideVersion ?? "0.29.4";
   const defaultPackageBaseUrl = `https://cdn.jsdelivr.net/pyodide/v${versionTag}/full/`;
   const packageBaseUrl = packageBaseUrlOverride ?? defaultPackageBaseUrl;
 

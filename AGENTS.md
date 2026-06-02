@@ -3,14 +3,14 @@
 ## Project Structure & Module Organization
 - `crates/aardvark-core/`: primary runtime library embedding [Pyodide](https://pyodide.org/) and managing sandbox policies. Submodules cover assets (`src/js/`, `src/py/`), manifest parsing, pooling, and invocation strategies.
 - `crates/aardvark-cli/`: developer CLI that exercises the core library end to end.
-- `integration-tests/`: slower overlay and pooling scenarios that rely on prepared caches.
+- `integration-tests/`: slower overlay and pooling scenarios that rely on a staged Aardvark Pyodide distribution plus overlay caches.
 - `docs/`: public architecture/API references and `docs/dev/` for contributor workflow notes.
-- `scripts/` and `.aardvark/`: helper tooling plus developer-managed caches ([Pyodide](https://pyodide.org/) wheels, overlays). The `.aardvark/pyodide/<version>` directory is ignored by git and should contain the flattened [Pyodide](https://pyodide.org/) release you stage locally.
+- `scripts/` and `.aardvark/`: helper tooling plus developer-managed runtime assets ([Pyodide](https://pyodide.org/) distributions, overlays). The `.aardvark/pyodide-distributions/` directory is ignored by git and should contain distributions staged with `cargo run -p aardvark-cli -- assets stage`.
 
 ## Build, Test, and Development Commands
 - `cargo build -p aardvark-core`: compile the runtime library; run before editing JS shims to confirm bindings.
 - `cargo test --workspace`: run unit tests across all crates.
-- `cargo test -p integration-tests -- --nocapture`: run overlay hydration and pooling tests; requires `AARDVARK_PYODIDE_PACKAGE_DIR`.
+- `cargo test -p integration-tests -- --nocapture`: run overlay hydration and pooling tests; requires `AARDVARK_PYODIDE_DIST_DIR` or the default staged full distribution path.
 - `cargo fmt && cargo clippy --workspace --all-targets -- -D warnings`: enforce formatting and lint rules prior to commits.
 
 ## Coding Style & Naming Conventions
