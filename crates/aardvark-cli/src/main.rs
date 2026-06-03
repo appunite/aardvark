@@ -2279,8 +2279,13 @@ fn download_variant_archive(variant: StageVariant, workspace: &Path) -> Result<P
     fs::create_dir_all(workspace)
         .with_context(|| format!("failed to create {}", workspace.display()))?;
     let archive_path = workspace.join(variant.archive_name());
+    let timeout = Some(Duration::from_secs(120));
     let agent: Agent = Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(120)))
+        .timeout_global(None)
+        .timeout_send_request(timeout)
+        .timeout_send_body(timeout)
+        .timeout_recv_response(timeout)
+        .timeout_recv_body(timeout)
         .build()
         .into();
     let url = variant.archive_url();

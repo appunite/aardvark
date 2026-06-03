@@ -6,7 +6,8 @@ profiles** so we can observe how latency scales with input size:
 
 - **None** – no explicit input; the handler uses its baked-in defaults.
 - **Low** – roughly 10² logical items (16 bytes for `echo`, 64 scalars for
-  `numpy`, 128 rows for `pandas`, 256 tensor elements).
+  `numpy`, 128 rows for `pandas`, 256 tensor elements / 128 rendered plot
+  points).
 - **Medium** – roughly 10³–10⁴ logical items (1 000 bytes / 4 096 scalars /
   10 000 rows / 16 384 tensor elements / 4 096 rendered plot points).
 - **High** – roughly 10⁶ logical items (1 MB / 1 000 000 scalars /

@@ -49,13 +49,13 @@ def _decode_points(data: Optional[bytes]) -> Optional[int]:
     return None
 
 
-def _publish_raw(pixel_count: int):
+def _publish_raw(byte_count: int):
     factory = getattr(builtins, "__aardvark_output_buffer", None)
     if callable(factory):
         buffer = factory(8, id="matplotlib-output", metadata={"format": "u64_le"})
-        struct.pack_into("<Q", buffer, 0, int(pixel_count))
+        struct.pack_into("<Q", buffer, 0, int(byte_count))
         return buffer
-    return pixel_count
+    return byte_count
 
 
 def main(input_points):

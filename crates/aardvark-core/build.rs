@@ -105,8 +105,13 @@ fn download_pyodide_archive(spec: &PyodideArchiveSpec) -> Result<PathBuf> {
     fs::create_dir_all(&tmp_dir)?;
     let archive_path = tmp_dir.join("pyodide.tar.bz2");
 
+    let timeout = Some(Duration::from_secs(120));
     let agent: Agent = Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(120)))
+        .timeout_global(None)
+        .timeout_send_request(timeout)
+        .timeout_send_body(timeout)
+        .timeout_recv_response(timeout)
+        .timeout_recv_body(timeout)
         .build()
         .into();
     let url = spec.download_url();
