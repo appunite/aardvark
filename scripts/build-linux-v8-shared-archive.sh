@@ -216,7 +216,7 @@ PY
 }
 
 locate_v8_crate_source() {
-  find "$CARGO_HOME_DIR/registry/src" -maxdepth 2 -type d -name "v8-$V8_VERSION" 2>/dev/null | head -n 1
+  find "$CARGO_HOME_DIR/registry/src" -maxdepth 2 -type d -name "v8-$V8_VERSION" -print -quit 2>/dev/null
 }
 
 ensure_v8_crate_source() {

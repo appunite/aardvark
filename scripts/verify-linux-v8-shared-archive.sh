@@ -93,7 +93,7 @@ if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
   exit 1
 fi
 
-for tool in cargo rustc sha256sum file; do
+for tool in cargo rustc sha256sum file readelf; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "error: required tool '$tool' is missing" >&2
     exit 1
@@ -337,16 +337,7 @@ echo "  cargo=$(cargo --version)"
   cd "$WORK_DIR"
   RUSTY_V8_ARCHIVE="$ARCHIVE" cargo build -p smoke_lib -p smoke_runner --release
   file target/release/libsmoke_lib.so target/release/smoke_runner
-  if command -v readelf >/dev/null 2>&1; then
-    readelf -d target/release/libsmoke_lib.so
-  else
-    if ! command -v ldd >/dev/null 2>&1; then
-      echo "error: readelf is missing and ldd fallback is unavailable" >&2
-      exit 1
-    fi
-    echo "warning: readelf is unavailable; falling back to ldd" >&2
-    ldd target/release/libsmoke_lib.so
-  fi
+  readelf -d target/release/libsmoke_lib.so
   ./target/release/smoke_runner target/release/libsmoke_lib.so
 )
 
