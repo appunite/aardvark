@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::tempdir;
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
 const ENTRYPOINT: &str = "main:main";
@@ -30,7 +30,7 @@ fn create_test_bundle(dir: &Path) -> PathBuf {
     let mut file = File::create(&bundle_path).expect("create bundle");
     {
         let mut zip = ZipWriter::new(&mut file);
-        let options = FileOptions::default();
+        let options = SimpleFileOptions::default();
         zip.start_file("main.py", options)
             .expect("start main.py entry");
         zip.write_all(b"def main():\n    return {'message': 'ok'}\n")

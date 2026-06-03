@@ -2,7 +2,7 @@ use aardvark_core::{outcome::ResultPayload, Bundle, PyRuntime, PyRuntimeConfig};
 use std::io::{Cursor, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -92,7 +92,7 @@ def main():
 
     let cursor = Cursor::new(Vec::new());
     let mut writer = ZipWriter::new(cursor);
-    let options = FileOptions::default();
+    let options = SimpleFileOptions::default();
     writer.start_file("main.py", options)?;
     writer.write_all(source.as_bytes())?;
     let cursor = writer.finish()?;

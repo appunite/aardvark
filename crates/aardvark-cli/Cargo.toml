@@ -12,17 +12,18 @@ runtime = ["aardvark-core"]
 
 [dependencies]
 anyhow.workspace = true
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 aardvark-core = { path = "../aardvark-core", optional = true }
+hex = "0.4"
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10"
-bzip2 = "0.4"
+sha2 = "0.11"
+bzip2 = "0.6"
 tar = "0.4"
-tempfile = "3.10"
-ureq = { version = "2.10", features = ["tls"] }
+tempfile = "3.27"
+ureq = "3.3"
 
 [[bin]]
 name = "aardvark-cli"

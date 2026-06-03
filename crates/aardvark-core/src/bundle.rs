@@ -158,7 +158,7 @@ impl BundleFingerprint {
     }
 }
 
-fn read_zip_file(mut file: ZipFile<'_>) -> Result<Vec<u8>> {
+fn read_zip_file<R: Read>(mut file: ZipFile<'_, R>) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     file.read_to_end(&mut buf)
         .map_err(|err| PyRunnerError::Bundle(format!("failed to read '{}': {err}", file.name())))?;
