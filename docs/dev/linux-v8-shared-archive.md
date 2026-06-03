@@ -333,13 +333,20 @@ Consumers should download the archive, verify the SHA-256, and set
 
 ## Verified Artifact
 
-First verified artifact:
+Published release:
+
+```text
+https://github.com/appunite/aardvark/releases/tag/v149.2.0
+```
+
+Published artifact:
 
 ```text
 v8_crate_version=149.2.0
 target=x86_64-unknown-linux-gnu
-sha256=ffb9c4fcc1081a93443e05e1eb7d65137a52a734ee97e4a7411116afdac71fbf
-size_bytes=185756120
+artifact=librusty_v8_release_x86_64-unknown-linux-gnu-v149.2.0-shared.a
+sha256=fc454e99846bbcbab8b5f79d74ec5031004cba8df9691bf6d39104a69ba2dbe1
+size_bytes=185668672
 gn_args=v8_monolithic_for_shared_library=true
 icu_revision=ee5f27adc28bd3f15b2c293f726d14d2e336cbd5
 icu_data_sha256=1cf67874b5a87a8363a86fb3f81e3cbbed54d389062dab8fb52308d5cf8c8612
@@ -361,19 +368,25 @@ Linux cdylib verification passed.
 
 ```text
 scenario,upstream_median_ns,custom_median_ns,custom_to_upstream_ratio,status
-arithmetic_loop,3423037,3478955,1.016336,pass
-json_parse_stringify,8442460,8252879,0.977544,pass
-object_alloc,6079713,5885991,0.968136,pass
-startup_add,982540,981310,0.998748,pass
+arithmetic_loop,3397258,3402666,1.001592,pass
+json_parse_stringify,8269134,8350275,1.009813,pass
+object_alloc,6181075,5826044,0.942562,pass
+startup_add,962479,960261,0.997696,pass
 ```
 
-First downstream host smoke result:
+Downstream host smoke result:
 
 ```text
 mix test --trace
 2 tests, 0 failures
 
+aardvark commit: 28b471018ca6a87745b5ae965ae90722f9f03d44
 pyodide distribution fingerprint: sha256:c687ada5f575576c4e3d5bd59173ac7cfd7fc74fcb65201278948f466cbf343f
 numpy version: 2.2.5
 pandas version: 2.3.3
+no forbidden V8 TLS relocations found in downstream Rustler shared object
 ```
+
+The release also publishes
+`aardvark-v8-linux-shared-archive-v149.2.0-evidence.tar.gz` with the build,
+verify, benchmark, host-smoke logs, and raw perf CSVs.

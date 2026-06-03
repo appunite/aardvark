@@ -54,7 +54,10 @@ archive name below must track that pin.
 When building a Linux shared object that links Aardvark, set:
 
 ```bash
-export RUSTY_V8_ARCHIVE=/path/to/librusty_v8_release_x86_64-unknown-linux-gnu-v149.2.0-shared.a
+curl -LO https://github.com/appunite/aardvark/releases/download/v149.2.0/librusty_v8_release_x86_64-unknown-linux-gnu-v149.2.0-shared.a
+curl -LO https://github.com/appunite/aardvark/releases/download/v149.2.0/librusty_v8_release_x86_64-unknown-linux-gnu-v149.2.0-shared.a.sha256
+sha256sum -c librusty_v8_release_x86_64-unknown-linux-gnu-v149.2.0-shared.a.sha256
+export RUSTY_V8_ARCHIVE="$PWD/librusty_v8_release_x86_64-unknown-linux-gnu-v149.2.0-shared.a"
 cargo build --release
 ```
 
