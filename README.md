@@ -6,7 +6,7 @@
 >
 > -- [Wikipedia](https://en.wikipedia.org/wiki/Aardvark)
 
-Embedded multi-language runtime for executing sandboxed bundles inside [V8](https://v8.dev/), with hardened resource controls and structured diagnostics. The project takes clear inspiration from Cloudflare Python Workers while pursuing an embeddable library-first design for Rust hosts. **Aardvark is experimental software**: APIs, manifests, and runtime semantics may change without notice, and the system has not been hardened for production traffic yet.
+Embedded multi-language runtime for executing sandboxed bundles inside [V8](https://v8.dev/), with hardened resource controls and structured diagnostics. The project takes clear inspiration from Cloudflare Python Workers while pursuing an embeddable library-first design for Rust hosts and host-owned shared-library adapters. **Aardvark is experimental software**: APIs, manifests, and runtime semantics may change without notice, and the system has not been hardened for production traffic yet.
 
 ## Why Aardvark?
 
@@ -226,10 +226,15 @@ Arguments are `[iterations] [payload_len]` (both optional). The harness warms th
 
 `docs/api/rust-host.md` expands on persistent isolates, pooling semantics, invocation strategies, and telemetry export. For JavaScript bundles, pass `language = "javascript"` in the manifest or descriptor and ship a self-contained bundle produced by your JS build tool.
 
+For non-Rust hosts, load a Rust `cdylib` that links `aardvark-core` and owns the
+host-specific ABI. Start with `docs/api/shared-library-host.md`; the Linux
+`rusty_v8` archive rebuild procedure in `docs/dev/linux-v8-shared-archive.md`
+is maintainer documentation, not the integration entry point.
+
 ## Documentation
 
 - Architecture guidance lives under `docs/architecture/`. Start with `overview.md` for a top-down explanation, then branch into resource-limits, lifecycle/sandbox internals, and telemetry. The current feature plan is in `roadmap.md`.
-- API reference under `docs/api/` covers the manifest schema, host integration, handler contracts, and diagnostics handling with examples.
+- API reference under `docs/api/` covers the manifest schema, Rust host integration, shared-library host integration, handler contracts, and diagnostics handling with examples.
 - Developer onboarding material is available in `docs/dev/` for contributors extending the project.
 - Performance notes and benchmark workflow live in `docs/perf/overview.md`.
 - The included `Makefile` has helpers (`make perf-all`, `make perf-md`). It
