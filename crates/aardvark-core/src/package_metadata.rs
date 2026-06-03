@@ -250,12 +250,12 @@ fn build_metadata(raw_json: &str) -> BuildResult {
 
             let mut imports = entry.init_imports(pkg.imports.len() as u32);
             for (i, import) in pkg.imports.iter().enumerate() {
-                imports.set(i as u32, import.as_str().into());
+                imports.set(i as u32, import.as_str());
             }
 
             let mut depends = entry.init_depends(pkg.depends.len() as u32);
             for (i, dep) in pkg.depends.iter().enumerate() {
-                depends.set(i as u32, dep.as_str().into());
+                depends.set(i as u32, dep.as_str());
             }
         }
     }

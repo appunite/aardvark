@@ -1,4 +1,4 @@
-#[cfg(target_os = "linux")]
+use std::collections::BTreeSet;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
@@ -20,54 +20,57 @@ use aardvark_core::{
 };
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
+use clap::{Parser, ValueEnum};
 use comfy_table::{presets::UTF8_FULL_CONDENSED, Cell, Table};
 use serde::Serialize;
 use serde_json::{json, Value as JsonValue};
-use structopt::StructOpt;
 use which::which;
 
 mod perf;
 
-#[derive(StructOpt, Debug)]
-#[structopt(
+#[derive(Parser, Debug)]
+#[command(
     name = "aardvark-perf",
     about = "Performance harness for Aardvark runtime"
 )]
 enum Cli {
     /// Run benchmarks for all scenarios (Aardvark + host Python) and emit reports
     All {
-        #[structopt(long, default_value = "10")]
+        #[arg(long, default_value_t = 10)]
         iterations: usize,
-        #[structopt(long)]
+        #[arg(long)]
         json: Option<PathBuf>,
-        #[structopt(long)]
+        #[arg(long)]
         csv: Option<PathBuf>,
-        #[structopt(long, possible_values = LoadProfile::VARIANTS, case_insensitive = true)]
+        #[arg(long, value_enum, ignore_case = true)]
         profile: Option<LoadProfile>,
     },
     /// Run a single scenario/mode combination
     Scenario {
-        #[structopt(long, possible_values = Scenario::VARIANTS, case_insensitive = true)]
+        #[arg(long, value_enum, ignore_case = true)]
         scenario: Scenario,
-        #[structopt(long, possible_values = Mode::VARIANTS, case_insensitive = true)]
+        #[arg(long, value_enum, ignore_case = true)]
         mode: Mode,
-        #[structopt(long, default_value = "10")]
+        #[arg(long, default_value_t = 10)]
         iterations: usize,
-        #[structopt(long, possible_values = LoadProfile::VARIANTS, case_insensitive = true)]
+        #[arg(long, value_enum, ignore_case = true)]
         profile: Option<LoadProfile>,
     },
 }
 
-#[derive(Copy, Clone, Debug, Serialize)]
+#[derive(Copy, Clone, Debug, Serialize, ValueEnum)]
+#[value(rename_all = "kebab-case")]
 enum Scenario {
     Echo,
     Numpy,
     Pandas,
     Tensor,
+    Matplotlib,
 }
 
-#[derive(Copy, Clone, Debug, Serialize)]
+#[derive(Copy, Clone, Debug, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
+#[value(rename_all = "kebab-case")]
 enum LoadProfile {
     None,
     Low,
@@ -118,42 +121,45 @@ impl CleanupKind {
     }
 }
 
-#[derive(Copy, Clone, Debug, Serialize)]
+#[derive(Copy, Clone, Debug, Serialize, ValueEnum)]
+#[value(rename_all = "kebab-case")]
 enum Mode {
     AardvarkJsonCold,
     AardvarkJsonWarm,
     AardvarkJsonResetInPlace,
+    #[value(alias = "aardvark-json-persistent-full")]
     AardvarkJsonPersistent,
     AardvarkJsonPersistentShared,
     AardvarkJsonPersistentNone,
+    #[value(name = "aardvark-rawctx-cold")]
     AardvarkRawCtxCold,
+    #[value(name = "aardvark-rawctx-warm")]
     AardvarkRawCtxWarm,
+    #[value(name = "aardvark-rawctx-reset-in-place")]
     AardvarkRawCtxResetInPlace,
+    #[value(
+        name = "aardvark-rawctx-persistent",
+        alias = "aardvark-rawctx-persistent-full"
+    )]
     AardvarkRawCtxPersistent,
+    #[value(name = "aardvark-rawctx-persistent-shared")]
     AardvarkRawCtxPersistentShared,
+    #[value(name = "aardvark-rawctx-persistent-none")]
     AardvarkRawCtxPersistentNone,
-    HostPython,
+    #[value(
+        name = "host-python-warm",
+        alias = "host-python",
+        alias = "host",
+        alias = "python"
+    )]
+    HostPythonWarm,
+    #[value(name = "host-python-prepare-run")]
+    HostPythonPrepareRun,
+    #[value(name = "host-python-process")]
+    HostPythonProcess,
 }
 
 impl Mode {
-    const VARIANTS: &'static [&'static str] = &[
-        "aardvark-json-cold",
-        "aardvark-json-warm",
-        "aardvark-json-reset-in-place",
-        "aardvark-json-persistent",
-        "aardvark-json-persistent-full",
-        "aardvark-json-persistent-shared",
-        "aardvark-json-persistent-none",
-        "aardvark-rawctx-cold",
-        "aardvark-rawctx-warm",
-        "aardvark-rawctx-reset-in-place",
-        "aardvark-rawctx-persistent",
-        "aardvark-rawctx-persistent-full",
-        "aardvark-rawctx-persistent-shared",
-        "aardvark-rawctx-persistent-none",
-        "host-python",
-    ];
-
     fn name(&self) -> &'static str {
         match self {
             Mode::AardvarkJsonCold => "aardvark-json-cold",
@@ -168,7 +174,9 @@ impl Mode {
             Mode::AardvarkRawCtxPersistent => "aardvark-rawctx-persistent",
             Mode::AardvarkRawCtxPersistentShared => "aardvark-rawctx-persistent-shared",
             Mode::AardvarkRawCtxPersistentNone => "aardvark-rawctx-persistent-none",
-            Mode::HostPython => "host-python",
+            Mode::HostPythonWarm => "host-python-warm",
+            Mode::HostPythonPrepareRun => "host-python-prepare-run",
+            Mode::HostPythonProcess => "host-python-process",
         }
     }
 
@@ -186,7 +194,7 @@ impl Mode {
             Mode::AardvarkRawCtxPersistent
             | Mode::AardvarkRawCtxPersistentShared
             | Mode::AardvarkRawCtxPersistentNone => Some(InvocationKind::RawCtx),
-            Mode::HostPython => None,
+            Mode::HostPythonWarm | Mode::HostPythonPrepareRun | Mode::HostPythonProcess => None,
         }
     }
 
@@ -203,7 +211,7 @@ impl Mode {
             | Mode::AardvarkRawCtxPersistent
             | Mode::AardvarkRawCtxPersistentShared
             | Mode::AardvarkRawCtxPersistentNone => Some(PathKind::Persistent),
-            Mode::HostPython => None,
+            Mode::HostPythonWarm | Mode::HostPythonPrepareRun | Mode::HostPythonProcess => None,
         }
     }
 
@@ -239,6 +247,14 @@ impl Mode {
         ]
     }
 
+    fn host_modes() -> &'static [Mode] {
+        &[
+            Mode::HostPythonWarm,
+            Mode::HostPythonPrepareRun,
+            Mode::HostPythonProcess,
+        ]
+    }
+
     fn is_aardvark(self) -> bool {
         self.invocation_kind().is_some()
     }
@@ -269,6 +285,10 @@ struct BenchResult {
     cold_prepare: Option<TimingStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cold_run: Option<TimingStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_python_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_packages: Option<Vec<String>>,
 }
 
 #[derive(Serialize, serde::Deserialize, Default, Clone)]
@@ -289,7 +309,7 @@ struct TimingBuckets<'a> {
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::from_args();
+    let cli = Cli::parse();
     match cli {
         Cli::All {
             iterations,
@@ -313,11 +333,14 @@ fn main() -> Result<()> {
                     Scenario::Numpy,
                     Scenario::Pandas,
                     Scenario::Tensor,
+                    Scenario::Matplotlib,
                 ] {
                     for mode in Mode::aardvark_modes() {
                         results.push(bench_aardvark(scenario, *mode, iterations, profile)?);
                     }
-                    results.push(bench_host(scenario, iterations, profile)?);
+                    for mode in host_modes_for_scenario(scenario) {
+                        results.push(bench_host(scenario, *mode, iterations, profile)?);
+                    }
                 }
             }
             let expanded = expand_results(&results);
@@ -339,7 +362,7 @@ fn main() -> Result<()> {
             let result = if mode.is_aardvark() {
                 bench_aardvark(scenario, mode, iterations, profile)?
             } else {
-                bench_host(scenario, iterations, profile)?
+                bench_host(scenario, mode, iterations, profile)?
             };
             let expanded = expand_results(std::slice::from_ref(&result));
             println!("{}", serde_json::to_string_pretty(&expanded)?);
@@ -547,6 +570,8 @@ fn bench_aardvark(
         cold_total: cold_total_stats,
         cold_prepare: cold_prepare_stats,
         cold_run: cold_run_stats,
+        host_python_version: None,
+        host_packages: None,
     })
 }
 
@@ -647,14 +672,20 @@ fn capture_warm_state(
     ))
 }
 
-fn bench_host(scenario: Scenario, iterations: usize, profile: LoadProfile) -> Result<BenchResult> {
+fn bench_host(
+    scenario: Scenario,
+    mode: Mode,
+    iterations: usize,
+    profile: LoadProfile,
+) -> Result<BenchResult> {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/run_host.py");
     let uv = which("uv")
         .context("`uv` command not found on PATH. Install from https://docs.astral.sh/uv/ or ensure it is available before running the perf suite.")?;
+    let host_plan = host_runtime_plan(scenario)?;
     let mut cmd = Command::new(uv);
     cmd.arg("run");
-    cmd.arg(format!("--python={}", host_python_version()));
-    for pkg in scenario_packages(scenario) {
+    cmd.arg(format!("--python={}", host_plan.python_version));
+    for pkg in &host_plan.packages {
         cmd.arg(format!("--with={pkg}"));
     }
     cmd.arg("python");
@@ -665,6 +696,8 @@ fn bench_host(scenario: Scenario, iterations: usize, profile: LoadProfile) -> Re
     cmd.arg(iterations.to_string());
     cmd.arg("--profile");
     cmd.arg(profile.name());
+    cmd.arg("--host-mode");
+    cmd.arg(host_mode_name(mode)?);
 
     let output = cmd
         .output()
@@ -679,19 +712,21 @@ fn bench_host(scenario: Scenario, iterations: usize, profile: LoadProfile) -> Re
         .with_context(|| "failed to parse host benchmark output")?;
     Ok(BenchResult {
         scenario,
-        mode: Mode::HostPython,
+        mode,
         profile,
         invocation: None,
         path: None,
         cleanup: None,
         iterations,
         total: result.total,
-        prepare: None,
-        run: None,
+        prepare: result.prepare,
+        run: result.run,
         rss_mib: Some(result.rss_mib),
         cold_total: None,
         cold_prepare: None,
         cold_run: None,
+        host_python_version: result.python_version.or(Some(host_plan.python_version)),
+        host_packages: Some(host_plan.packages),
     })
 }
 
@@ -701,6 +736,7 @@ fn scenario_source(scenario: Scenario) -> String {
         Scenario::Numpy => perf::numpy_script().to_owned(),
         Scenario::Pandas => perf::pandas_script().to_owned(),
         Scenario::Tensor => perf::tensor_script().to_owned(),
+        Scenario::Matplotlib => perf::matplotlib_script().to_owned(),
     }
 }
 
@@ -752,6 +788,13 @@ fn descriptor_for(
                         "profile": _profile.name(),
                     }))
                     .build(),
+                Scenario::Matplotlib => RawCtxPublishBuilder::new("matplotlib-output")
+                    .transform("memoryview")
+                    .metadata(json!({
+                        "format": "u64_le",
+                        "profile": _profile.name(),
+                    }))
+                    .build(),
             };
             descriptor.outputs.push(FieldDescriptor {
                 name: "result".to_owned(),
@@ -781,17 +824,18 @@ fn scenario_packages(scenario: Scenario) -> &'static [&'static str] {
         Scenario::Numpy => &["numpy"],
         Scenario::Pandas => &["numpy", "pandas"],
         Scenario::Tensor => &["numpy"],
+        Scenario::Matplotlib => &["numpy", "matplotlib"],
     }
 }
 
 fn build_bundle(source: &str, manifest: &[u8]) -> Result<Bundle> {
-    use zip::write::FileOptions;
+    use zip::write::SimpleFileOptions;
     use zip::CompressionMethod;
 
     let mut buffer = Vec::new();
     {
         let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
-        let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
         writer.start_file("main.py", options)?;
         writer.write_all(source.as_bytes())?;
         writer.start_file("aardvark.manifest.json", options)?;
@@ -1018,14 +1062,193 @@ fn print_summary(results: &[BenchResult]) {
     println!("{}", table);
 }
 
-fn host_python_version() -> &'static str {
-    "3.13"
-}
-
 #[derive(Serialize, serde::Deserialize)]
 struct HostResult {
     total: TimingStats,
+    #[serde(default)]
+    prepare: Option<TimingStats>,
+    #[serde(default)]
+    run: Option<TimingStats>,
     rss_mib: f64,
+    #[serde(default)]
+    python_version: Option<String>,
+}
+
+struct HostRuntimePlan {
+    python_version: String,
+    packages: Vec<String>,
+}
+
+fn host_mode_name(mode: Mode) -> Result<&'static str> {
+    match mode {
+        Mode::HostPythonWarm => Ok("warm-handler"),
+        Mode::HostPythonPrepareRun => Ok("prepare-run"),
+        Mode::HostPythonProcess => Ok("process"),
+        other => Err(anyhow!(
+            "mode '{}' is not a host Python variant",
+            other.name()
+        )),
+    }
+}
+
+fn host_modes_for_scenario(scenario: Scenario) -> &'static [Mode] {
+    match scenario {
+        // Pyodide 0.29.4 pins matplotlib 3.8.4 for Python 3.13.2. That exact
+        // native CPython package set is not generally wheel-installable, so the
+        // default full matrix avoids producing a misleading or host-dependent row.
+        Scenario::Matplotlib => &[],
+        _ => Mode::host_modes(),
+    }
+}
+
+fn host_runtime_plan(scenario: Scenario) -> Result<HostRuntimePlan> {
+    let lock_path = pyodide_lock_path()?;
+    let lock_text = fs::read_to_string(&lock_path)
+        .with_context(|| format!("failed to read {}", lock_path.display()))?;
+    let lock: JsonValue = serde_json::from_str(&lock_text)
+        .with_context(|| format!("failed to parse {}", lock_path.display()))?;
+    let python_version = lock
+        .get("info")
+        .and_then(|info| info.get("python"))
+        .and_then(JsonValue::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow!("{} does not declare info.python", lock_path.display()))?;
+
+    let lock_packages = lock
+        .get("packages")
+        .and_then(JsonValue::as_object)
+        .ok_or_else(|| anyhow!("{} does not declare packages", lock_path.display()))?;
+    let mut visited = BTreeSet::new();
+    let mut packages = Vec::new();
+    for name in scenario_packages(scenario) {
+        collect_host_package(name, lock_packages, &mut visited, &mut packages, &lock_path)?;
+    }
+
+    Ok(HostRuntimePlan {
+        python_version,
+        packages,
+    })
+}
+
+fn collect_host_package(
+    name: &str,
+    lock_packages: &serde_json::Map<String, JsonValue>,
+    visited: &mut BTreeSet<String>,
+    packages: &mut Vec<String>,
+    lock_path: &Path,
+) -> Result<()> {
+    let package_key = pyodide_package_key(lock_packages, name).ok_or_else(|| {
+        anyhow!(
+            "{} does not declare Pyodide package '{}'",
+            lock_path.display(),
+            name
+        )
+    })?;
+    let canonical = canonical_package_name(package_key);
+    if !visited.insert(canonical) {
+        return Ok(());
+    }
+
+    let package = lock_packages
+        .get(package_key)
+        .expect("package key must come from lock package map");
+    let package_name = package
+        .get("name")
+        .and_then(JsonValue::as_str)
+        .unwrap_or(package_key);
+    let version = package
+        .get("version")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| {
+            anyhow!(
+                "{} does not declare a version for Pyodide package '{}'",
+                lock_path.display(),
+                package_name
+            )
+        })?;
+    packages.push(format!("{package_name}=={version}"));
+
+    let depends = package
+        .get("depends")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten();
+    for dependency in depends {
+        let dependency = dependency.as_str().ok_or_else(|| {
+            anyhow!(
+                "{} declares a non-string dependency for Pyodide package '{}'",
+                lock_path.display(),
+                package_name
+            )
+        })?;
+        collect_host_package(dependency, lock_packages, visited, packages, lock_path)?;
+    }
+
+    Ok(())
+}
+
+fn pyodide_package_key<'a>(
+    lock_packages: &'a serde_json::Map<String, JsonValue>,
+    requested: &str,
+) -> Option<&'a str> {
+    if let Some((key, _)) = lock_packages.get_key_value(requested) {
+        return Some(key.as_str());
+    }
+
+    let requested = canonical_package_name(requested);
+    lock_packages
+        .iter()
+        .find(|(key, package)| {
+            canonical_package_name(key) == requested
+                || package
+                    .get("name")
+                    .and_then(JsonValue::as_str)
+                    .map(canonical_package_name)
+                    .is_some_and(|name| name == requested)
+        })
+        .map(|(key, _)| key.as_str())
+}
+
+fn canonical_package_name(name: &str) -> String {
+    let mut normalized = String::with_capacity(name.len());
+    let mut last_was_separator = false;
+    for ch in name.chars() {
+        if matches!(ch, '-' | '_' | '.') {
+            if !last_was_separator {
+                normalized.push('-');
+                last_was_separator = true;
+            }
+        } else {
+            normalized.push(ch.to_ascii_lowercase());
+            last_was_separator = false;
+        }
+    }
+    normalized
+}
+
+fn pyodide_lock_path() -> Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("AARDVARK_PYODIDE_DIST_DIR") {
+        return Ok(PathBuf::from(dir).join("pyodide-lock.json"));
+    }
+    if let Some(dir) = std::env::var_os("PYODIDE_DIST_DIR") {
+        return Ok(PathBuf::from(dir).join("pyodide-lock.json"));
+    }
+
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| anyhow!("failed to resolve workspace root"))?;
+    let default_path = workspace_root
+        .join(".aardvark/pyodide-distributions")
+        .join("aardvark-0.1.1-pyodide-v0.29.4-full")
+        .join("pyodide-lock.json");
+    if default_path.exists() {
+        return Ok(default_path);
+    }
+
+    Err(anyhow!(
+        "host Python benchmarks require a staged Pyodide distribution so Python and package versions can be pinned; set AARDVARK_PYODIDE_DIST_DIR or PYODIDE_DIST_DIR"
+    ))
 }
 
 trait ScenarioExt {
@@ -1039,17 +1262,12 @@ impl ScenarioExt for Scenario {
             Scenario::Numpy => "numpy",
             Scenario::Pandas => "pandas",
             Scenario::Tensor => "tensor",
+            Scenario::Matplotlib => "matplotlib",
         }
     }
 }
 
-impl Scenario {
-    const VARIANTS: &'static [&'static str] = &["echo", "numpy", "pandas", "tensor"];
-}
-
 impl LoadProfile {
-    const VARIANTS: &'static [&'static str] = &["none", "low", "medium", "high"];
-
     fn name(&self) -> &'static str {
         match self {
             LoadProfile::None => "none",
@@ -1078,6 +1296,9 @@ fn json_payload_for(scenario: Scenario, profile: LoadProfile) -> Option<JsonValu
                 let values = data.into_iter().map(JsonValue::from).collect::<Vec<_>>();
                 Some(JsonValue::Array(values))
             }
+        }
+        Scenario::Matplotlib => {
+            perf::matplotlib_points(profile).map(|points| json!({"points": points}))
         }
     }
 }
@@ -1121,6 +1342,13 @@ fn rawctx_inputs_for(scenario: Scenario, profile: LoadProfile) -> Result<Vec<Raw
                 Some(metadata),
             )?])
         }
+        Scenario::Matplotlib => {
+            let Some(points) = perf::matplotlib_points(profile) else {
+                return Ok(Vec::new());
+            };
+            let data = Bytes::copy_from_slice(&points.to_le_bytes());
+            Ok(vec![RawCtxInput::new("control", data, None)?])
+        }
     }
 }
 
@@ -1133,6 +1361,7 @@ impl std::str::FromStr for Scenario {
             "numpy" => Ok(Scenario::Numpy),
             "pandas" => Ok(Scenario::Pandas),
             "tensor" => Ok(Scenario::Tensor),
+            "matplotlib" => Ok(Scenario::Matplotlib),
             other => Err(format!("unknown scenario '{other}'")),
         }
     }
@@ -1173,7 +1402,9 @@ impl std::str::FromStr for Mode {
             }
             "aardvark-rawctx-persistent-shared" => Ok(Mode::AardvarkRawCtxPersistentShared),
             "aardvark-rawctx-persistent-none" => Ok(Mode::AardvarkRawCtxPersistentNone),
-            "host-python" | "host" | "python" => Ok(Mode::HostPython),
+            "host-python" | "host-python-warm" | "host" | "python" => Ok(Mode::HostPythonWarm),
+            "host-python-prepare-run" => Ok(Mode::HostPythonPrepareRun),
+            "host-python-process" => Ok(Mode::HostPythonProcess),
             other => Err(format!("unknown mode '{other}'")),
         }
     }
@@ -1213,4 +1444,60 @@ fn current_rss_mib() -> Option<f64> {
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn current_rss_mib() -> Option<f64> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_package_closure_includes_transitive_lock_dependencies() {
+        let mut lock_packages = serde_json::Map::new();
+        lock_packages.insert(
+            "root-pkg".to_owned(),
+            json!({
+                "name": "root-pkg",
+                "version": "1.0.0",
+                "depends": ["mid_pkg"],
+            }),
+        );
+        lock_packages.insert(
+            "mid-pkg".to_owned(),
+            json!({
+                "name": "mid-pkg",
+                "version": "2.0.0",
+                "depends": ["leaf.pkg"],
+            }),
+        );
+        lock_packages.insert(
+            "leaf-pkg".to_owned(),
+            json!({
+                "name": "leaf-pkg",
+                "version": "3.0.0",
+                "depends": [],
+            }),
+        );
+
+        let mut visited = BTreeSet::new();
+        let mut packages = Vec::new();
+        collect_host_package(
+            "root_pkg",
+            &lock_packages,
+            &mut visited,
+            &mut packages,
+            Path::new("pyodide-lock.json"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            packages,
+            vec!["root-pkg==1.0.0", "mid-pkg==2.0.0", "leaf-pkg==3.0.0"]
+        );
+    }
+
+    #[test]
+    fn full_matrix_omits_default_matplotlib_host_rows() {
+        assert!(host_modes_for_scenario(Scenario::Matplotlib).is_empty());
+        assert_eq!(host_modes_for_scenario(Scenario::Pandas).len(), 3);
+    }
 }

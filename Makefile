@@ -10,7 +10,7 @@ PERF_JSON ?= target/perf/results.json
 PERF_CSV ?= target/perf/results.csv
 PERF_MD ?= target/perf/results.md
 PYODIDE_VERSION ?= 0.29.4
-PYTHON_VERSION ?= 3.13
+PYTHON_VERSION ?= 3.13.2
 
 help:
 	@printf "Available targets:\n"

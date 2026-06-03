@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::io::{Cursor, Write};
 
 use serde_json::Value;
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 
 use crate::bundle::Bundle;
@@ -151,7 +151,7 @@ fn assemble_inline_bundle(
 ) -> Result<Bundle> {
     let cursor = Cursor::new(Vec::new());
     let mut writer = zip::ZipWriter::new(cursor);
-    let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
 
     let mut seen = HashSet::new();
     for init in init_modules {

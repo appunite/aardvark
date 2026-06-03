@@ -7,6 +7,7 @@ _SCENARIO_MODULES = {
     "numpy": ".numpy",
     "pandas": ".pandas",
     "tensor": ".tensor",
+    "matplotlib": ".matplotlib",
 }
 
 

@@ -6,7 +6,6 @@ use std::convert::TryFrom;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -2144,7 +2143,7 @@ fn native_fetch_callback(
 
     context_state.record_network_contact(&host, port, is_https);
 
-    let response = match ureq::get(&url).call() {
+    let mut response = match ureq::get(&url).call() {
         Ok(resp) => resp,
         Err(err) => {
             tracing::warn!(%url, error = ?err, "native fetch failed");
@@ -2153,21 +2152,27 @@ fn native_fetch_callback(
         }
     };
 
-    let status = response.status();
-    let status_text = response.status_text().to_string();
+    let status = response.status().as_u16();
+    let status_text = response
+        .status()
+        .canonical_reason()
+        .unwrap_or_default()
+        .to_string();
     let mut headers_list = Vec::new();
-    for name in response.headers_names() {
-        if let Some(value) = response.header(&name) {
-            headers_list.push((name.to_ascii_lowercase(), value.to_string()));
+    for (name, value) in response.headers() {
+        if let Ok(value) = value.to_str() {
+            headers_list.push((name.as_str().to_ascii_lowercase(), value.to_string()));
         }
     }
 
-    let mut body = Vec::new();
-    if let Err(err) = response.into_reader().read_to_end(&mut body) {
-        tracing::warn!(%url, error = ?err, "native fetch read failed");
-        rv.set(v8::undefined(scope).into());
-        return;
-    }
+    let body = match response.body_mut().read_to_vec() {
+        Ok(body) => body,
+        Err(err) => {
+            tracing::warn!(%url, error = ?err, "native fetch read failed");
+            rv.set(v8::undefined(scope).into());
+            return;
+        }
+    };
 
     let is_binary = true;
     let backing = v8::ArrayBuffer::new_backing_store_from_vec(body);

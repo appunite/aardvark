@@ -2,6 +2,7 @@ use crate::assets;
 use crate::config::PyRuntimeConfig;
 use crate::error::{PyRunnerError, Result};
 use crate::pyodide::{PYODIDE_ADAPTER_VERSION, PYODIDE_VERSION};
+use hex::ToHex;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -201,7 +202,7 @@ pub fn compute_compatibility_fingerprint(manifest: &PyodideDistributionManifest)
     hasher.update(format!("platform={}\n", manifest.python.platform).as_bytes());
     hasher.update(format!("arch={}\n", manifest.python.arch).as_bytes());
     hasher.update(format!("lockfile={}\n", manifest.lockfile.sha256).as_bytes());
-    format!("sha256:{:x}", hasher.finalize())
+    format!("sha256:{}", hasher.finalize().encode_hex::<String>())
 }
 
 fn verify_manifest_identity(manifest: &PyodideDistributionManifest) -> Result<()> {
@@ -276,7 +277,7 @@ fn external_verification_cache_key(root: &Path, manifest: &PyodideDistributionMa
         hasher.update(expected.as_bytes());
         hasher.update(b"\0");
     }
-    format!("{:x}", hasher.finalize())
+    hasher.finalize().encode_hex::<String>()
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
@@ -286,7 +287,7 @@ fn sha256_file(path: &Path) -> Result<String> {
             path.display()
         ))
     })?;
-    Ok(format!("{:x}", Sha256::digest(&bytes)))
+    Ok(Sha256::digest(&bytes).encode_hex::<String>())
 }
 
 fn normalize_sha256(value: &str) -> String {

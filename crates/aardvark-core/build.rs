@@ -105,19 +105,23 @@ fn download_pyodide_archive(spec: &PyodideArchiveSpec) -> Result<PathBuf> {
     fs::create_dir_all(&tmp_dir)?;
     let archive_path = tmp_dir.join("pyodide.tar.bz2");
 
-    let agent: Agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(120))
-        .timeout_read(Duration::from_secs(120))
-        .timeout_write(Duration::from_secs(120))
-        .build();
+    let timeout = Some(Duration::from_secs(120));
+    let agent: Agent = Agent::config_builder()
+        .timeout_global(None)
+        .timeout_send_request(timeout)
+        .timeout_send_body(timeout)
+        .timeout_recv_response(timeout)
+        .timeout_recv_body(timeout)
+        .build()
+        .into();
     let url = spec.download_url();
     let mut response = agent
         .get(&url)
         .call()
-        .with_context(|| format!("downloading {}", url))?
-        .into_reader();
+        .with_context(|| format!("downloading {}", url))?;
+    let mut reader = response.body_mut().as_reader();
     let mut file = fs::File::create(&archive_path)?;
-    io::copy(&mut response, &mut file)?;
+    io::copy(&mut reader, &mut file)?;
 
     verify_sha256(&archive_path, spec.sha256)?;
     Ok(archive_path)
@@ -496,7 +500,10 @@ fn compute_distribution_fingerprint(manifest: &serde_json::Value) -> Result<Stri
     hasher.update(format!("platform={platform}\n").as_bytes());
     hasher.update(format!("arch={arch}\n").as_bytes());
     hasher.update(format!("lockfile={lock_sha}\n").as_bytes());
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    Ok(format!(
+        "sha256:{}",
+        hasher.finalize().encode_hex::<String>()
+    ))
 }
 
 fn json_str<'a>(value: &'a serde_json::Value, key: &str) -> Result<&'a str> {

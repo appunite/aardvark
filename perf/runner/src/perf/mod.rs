@@ -16,6 +16,10 @@ pub fn tensor_script() -> &'static str {
     include_str!("../../../fixtures/scenarios/tensor.py")
 }
 
+pub fn matplotlib_script() -> &'static str {
+    include_str!("../../../fixtures/scenarios/matplotlib.py")
+}
+
 pub fn echo_payload(profile: LoadProfile) -> Option<&'static [u8]> {
     match profile {
         LoadProfile::None => None,
@@ -51,6 +55,21 @@ pub fn pandas_rows(profile: LoadProfile) -> Option<u64> {
         ))),
         LoadProfile::High => Some(parse_u64(include_str!(
             "../../../fixtures/inputs/pandas_high.txt"
+        ))),
+    }
+}
+
+pub fn matplotlib_points(profile: LoadProfile) -> Option<u64> {
+    match profile {
+        LoadProfile::None => None,
+        LoadProfile::Low => Some(parse_u64(include_str!(
+            "../../../fixtures/inputs/matplotlib_low.txt"
+        ))),
+        LoadProfile::Medium => Some(parse_u64(include_str!(
+            "../../../fixtures/inputs/matplotlib_medium.txt"
+        ))),
+        LoadProfile::High => Some(parse_u64(include_str!(
+            "../../../fixtures/inputs/matplotlib_high.txt"
         ))),
     }
 }

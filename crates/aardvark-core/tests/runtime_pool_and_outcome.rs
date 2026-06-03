@@ -20,7 +20,7 @@ use std::env;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 
 #[test]
@@ -2847,7 +2847,7 @@ fn bundle_with_main(code: &str) -> Bundle {
     writer
         .start_file(
             "main.py",
-            FileOptions::default().compression_method(CompressionMethod::Stored),
+            SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
         )
         .expect("failed to start bundle entry");
     writer
@@ -2865,7 +2865,7 @@ fn bundle_with_main_and_manifest(code: &str, manifest: &str) -> Bundle {
     writer
         .start_file(
             "main.py",
-            FileOptions::default().compression_method(CompressionMethod::Stored),
+            SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
         )
         .expect("failed to start main entry");
     writer
@@ -2875,7 +2875,7 @@ fn bundle_with_main_and_manifest(code: &str, manifest: &str) -> Bundle {
     writer
         .start_file(
             "aardvark.manifest.json",
-            FileOptions::default().compression_method(CompressionMethod::Stored),
+            SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
         )
         .expect("failed to start manifest entry");
     writer
@@ -2894,7 +2894,7 @@ fn bundle_with_js_main_and_manifest(code: &str, manifest: &str) -> Bundle {
     writer
         .start_file(
             "main.js",
-            FileOptions::default().compression_method(CompressionMethod::Stored),
+            SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
         )
         .expect("failed to start main.js entry");
     writer
@@ -2904,7 +2904,7 @@ fn bundle_with_js_main_and_manifest(code: &str, manifest: &str) -> Bundle {
     writer
         .start_file(
             "aardvark.manifest.json",
-            FileOptions::default().compression_method(CompressionMethod::Stored),
+            SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
         )
         .expect("failed to start manifest entry");
     writer

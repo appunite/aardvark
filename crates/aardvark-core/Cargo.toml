@@ -22,15 +22,16 @@ once_cell.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10"
+hex = "0.4"
+sha2 = "0.11"
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 v8.workspace = true
 zip.workspace = true
 timezone_provider.workspace = true
-ureq = { version = "2.10", features = ["tls"] }
-capnp = "0.18"
+ureq = "3.3"
+capnp = "0.25"
 libc.workspace = true
 url.workspace = true
 walkdir.workspace = true
@@ -39,15 +40,15 @@ hdrhistogram.workspace = true
 
 [build-dependencies]
 anyhow = "1.0"
-bzip2 = "0.4"
+bzip2 = "0.6"
 hex = "0.4"
 serde_json.workspace = true
-sha2 = "0.10"
+sha2 = "0.11"
 tar = "0.4"
-ureq = { version = "2.10", features = ["tls"] }
+ureq = "3.3"
 
 [dev-dependencies]
-tempfile = "3.10"
+tempfile = "3.27"
 
 [package.metadata.docs.rs]
 features = ["docsrs"]

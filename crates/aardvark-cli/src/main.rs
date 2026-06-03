@@ -26,13 +26,14 @@ use aardvark_core::{
 use anyhow::{anyhow, bail, Context, Result};
 use bzip2::read::BzDecoder;
 use clap::{Parser, Subcommand, ValueEnum};
+use hex::ToHex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map as JsonMap, Value};
 use sha2::{Digest, Sha256};
 use tar::Archive;
 use tracing::{debug, info, info_span, warn, Level};
 use tracing_subscriber::FmtSubscriber;
-use ureq::{Agent, AgentBuilder};
+use ureq::Agent;
 
 const DEFAULT_ENTRYPOINT: &str = "main:handler";
 
@@ -438,7 +439,7 @@ fn main() -> Result<()> {
                             .filter(|value| !value.is_empty())
                             .unwrap_or_else(|| {
                                 let digest_bytes = Sha256::digest(&blob.bytes);
-                                format!("sha256:{:x}", digest_bytes)
+                                format!("sha256:{}", digest_bytes.encode_hex::<String>())
                             });
                         let file_name = overlay_blob_filename(&digest);
                         let target_path = cache_config.root.join(&file_name);
@@ -982,7 +983,7 @@ fn normalize_sha256_digest(digest: &str) -> Option<String> {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
-    format!("{:x}", digest)
+    digest.encode_hex::<String>()
 }
 
 fn validate_blob_bytes(bytes: &[u8], digest: &str) -> Result<()> {
@@ -1015,7 +1016,7 @@ fn validate_blob_file(path: &Path, digest: &str) -> Result<()> {
         }
         hasher.update(&buffer[..read]);
     }
-    let actual = format!("{:x}", hasher.finalize());
+    let actual = hasher.finalize().encode_hex::<String>();
     if actual != expected {
         bail!("overlay blob digest mismatch (expected sha256:{expected}, found sha256:{actual})");
     }
@@ -2255,7 +2256,7 @@ fn sha256_file_hex(path: &Path) -> Result<String> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hasher.finalize().encode_hex::<String>())
 }
 
 fn prepare_output_dir(output: &Path, force: bool) -> Result<()> {
@@ -2278,20 +2279,24 @@ fn download_variant_archive(variant: StageVariant, workspace: &Path) -> Result<P
     fs::create_dir_all(workspace)
         .with_context(|| format!("failed to create {}", workspace.display()))?;
     let archive_path = workspace.join(variant.archive_name());
-    let agent: Agent = AgentBuilder::new()
-        .timeout(Duration::from_secs(120))
-        .timeout_read(Duration::from_secs(120))
-        .timeout_write(Duration::from_secs(120))
-        .build();
+    let timeout = Some(Duration::from_secs(120));
+    let agent: Agent = Agent::config_builder()
+        .timeout_global(None)
+        .timeout_send_request(timeout)
+        .timeout_send_body(timeout)
+        .timeout_recv_response(timeout)
+        .timeout_recv_body(timeout)
+        .build()
+        .into();
     let url = variant.archive_url();
     let mut response = agent
         .get(&url)
         .call()
-        .with_context(|| format!("downloading {url}"))?
-        .into_reader();
+        .with_context(|| format!("downloading {url}"))?;
+    let mut reader = response.body_mut().as_reader();
     let mut file = File::create(&archive_path)
         .with_context(|| format!("create {}", archive_path.display()))?;
-    std::io::copy(&mut response, &mut file)
+    std::io::copy(&mut reader, &mut file)
         .with_context(|| format!("write {}", archive_path.display()))?;
     verify_sha256(&archive_path, variant.expected_sha())?;
     Ok(archive_path)
@@ -2363,7 +2368,7 @@ fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
         hasher.update(&buf[..n]);
     }
     let digest = hasher.finalize();
-    let actual = format!("{:x}", digest);
+    let actual = digest.encode_hex::<String>();
     if actual != expected {
         bail!(
             "checksum mismatch for {}: expected {}, got {}",
@@ -2448,7 +2453,7 @@ mod tests {
     #[test]
     fn validate_blob_bytes_checks_digest() {
         let data = b"hello world";
-        let digest = format!("sha256:{:x}", Sha256::digest(data));
+        let digest = format!("sha256:{}", Sha256::digest(data).encode_hex::<String>());
         assert!(validate_blob_bytes(data, &digest).is_ok());
         let bad_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
         assert!(validate_blob_bytes(data, bad_digest).is_err());
