@@ -294,10 +294,31 @@ echo "  iterations=$ITERATIONS"
 echo "  warmup=$WARMUP"
 echo "  max ratio=$MAX_RATIO"
 
+UPSTREAM_V8_ENV_UNSETS=(
+  -u RUSTY_V8_ARCHIVE
+  -u RUSTY_V8_MIRROR
+  -u RUSTY_V8_SRC_BINDING_PATH
+  -u V8_FROM_SOURCE
+  -u GN_ARGS
+  -u EXTRA_GN_ARGS
+  -u PRINT_GN_ARGS
+  -u V8_FORCE_DEBUG
+)
+
+CUSTOM_V8_ENV_UNSETS=(
+  -u RUSTY_V8_MIRROR
+  -u RUSTY_V8_SRC_BINDING_PATH
+  -u V8_FROM_SOURCE
+  -u GN_ARGS
+  -u EXTRA_GN_ARGS
+  -u PRINT_GN_ARGS
+  -u V8_FORCE_DEBUG
+)
+
 (
   cd "$WORK_DIR"
-  env -u RUSTY_V8_ARCHIVE CARGO_TARGET_DIR="$WORK_DIR/target-upstream" cargo build -p v8_bench --release
-  RUSTY_V8_ARCHIVE="$ARCHIVE" CARGO_TARGET_DIR="$WORK_DIR/target-custom" cargo build -p v8_bench --release
+  env "${UPSTREAM_V8_ENV_UNSETS[@]}" CARGO_TARGET_DIR="$WORK_DIR/target-upstream" cargo build -p v8_bench --release
+  env "${CUSTOM_V8_ENV_UNSETS[@]}" RUSTY_V8_ARCHIVE="$ARCHIVE" CARGO_TARGET_DIR="$WORK_DIR/target-custom" cargo build -p v8_bench --release
   AARDVARK_V8_BENCH_ITERATIONS="$ITERATIONS" AARDVARK_V8_BENCH_WARMUP="$WARMUP" \
     "$WORK_DIR/target-upstream/release/v8_bench" > "$OUT_DIR/upstream.csv"
   AARDVARK_V8_BENCH_ITERATIONS="$ITERATIONS" AARDVARK_V8_BENCH_WARMUP="$WARMUP" \
