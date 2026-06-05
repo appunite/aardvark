@@ -2,7 +2,7 @@
 
 This guide shows how to embed `aardvark-core` in a Rust service. It covers runtime setup, bundle execution, pooling, and error handling. Everything here is **experimental** and likely to change; use it for prototypes rather than production traffic.
 
-The same surface runs JavaScript bundles: set `InvocationDescriptor::runtime.language` or add `"runtime": {"language": "javascript"}` to the manifest. JavaScript bundles must ship their own modules; the runtime never resolves npm packages.
+The same surface runs JavaScript bundles: set `InvocationDescriptor::language` or add `"runtime": {"language": "javascript"}` to the manifest. JavaScript bundles must ship their own modules; the runtime never resolves npm packages.
 
 ## Adding the dependency
 
@@ -38,6 +38,31 @@ let config = PyRuntimeConfig::default()
 The `core` variant is useful for runtimes that do not need the full wheel set.
 Package loading is resolved exclusively through the verified distribution; flat
 wheel-cache directories are not a supported runtime contract.
+
+For most services, keep ZIP bundles self-describing with
+`aardvark.manifest.json`, then create a warmed registry using a runtime config
+that points at the staged distribution:
+
+```rust
+use aardvark_core::{
+    BundlePoolRegistry, IsolateConfig, PoolOptions, PyRuntimeConfig,
+};
+
+let runtime = PyRuntimeConfig::default()
+    .with_pyodide_dist_dir(".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full");
+let registry = BundlePoolRegistry::new(PoolOptions {
+    isolate: IsolateConfig {
+        runtime,
+        ..IsolateConfig::default()
+    },
+    desired_size: 1,
+    max_size: 4,
+    ..PoolOptions::default()
+})?;
+
+let prepared = registry.prepare_default_handler_for_bytes(bundle_bytes)?;
+let outcome = prepared.call_default()?;
+```
 
 For workload-specific distributions, register profile labels and let bundle
 manifests request them through `runtime.pyodide.profile`:
@@ -130,14 +155,20 @@ let outcome = runtime.run_session(&session)?;
 ```rust
 use aardvark_core::{
     persistent::{BundleArtifact, BundleHandle, HandlerSession, PythonIsolate},
-    IsolateConfig,
+    IsolateConfig, PyRuntimeConfig,
 };
 
-fn build_isolate(bytes: &[u8]) -> anyhow::Result<(PythonIsolate, HandlerSession)> {
+fn build_isolate(
+    bytes: &[u8],
+    pyodide_dist_dir: impl Into<std::path::PathBuf>,
+) -> anyhow::Result<(PythonIsolate, HandlerSession)> {
     let artifact = BundleArtifact::from_bytes(bytes)?;
     let handle = BundleHandle::from_artifact(artifact.clone());
 
-    let mut isolate = PythonIsolate::new(IsolateConfig::default())?;
+    let mut isolate = PythonIsolate::new(IsolateConfig {
+        runtime: PyRuntimeConfig::default().with_pyodide_dist_dir(pyodide_dist_dir),
+        ..IsolateConfig::default()
+    })?;
     isolate.load_bundle(&handle)?; // optional warm-up
 
     let handler = handle.prepare_default_handler();
@@ -175,10 +206,14 @@ Key knobs via `IsolateConfig` / `PyRuntimeConfig`:
 ```rust
 use aardvark_core::{
     BundleArtifact, BundleHandle, InlinePythonOptions, IsolateConfig, ManifestCpuResources,
-    ManifestResources, PythonIsolate,
+    ManifestResources, PyRuntimeConfig, PythonIsolate,
 };
 
-let mut isolate = PythonIsolate::new(IsolateConfig::default())?;
+let mut isolate = PythonIsolate::new(IsolateConfig {
+    runtime: PyRuntimeConfig::default()
+        .with_pyodide_dist_dir(".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full"),
+    ..IsolateConfig::default()
+})?;
 let mut options = InlinePythonOptions::default();
 options.entrypoint = Some("main:handler".into());
 options.packages = vec!["numpy".into()];
@@ -206,7 +241,11 @@ If you want to reuse the inline handler across isolates or pools, build a `Bundl
 let artifact = BundleArtifact::from_inline_python(script, InlinePythonOptions::default())?;
 let handle = BundleHandle::from_artifact(artifact.clone());
 let handler = handle.prepare_default_handler();
-let mut isolate = PythonIsolate::new(IsolateConfig::default())?;
+let mut isolate = PythonIsolate::new(IsolateConfig {
+    runtime: PyRuntimeConfig::default()
+        .with_pyodide_dist_dir(".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full"),
+    ..IsolateConfig::default()
+})?;
 isolate.load_bundle(&handle)?;
 let outcome = handler.invoke(&mut isolate)?;
 ```

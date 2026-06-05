@@ -26,25 +26,23 @@ The CLI is intended for local smoke tests and debugging; production setups shoul
 cargo run -p aardvark-cli -- assets stage --variant full
 AARDVARK_PYODIDE_DIST_DIR=.aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full \
   cargo run -p aardvark-cli -- \
-  --bundle example/numpy_bundle.zip \
-  --entrypoint main:main \
-  --package numpy
+  --bundle example/numpy_bundle.zip
 ```
 
-To preload packages, point the runtime at a verified Aardvark Pyodide
-distribution:
+Each example bundle includes `aardvark.manifest.json`, so the CLI can read the
+entrypoint and package list from the ZIP. To smoke a larger package set, point
+the runtime at the same staged distribution and run another manifest-backed
+bundle:
 
 ```
 AARDVARK_PYODIDE_DIST_DIR=.aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full \
   cargo run -p aardvark-cli -- \
-  --bundle example/pandas_numpy_bundle.zip \
-  --entrypoint main:main \
-  --package numpy \
-  --package pandas
+  --bundle example/pandas_numpy_bundle.zip
 ```
 
-Those `--package` flags instruct the runtime to install `numpy` and `pandas`
-before executing the handler.
+Use `--entrypoint` or `--package` only as local debugging overrides for
+manifest-less bundles or one-off experiments. Production bundles should carry
+their entrypoint and package requirements in the manifest.
 
 ### Preparing [Pyodide](https://pyodide.org/) assets
 
@@ -93,28 +91,27 @@ Prefer to run the underlying cross-compiles yourself?
 ```rust
 use aardvark_core::{
     persistent::{BundleArtifact, BundleHandle, HandlerSession, PythonIsolate},
-    IsolateConfig,
+    ExecutionOutcome, IsolateConfig, PyRuntimeConfig,
 };
 
-fn execute(bundle_bytes: &[u8]) -> anyhow::Result<String> {
+fn execute(
+    bundle_bytes: &[u8],
+    pyodide_dist_dir: impl Into<std::path::PathBuf>,
+) -> anyhow::Result<ExecutionOutcome> {
     // Parse once; cloning `BundleArtifact` is cheap because entries are shared internally.
     let artifact = BundleArtifact::from_bytes(bundle_bytes)?;
 
-    let mut isolate = PythonIsolate::new(IsolateConfig::default())?;
+    let mut isolate = PythonIsolate::new(IsolateConfig {
+        runtime: PyRuntimeConfig::default().with_pyodide_dist_dir(pyodide_dist_dir),
+        ..IsolateConfig::default()
+    })?;
     // Optionally pre-load the bundle so imports and package setup happen before the first call.
     let handle = BundleHandle::from_artifact(artifact.clone());
     isolate.load_bundle(&handle)?;
 
     // Prepare a handler session (reuse it across invocations).
     let handler: HandlerSession = handle.prepare_default_handler();
-    let outcome = handler.invoke(&mut isolate)?;
-    Ok(outcome
-        .payload()
-        .and_then(|payload| match payload {
-            aardvark_core::ResultPayload::Text(text) => Some(text.clone()),
-            _ => None,
-        })
-        .unwrap_or_default())
+    Ok(handler.invoke(&mut isolate)?)
 }
 ```
 
@@ -128,12 +125,20 @@ use std::sync::Arc;
 use aardvark_core::persistent::{
     BundleArtifact, BundlePool, LifecycleHooks, PoolOptions, QueueMode,
 };
+use aardvark_core::{IsolateConfig, PyRuntimeConfig};
 
-fn pool_example(bundle_bytes: &[u8]) -> anyhow::Result<()> {
+fn pool_example(
+    bundle_bytes: &[u8],
+    pyodide_dist_dir: impl Into<std::path::PathBuf>,
+) -> anyhow::Result<()> {
     let artifact = BundleArtifact::from_bytes(bundle_bytes)?;
     let pool = BundlePool::from_artifact(
         artifact.clone(),
         PoolOptions {
+            isolate: IsolateConfig {
+                runtime: PyRuntimeConfig::default().with_pyodide_dist_dir(pyodide_dist_dir),
+                ..IsolateConfig::default()
+            },
             desired_size: 2,
             max_size: 4,
             queue_mode: QueueMode::Block,
@@ -150,8 +155,7 @@ fn pool_example(bundle_bytes: &[u8]) -> anyhow::Result<()> {
         },
     )?;
 
-    let handle = pool.handle();
-    let handler = handle.prepare_default_handler();
+    let handler = pool.prepare_default_handler()?;
 
     let outcome = pool.call_default(&handler)?;
     tracing::info!(

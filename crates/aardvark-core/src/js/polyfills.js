@@ -1,6 +1,10 @@
 // Minimal host polyfills for the Pyodide runtime environment.
 globalThis.self = globalThis;
 
+if (typeof globalThis.crossOriginIsolated === "undefined") {
+  globalThis.crossOriginIsolated = false;
+}
+
 const __pyRunnerForwardLogFactory = (stream) => (...args) => {
   const message = args
     .map((value) => {
@@ -355,6 +359,396 @@ if (!globalThis.fetch) {
 
     return response;
   };
+}
+
+if (typeof globalThis.XMLHttpRequest !== "function") {
+  const XHR_UNSENT = 0;
+  const XHR_OPENED = 1;
+  const XHR_HEADERS_RECEIVED = 2;
+  const XHR_LOADING = 3;
+  const XHR_DONE = 4;
+
+  const createXhrError = (name, message) => {
+    const error = new Error(message);
+    error.name = name;
+    return error;
+  };
+
+  const xhrCloneBuffer = (view) => {
+    if (view instanceof Uint8Array) {
+      return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+    }
+    if (ArrayBuffer.isView(view)) {
+      return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+    }
+    if (view instanceof ArrayBuffer) {
+      return view.slice(0);
+    }
+    if (typeof view === "string") {
+      return new TextEncoder().encode(view).buffer;
+    }
+    return new Uint8Array(0).buffer;
+  };
+
+  const xhrBytesFromBody = (body, binaryHint = true) => {
+    if (body instanceof Uint8Array) {
+      return new Uint8Array(xhrCloneBuffer(body));
+    }
+    if (ArrayBuffer.isView(body)) {
+      return new Uint8Array(xhrCloneBuffer(body));
+    }
+    if (body instanceof ArrayBuffer) {
+      return new Uint8Array(body.slice(0));
+    }
+    if (typeof body === "string") {
+      return new TextEncoder().encode(body);
+    }
+    if (!body) {
+      return new Uint8Array(0);
+    }
+    if (binaryHint && typeof body.length === "number") {
+      try {
+        return new Uint8Array(body);
+      } catch (_err) {
+        // fall through to string conversion
+      }
+    }
+    return new TextEncoder().encode(String(body));
+  };
+
+  const xhrHeadersFromResponse = (response) => {
+    const headers = new Map();
+    const addHeader = (name, value) => {
+      if (name == null || value == null) {
+        return;
+      }
+      headers.set(String(name).toLowerCase(), String(value));
+    };
+
+    if (Array.isArray(response?.headers)) {
+      for (const entry of response.headers) {
+        if (Array.isArray(entry) && entry.length >= 2) {
+          addHeader(entry[0], entry[1]);
+        }
+      }
+    } else if (response?.headers && typeof response.headers.entries === "function") {
+      for (const [name, value] of response.headers.entries()) {
+        addHeader(name, value);
+      }
+    } else if (response?.headers && typeof response.headers === "object") {
+      for (const name of Object.keys(response.headers)) {
+        addHeader(name, response.headers[name]);
+      }
+    }
+
+    if (response?.contentType && !headers.has("content-type")) {
+      addHeader("content-type", response.contentType);
+    }
+    return headers;
+  };
+
+  const parseDataUrlForXhr = (href) => {
+    const comma = href.indexOf(",");
+    if (comma === -1) {
+      throw createXhrError("NetworkError", "invalid data URL");
+    }
+    const meta = href.slice(5, comma);
+    const payload = href.slice(comma + 1);
+    const contentType = meta.split(";")[0] || "text/plain;charset=US-ASCII";
+    const isBase64 = /(?:^|;)base64(?:;|$)/i.test(meta);
+    let bytes;
+    if (isBase64) {
+      const decoded = atob(payload);
+      bytes = new Uint8Array(decoded.length);
+      for (let i = 0; i < decoded.length; i += 1) {
+        bytes[i] = decoded.charCodeAt(i);
+      }
+    } else {
+      let text;
+      try {
+        text = decodeURIComponent(payload);
+      } catch (_err) {
+        text = payload;
+      }
+      bytes = new TextEncoder().encode(text);
+    }
+    return {
+      status: 200,
+      statusText: "OK",
+      url: href,
+      binary: true,
+      body: bytes,
+      headers: [["content-type", contentType]],
+      contentType,
+    };
+  };
+
+  const resolveXhrResponse = (url, init) => {
+    if (/^data:/i.test(String(url ?? ""))) {
+      return parseDataUrlForXhr(String(url));
+    }
+
+    const { key, href } = __pyRunnerResolveAsset(url);
+    if (/^data:/i.test(href)) {
+      return parseDataUrlForXhr(href);
+    }
+
+    const asset =
+      globalThis.__pyRunnerFetchAsset(key) ??
+      globalThis.__pyRunnerFetchAsset(href);
+    if (asset) {
+      const contentType = asset.contentType ??
+        (asset.kind === "binary" ? "application/octet-stream" : "text/plain; charset=utf-8");
+      return {
+        status: asset.status ?? 200,
+        statusText: asset.statusText ?? "OK",
+        url: href,
+        binary: asset.kind === "binary",
+        body: asset.data,
+        headers: asset.headers ?? [["content-type", contentType]],
+        contentType,
+      };
+    }
+
+    if (/^https?:/i.test(href) && typeof globalThis.__pyRunnerNativeFetch === "function") {
+      const response = globalThis.__pyRunnerNativeFetch(href, init);
+      if (response) {
+        return response;
+      }
+    }
+
+    throw createXhrError("NetworkError", `XMLHttpRequest failed for ${href}`);
+  };
+
+  class XMLHttpRequestPolyfill {
+    constructor() {
+      this.readyState = XHR_UNSENT;
+      this.response = null;
+      this.responseText = "";
+      this.responseType = "";
+      this.responseURL = "";
+      this.status = 0;
+      this.statusText = "";
+      this.timeout = 0;
+      this.withCredentials = false;
+      this.onreadystatechange = null;
+      this.onload = null;
+      this.onerror = null;
+      this.onabort = null;
+      this.onloadend = null;
+      this._listeners = new Map();
+      this._headers = new Map();
+      this._responseHeaders = new Map();
+      this._method = "GET";
+      this._url = "";
+      this._async = true;
+      this._aborted = false;
+    }
+
+    static new() {
+      return new XMLHttpRequestPolyfill();
+    }
+
+    open(method, url, async = true) {
+      this._method = String(method || "GET").toUpperCase();
+      this._url = String(url ?? "");
+      this._async = async !== false;
+      this._headers.clear();
+      this._responseHeaders.clear();
+      this._aborted = false;
+      this.status = 0;
+      this.statusText = "";
+      this.response = null;
+      this.responseText = "";
+      this.responseURL = "";
+      this._setReadyState(XHR_OPENED);
+    }
+
+    setRequestHeader(name, value) {
+      if (this.readyState !== XHR_OPENED) {
+        throw createXhrError("InvalidStateError", "XMLHttpRequest is not open");
+      }
+      const key = String(name);
+      const existing = this._headers.get(key);
+      this._headers.set(key, existing ? `${existing}, ${value}` : String(value));
+    }
+
+    send(body = null) {
+      if (this.readyState !== XHR_OPENED) {
+        throw createXhrError("InvalidStateError", "XMLHttpRequest is not open");
+      }
+
+      const init = {
+        method: this._method,
+        headers: Array.from(this._headers.entries()),
+        body,
+      };
+
+      const perform = () => {
+        if (this._aborted) {
+          return;
+        }
+        try {
+          const response = resolveXhrResponse(this._url, init);
+          if (response && typeof response.then === "function") {
+            response.then(
+              (resolved) => this._complete(resolved),
+              (error) => this._fail(error),
+            );
+          } else {
+            this._complete(response);
+          }
+        } catch (error) {
+          const xhrError =
+            error && typeof error === "object" && error.name
+              ? error
+              : createXhrError(
+                  "NetworkError",
+                  error && typeof error === "object" && "message" in error
+                    ? error.message
+                    : String(error),
+                );
+          this._fail(xhrError);
+          throw xhrError;
+        }
+      };
+
+      if (this._async) {
+        queueMicrotask(() => {
+          try {
+            perform();
+          } catch (_err) {
+            // Async XHR reports network errors through events, not a thrown send().
+          }
+        });
+        return;
+      }
+
+      perform();
+    }
+
+    abort() {
+      this._aborted = true;
+      this.status = 0;
+      this.statusText = "";
+      this.response = null;
+      this.responseText = "";
+      this._setReadyState(XHR_DONE);
+      this._dispatch("abort");
+      this._dispatch("loadend");
+    }
+
+    getResponseHeader(name) {
+      if (this.readyState < XHR_HEADERS_RECEIVED) {
+        return null;
+      }
+      const normalized = String(name ?? "").toLowerCase();
+      return this._responseHeaders.has(normalized)
+        ? this._responseHeaders.get(normalized)
+        : null;
+    }
+
+    getAllResponseHeaders() {
+      if (this.readyState < XHR_HEADERS_RECEIVED) {
+        return "";
+      }
+      let output = "";
+      for (const [name, value] of this._responseHeaders.entries()) {
+        output += `${name}: ${value}\r\n`;
+      }
+      return output;
+    }
+
+    overrideMimeType(_mimeType) {
+      // MIME override does not affect the current in-memory response model.
+    }
+
+    addEventListener(type, listener) {
+      if (typeof listener !== "function") {
+        return;
+      }
+      const key = String(type);
+      const listeners = this._listeners.get(key) ?? new Set();
+      listeners.add(listener);
+      this._listeners.set(key, listeners);
+    }
+
+    removeEventListener(type, listener) {
+      this._listeners.get(String(type))?.delete(listener);
+    }
+
+    _complete(response) {
+      this.status = Number(response?.status ?? 0);
+      this.statusText = String(response?.statusText ?? "");
+      this.responseURL = String(response?.url ?? this._url);
+      this._responseHeaders = xhrHeadersFromResponse(response);
+      this._setReadyState(XHR_HEADERS_RECEIVED);
+
+      const bytes = xhrBytesFromBody(response?.body, response?.binary !== false);
+      const text = new TextDecoder("utf-8").decode(bytes);
+      this.responseText = text;
+      if (this.responseType === "arraybuffer") {
+        this.response = xhrCloneBuffer(bytes);
+      } else if (this.responseType === "json") {
+        this.response = text ? JSON.parse(text) : null;
+      } else {
+        this.response = text;
+      }
+
+      this._setReadyState(XHR_LOADING);
+      this._setReadyState(XHR_DONE);
+      this._dispatch("load");
+      this._dispatch("loadend");
+    }
+
+    _fail(error) {
+      this.status = 0;
+      this.statusText = "";
+      this.response = null;
+      this.responseText = "";
+      this._responseHeaders.clear();
+      this._setReadyState(XHR_DONE);
+      this._dispatch("error", error);
+      this._dispatch("loadend", error);
+    }
+
+    _setReadyState(state) {
+      this.readyState = state;
+      this._dispatch("readystatechange");
+    }
+
+    _dispatch(type, error = null) {
+      const event = {
+        type,
+        target: this,
+        currentTarget: this,
+        error,
+      };
+      const handler = this[`on${type}`];
+      if (typeof handler === "function") {
+        handler.call(this, event);
+      }
+      const listeners = this._listeners.get(type);
+      if (listeners) {
+        for (const listener of Array.from(listeners)) {
+          listener.call(this, event);
+        }
+      }
+    }
+  }
+
+  XMLHttpRequestPolyfill.UNSENT = XHR_UNSENT;
+  XMLHttpRequestPolyfill.OPENED = XHR_OPENED;
+  XMLHttpRequestPolyfill.HEADERS_RECEIVED = XHR_HEADERS_RECEIVED;
+  XMLHttpRequestPolyfill.LOADING = XHR_LOADING;
+  XMLHttpRequestPolyfill.DONE = XHR_DONE;
+  XMLHttpRequestPolyfill.prototype.UNSENT = XHR_UNSENT;
+  XMLHttpRequestPolyfill.prototype.OPENED = XHR_OPENED;
+  XMLHttpRequestPolyfill.prototype.HEADERS_RECEIVED = XHR_HEADERS_RECEIVED;
+  XMLHttpRequestPolyfill.prototype.LOADING = XHR_LOADING;
+  XMLHttpRequestPolyfill.prototype.DONE = XHR_DONE;
+
+  globalThis.XMLHttpRequest = XMLHttpRequestPolyfill;
 }
 
 if (typeof globalThis.importScripts !== "function") {

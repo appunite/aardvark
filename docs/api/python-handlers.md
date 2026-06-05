@@ -103,7 +103,8 @@ For zero-copy outputs, allocate buffers via `builtins.__aardvark_output_buffer(s
 
 ## Testing handlers locally
 
-- Use the CLI to load your bundle: `cargo run -p aardvark-cli -- --bundle my_bundle.zip --entrypoint main:main`.
+- Use the CLI to load a manifest-backed bundle: `cargo run -p aardvark-cli -- --bundle my_bundle.zip`.
+- Use `--entrypoint` only when testing descriptor-only or manifest-less bundles.
 - Use `--execution-backend warmed-host` to smoke the warmed Pyodide/V8 host path through the CLI. This backend uses manifest packages and does not support explicit `--package`, `--snapshot`, or `--write-snapshot` overrides; use the default direct backend for those one-shot options.
 - Provide `--descriptor` when testing descriptor-only bundles.
 - For unit tests, load the same module under CPython and invoke the handler with representative payloads. Ensure any [Pyodide](https://pyodide.org/)-specific APIs are guarded behind runtime checks.

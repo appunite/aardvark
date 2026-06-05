@@ -2,9 +2,11 @@ use aardvark_core::{
     config::PyRuntimeConfig,
     invocation::{InvocationDescriptor, InvocationLimits},
     outcome::{FailureKind, OutcomeStatus, ResultPayload},
+    strategy::JsonInvocationStrategy,
     Bundle, ExecutionOutcome, PyRunnerError, PyRuntime, Result,
 };
-use std::io::Write;
+use serde_json::json;
+use std::{env, io::Write, path::PathBuf};
 use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 
@@ -339,6 +341,56 @@ fn diagnostics_capture_resource_usage() -> Result<()> {
 }
 
 #[test]
+fn pyodide_pyxhr_uses_xmlhttprequest_polyfill() -> Result<()> {
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let bundle = bundle_with_main(PYODIDE_PYXHR_SCRIPT);
+    let session = runtime.prepare_session(bundle, "main:main")?;
+    let mut strategy = JsonInvocationStrategy::new(None);
+    let outcome = runtime.run_session_with_strategy(&session, &mut strategy)?;
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => {
+            assert_eq!(value["status"], json!(200));
+            assert_eq!(value["text"], json!("Hello from XHR"));
+            assert_eq!(value["content_type"], json!("text/plain"));
+        }
+        other => panic!(
+            "expected json payload, got {:?}; status {:?}; stdout {:?}; stderr {:?}",
+            other, outcome.status, outcome.diagnostics.stdout, outcome.diagnostics.stderr
+        ),
+    }
+    Ok(())
+}
+
+#[test]
+fn pyodide_http_patch_all_uses_xmlhttprequest_polyfill() -> Result<()> {
+    let Some(runtime_config) = runtime_config_with_pyodide_dist() else {
+        return Ok(());
+    };
+    let mut runtime = PyRuntime::new(runtime_config)?;
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:main",
+        "packages": ["pyodide-http"],
+        "runtime": {"language": "python"}
+    }"#;
+    let bundle = bundle_with_main_and_manifest(PYODIDE_HTTP_PATCH_ALL_SCRIPT, manifest);
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let mut strategy = JsonInvocationStrategy::new(None);
+    let outcome = runtime.run_session_with_strategy(&session, &mut strategy)?;
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => {
+            assert_eq!(value["should_patch"], json!(true));
+            assert_eq!(value["body"], json!("Hello from pyodide-http"));
+        }
+        other => panic!(
+            "expected json payload, got {:?}; status {:?}; stdout {:?}; stderr {:?}",
+            other, outcome.status, outcome.diagnostics.stdout, outcome.diagnostics.stderr
+        ),
+    }
+    Ok(())
+}
+
+#[test]
 fn host_capability_gates_rawctx_buffers() -> Result<()> {
     let mut runtime_allowed = PyRuntime::new(PyRuntimeConfig::default())?;
     let allowed = run_main(&mut runtime_allowed, RAWCTX_PUBLISH_SCRIPT)?;
@@ -523,6 +575,37 @@ fn bundle_with_main_and_manifest(code: &str, manifest: &str) -> Bundle {
     Bundle::from_zip_bytes(cursor.into_inner()).expect("failed to parse bundle")
 }
 
+fn runtime_config_with_pyodide_dist() -> Option<PyRuntimeConfig> {
+    let dist_dir = pyodide_dist_dir();
+    if !dist_dir.exists() {
+        eprintln!(
+            "skipping pyodide-http package test; expected Pyodide distribution at {:?}; set AARDVARK_PYODIDE_DIST_DIR or run `cargo run -p aardvark-cli -- assets stage --variant full`",
+            dist_dir
+        );
+        return None;
+    }
+    Some(PyRuntimeConfig::default().with_pyodide_dist_dir(dist_dir))
+}
+
+fn pyodide_dist_dir() -> PathBuf {
+    env::var_os("AARDVARK_PYODIDE_DIST_DIR").map_or_else(
+        || {
+            workspace_root()
+                .join(".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full")
+        },
+        PathBuf::from,
+    )
+}
+
+fn workspace_root() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .parent()
+        .and_then(|crates_dir| crates_dir.parent())
+        .expect("core crate should live under workspace crates/")
+        .to_path_buf()
+}
+
 fn run_main(runtime: &mut PyRuntime, code: &str) -> Result<ExecutionOutcome> {
     let bundle = bundle_with_main(code);
     let session = runtime.prepare_session(bundle, "main:main")?;
@@ -584,6 +667,33 @@ def main():
     except Exception:
         pass
     return "done"
+"#;
+
+const PYODIDE_PYXHR_SCRIPT: &str = r#"
+from pyodide.http import pyxhr
+
+def main():
+    response = pyxhr.get("data:text/plain,Hello%20from%20XHR")
+    return {
+        "status": response.status_code,
+        "text": response.text,
+        "content_type": response.headers.get("content-type"),
+    }
+"#;
+
+const PYODIDE_HTTP_PATCH_ALL_SCRIPT: &str = r#"
+import pyodide_http
+import urllib.request
+
+def main():
+    should_patch = pyodide_http.should_patch()
+    pyodide_http.patch_all()
+    with urllib.request.urlopen("data:text/plain,Hello%20from%20pyodide-http") as response:
+        body = response.read().decode("utf-8")
+    return {
+        "should_patch": should_patch,
+        "body": body,
+    }
 "#;
 
 const RAWCTX_PUBLISH_SCRIPT: &str = r#"
