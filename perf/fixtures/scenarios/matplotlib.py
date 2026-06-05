@@ -50,11 +50,17 @@ def _decode_points(data: Optional[bytes]) -> Optional[int]:
 
 
 def _publish_raw(byte_count: int):
+    metadata = {"format": "u64_le"}
     factory = getattr(builtins, "__aardvark_output_buffer", None)
     if callable(factory):
-        buffer = factory(8, id="matplotlib-output", metadata={"format": "u64_le"})
+        buffer = factory(8, id="matplotlib-output", metadata=metadata)
         struct.pack_into("<Q", buffer, 0, int(byte_count))
         return buffer
+    publisher = getattr(builtins, "__aardvark_publish_buffer", None)
+    if callable(publisher):
+        payload = struct.pack("<Q", int(byte_count))
+        publisher("matplotlib-output", payload, metadata)
+        return None
     return byte_count
 
 

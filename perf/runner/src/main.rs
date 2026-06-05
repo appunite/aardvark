@@ -10,13 +10,15 @@ use std::time::{Duration, Instant};
 use aardvark_core::{
     config::{PyRuntimeConfig, ResetPolicy, WarmState},
     invocation::{FieldDescriptor, InvocationDescriptor},
-    outcome::{OutcomeStatus, ResultPayload},
+    outcome::ResultPayload,
     pool::{PoolConfig, PoolResetMode, PyRuntimePool},
     strategy::{
-        JsonInvocationStrategy, RawCtxBindingBuilder, RawCtxInput, RawCtxInvocationStrategy,
-        RawCtxMetadata, RawCtxPublishBuilder,
+        JsonInput, JsonInvocationStrategy, RawCtxBindingBuilder, RawCtxInput,
+        RawCtxInvocationStrategy, RawCtxMetadata, RawCtxPublishBuilder,
     },
-    Bundle, BundleArtifact, BundlePool, CleanupMode, IsolateConfig, PoolOptions, PyRuntime,
+    Bundle, BundleArtifact, BundlePool, BundlePoolRegistry, CleanupMode, IsolateConfig,
+    PoolOptions, PyRunnerError, PyRuntime, WarmedBundleHost, WarmedBundleHostOptions,
+    WarmedBundleHostRegistry, WarmedBundleHostWarmup,
 };
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
@@ -44,6 +46,21 @@ enum Cli {
         csv: Option<PathBuf>,
         #[arg(long, value_enum, ignore_case = true)]
         profile: Option<LoadProfile>,
+        /// Include per-iteration timing samples in JSON output.
+        #[arg(long)]
+        samples: bool,
+        /// Pyodide distribution profile to write into generated bundle manifests.
+        #[arg(long)]
+        pyodide_profile: Option<String>,
+        /// Python modules to import immediately before warm snapshot capture.
+        #[arg(long = "warm-preimport")]
+        warm_preimports: Vec<String>,
+        /// Python modules to write into runtime.pyodide.preloadImports in generated manifests.
+        #[arg(long = "manifest-preload-import")]
+        manifest_preload_imports: Vec<String>,
+        /// Desired pool size used by first-live registry setup benchmarks.
+        #[arg(long = "setup-pool-desired-size", default_value_t = 2)]
+        setup_pool_desired_size: usize,
     },
     /// Run a single scenario/mode combination
     Scenario {
@@ -55,20 +72,37 @@ enum Cli {
         iterations: usize,
         #[arg(long, value_enum, ignore_case = true)]
         profile: Option<LoadProfile>,
+        /// Include per-iteration timing samples in JSON output.
+        #[arg(long)]
+        samples: bool,
+        /// Pyodide distribution profile to write into the generated bundle manifest.
+        #[arg(long)]
+        pyodide_profile: Option<String>,
+        /// Python modules to import immediately before warm snapshot capture.
+        #[arg(long = "warm-preimport")]
+        warm_preimports: Vec<String>,
+        /// Python modules to write into runtime.pyodide.preloadImports in the generated manifest.
+        #[arg(long = "manifest-preload-import")]
+        manifest_preload_imports: Vec<String>,
+        /// Desired pool size used by first-live registry setup benchmarks.
+        #[arg(long = "setup-pool-desired-size", default_value_t = 2)]
+        setup_pool_desired_size: usize,
     },
 }
 
-#[derive(Copy, Clone, Debug, Serialize, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 enum Scenario {
     Echo,
     Numpy,
+    NumpyMatmul,
     Pandas,
+    ScipySgemm,
     Tensor,
     Matplotlib,
 }
 
-#[derive(Copy, Clone, Debug, Serialize, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 #[value(rename_all = "kebab-case")]
 enum LoadProfile {
@@ -78,7 +112,7 @@ enum LoadProfile {
     High,
 }
 
-#[derive(Copy, Clone, Debug, Serialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum InvocationKind {
     Json,
@@ -93,6 +127,7 @@ enum PathKind {
     ResetInPlace,
     Persistent,
     FirstCall,
+    FirstLive,
 }
 
 #[derive(Copy, Clone, Debug, Serialize)]
@@ -121,14 +156,37 @@ impl CleanupKind {
     }
 }
 
-#[derive(Copy, Clone, Debug, Serialize, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 enum Mode {
     AardvarkJsonCold,
     AardvarkJsonWarm,
     AardvarkJsonResetInPlace,
-    #[value(alias = "aardvark-json-persistent-full")]
     AardvarkJsonPersistent,
+    #[value(name = "aardvark-json-persistent-warm-call")]
+    AardvarkJsonPersistentWarmCall,
+    #[value(name = "aardvark-json-persistent-no-stdio")]
+    AardvarkJsonPersistentNoStdio,
+    #[value(name = "aardvark-json-persistent-warm-call-no-stdio")]
+    AardvarkJsonPersistentWarmCallNoStdio,
+    #[value(name = "aardvark-json-registry-persistent-no-stdio")]
+    AardvarkJsonRegistryPersistentNoStdio,
+    #[value(name = "aardvark-json-registry-prepare-each-call-no-stdio")]
+    AardvarkJsonRegistryPrepareEachCallNoStdio,
+    #[value(name = "aardvark-json-registry-cached-handler-no-stdio")]
+    AardvarkJsonRegistryCachedHandlerNoStdio,
+    #[value(name = "aardvark-json-registry-retained-handler-no-stdio")]
+    AardvarkJsonRegistryRetainedHandlerNoStdio,
+    #[value(name = "aardvark-json-registry-retained-first-live-no-stdio")]
+    AardvarkJsonRegistryRetainedFirstLiveNoStdio,
+    #[value(name = "aardvark-json-registry-retained-warm-all-first-live-no-stdio")]
+    AardvarkJsonRegistryRetainedWarmAllFirstLiveNoStdio,
+    #[value(name = "aardvark-json-warmed-host-pooled-warm-all-first-live-no-stdio")]
+    AardvarkJsonWarmedHostPooledWarmAllFirstLiveNoStdio,
+    #[value(name = "aardvark-json-warmed-host-registry-pooled-warm-all-first-live-no-stdio")]
+    AardvarkJsonWarmedHostRegistryPooledWarmAllFirstLiveNoStdio,
+    #[value(name = "aardvark-json-persistent-full")]
+    AardvarkJsonPersistentFull,
     AardvarkJsonPersistentShared,
     AardvarkJsonPersistentNone,
     #[value(name = "aardvark-rawctx-cold")]
@@ -137,11 +195,38 @@ enum Mode {
     AardvarkRawCtxWarm,
     #[value(name = "aardvark-rawctx-reset-in-place")]
     AardvarkRawCtxResetInPlace,
-    #[value(
-        name = "aardvark-rawctx-persistent",
-        alias = "aardvark-rawctx-persistent-full"
-    )]
+    #[value(name = "aardvark-rawctx-persistent")]
     AardvarkRawCtxPersistent,
+    #[value(name = "aardvark-rawctx-persistent-no-stdio")]
+    AardvarkRawCtxPersistentNoStdio,
+    #[value(name = "aardvark-rawctx-direct-persistent")]
+    AardvarkRawCtxDirectPersistent,
+    #[value(name = "aardvark-rawctx-direct-owned-persistent")]
+    AardvarkRawCtxDirectOwnedPersistent,
+    #[value(name = "aardvark-rawctx-direct-persistent-warm-call")]
+    AardvarkRawCtxDirectPersistentWarmCall,
+    #[value(name = "aardvark-rawctx-direct-owned-persistent-warm-call")]
+    AardvarkRawCtxDirectOwnedPersistentWarmCall,
+    #[value(name = "aardvark-rawctx-direct-owned-persistent-warm-call-no-stdio")]
+    AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdio,
+    #[value(
+        name = "aardvark-rawctx-direct-owned-persistent-warm-call-no-stdio-shared-buffer-only"
+    )]
+    AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnly,
+    #[value(
+        name = "aardvark-rawctx-direct-owned-persistent-warm-call-no-stdio-shared-buffer-only-no-output-metadata"
+    )]
+    AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnlyNoOutputMetadata,
+    #[value(name = "aardvark-rawctx-registry-retained-direct-owned-warm-call-no-stdio")]
+    AardvarkRawCtxRegistryRetainedDirectOwnedWarmCallNoStdio,
+    #[value(name = "aardvark-rawctx-registry-retained-direct-owned-first-live-no-stdio")]
+    AardvarkRawCtxRegistryRetainedDirectOwnedFirstLiveNoStdio,
+    #[value(name = "aardvark-rawctx-registry-retained-direct-owned-warm-all-first-live-no-stdio")]
+    AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio,
+    #[value(name = "aardvark-rawctx-persistent-warm-call")]
+    AardvarkRawCtxPersistentWarmCall,
+    #[value(name = "aardvark-rawctx-persistent-full")]
+    AardvarkRawCtxPersistentFull,
     #[value(name = "aardvark-rawctx-persistent-shared")]
     AardvarkRawCtxPersistentShared,
     #[value(name = "aardvark-rawctx-persistent-none")]
@@ -166,12 +251,71 @@ impl Mode {
             Mode::AardvarkJsonWarm => "aardvark-json-warm",
             Mode::AardvarkJsonResetInPlace => "aardvark-json-reset-in-place",
             Mode::AardvarkJsonPersistent => "aardvark-json-persistent",
+            Mode::AardvarkJsonPersistentWarmCall => "aardvark-json-persistent-warm-call",
+            Mode::AardvarkJsonPersistentNoStdio => "aardvark-json-persistent-no-stdio",
+            Mode::AardvarkJsonPersistentWarmCallNoStdio => {
+                "aardvark-json-persistent-warm-call-no-stdio"
+            }
+            Mode::AardvarkJsonRegistryPersistentNoStdio => {
+                "aardvark-json-registry-persistent-no-stdio"
+            }
+            Mode::AardvarkJsonRegistryPrepareEachCallNoStdio => {
+                "aardvark-json-registry-prepare-each-call-no-stdio"
+            }
+            Mode::AardvarkJsonRegistryCachedHandlerNoStdio => {
+                "aardvark-json-registry-cached-handler-no-stdio"
+            }
+            Mode::AardvarkJsonRegistryRetainedHandlerNoStdio => {
+                "aardvark-json-registry-retained-handler-no-stdio"
+            }
+            Mode::AardvarkJsonRegistryRetainedFirstLiveNoStdio => {
+                "aardvark-json-registry-retained-first-live-no-stdio"
+            }
+            Mode::AardvarkJsonRegistryRetainedWarmAllFirstLiveNoStdio => {
+                "aardvark-json-registry-retained-warm-all-first-live-no-stdio"
+            }
+            Mode::AardvarkJsonWarmedHostPooledWarmAllFirstLiveNoStdio => {
+                "aardvark-json-warmed-host-pooled-warm-all-first-live-no-stdio"
+            }
+            Mode::AardvarkJsonWarmedHostRegistryPooledWarmAllFirstLiveNoStdio => {
+                "aardvark-json-warmed-host-registry-pooled-warm-all-first-live-no-stdio"
+            }
+            Mode::AardvarkJsonPersistentFull => "aardvark-json-persistent-full",
             Mode::AardvarkJsonPersistentShared => "aardvark-json-persistent-shared",
             Mode::AardvarkJsonPersistentNone => "aardvark-json-persistent-none",
             Mode::AardvarkRawCtxCold => "aardvark-rawctx-cold",
             Mode::AardvarkRawCtxWarm => "aardvark-rawctx-warm",
             Mode::AardvarkRawCtxResetInPlace => "aardvark-rawctx-reset-in-place",
             Mode::AardvarkRawCtxPersistent => "aardvark-rawctx-persistent",
+            Mode::AardvarkRawCtxPersistentNoStdio => "aardvark-rawctx-persistent-no-stdio",
+            Mode::AardvarkRawCtxDirectPersistent => "aardvark-rawctx-direct-persistent",
+            Mode::AardvarkRawCtxDirectOwnedPersistent => "aardvark-rawctx-direct-owned-persistent",
+            Mode::AardvarkRawCtxDirectPersistentWarmCall => {
+                "aardvark-rawctx-direct-persistent-warm-call"
+            }
+            Mode::AardvarkRawCtxDirectOwnedPersistentWarmCall => {
+                "aardvark-rawctx-direct-owned-persistent-warm-call"
+            }
+            Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdio => {
+                "aardvark-rawctx-direct-owned-persistent-warm-call-no-stdio"
+            }
+            Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnly => {
+                "aardvark-rawctx-direct-owned-persistent-warm-call-no-stdio-shared-buffer-only"
+            }
+            Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnlyNoOutputMetadata => {
+                "aardvark-rawctx-direct-owned-persistent-warm-call-no-stdio-shared-buffer-only-no-output-metadata"
+            }
+            Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmCallNoStdio => {
+                "aardvark-rawctx-registry-retained-direct-owned-warm-call-no-stdio"
+            }
+            Mode::AardvarkRawCtxRegistryRetainedDirectOwnedFirstLiveNoStdio => {
+                "aardvark-rawctx-registry-retained-direct-owned-first-live-no-stdio"
+            }
+            Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio => {
+                "aardvark-rawctx-registry-retained-direct-owned-warm-all-first-live-no-stdio"
+            }
+            Mode::AardvarkRawCtxPersistentWarmCall => "aardvark-rawctx-persistent-warm-call",
+            Mode::AardvarkRawCtxPersistentFull => "aardvark-rawctx-persistent-full",
             Mode::AardvarkRawCtxPersistentShared => "aardvark-rawctx-persistent-shared",
             Mode::AardvarkRawCtxPersistentNone => "aardvark-rawctx-persistent-none",
             Mode::HostPythonWarm => "host-python-warm",
@@ -186,12 +330,37 @@ impl Mode {
                 Some(InvocationKind::Json)
             }
             Mode::AardvarkJsonPersistent
+            | Mode::AardvarkJsonPersistentWarmCall
+            | Mode::AardvarkJsonPersistentNoStdio
+            | Mode::AardvarkJsonPersistentWarmCallNoStdio
+            | Mode::AardvarkJsonRegistryPersistentNoStdio
+            | Mode::AardvarkJsonRegistryPrepareEachCallNoStdio
+            | Mode::AardvarkJsonRegistryCachedHandlerNoStdio
+            | Mode::AardvarkJsonRegistryRetainedHandlerNoStdio
+            | Mode::AardvarkJsonRegistryRetainedFirstLiveNoStdio
+            | Mode::AardvarkJsonRegistryRetainedWarmAllFirstLiveNoStdio
+            | Mode::AardvarkJsonWarmedHostPooledWarmAllFirstLiveNoStdio
+            | Mode::AardvarkJsonWarmedHostRegistryPooledWarmAllFirstLiveNoStdio
+            | Mode::AardvarkJsonPersistentFull
             | Mode::AardvarkJsonPersistentShared
             | Mode::AardvarkJsonPersistentNone => Some(InvocationKind::Json),
             Mode::AardvarkRawCtxCold
             | Mode::AardvarkRawCtxWarm
             | Mode::AardvarkRawCtxResetInPlace => Some(InvocationKind::RawCtx),
             Mode::AardvarkRawCtxPersistent
+            | Mode::AardvarkRawCtxPersistentNoStdio
+            | Mode::AardvarkRawCtxDirectPersistent
+            | Mode::AardvarkRawCtxDirectOwnedPersistent
+            | Mode::AardvarkRawCtxDirectPersistentWarmCall
+            | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCall
+            | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdio
+            | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnly
+            | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnlyNoOutputMetadata
+            | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmCallNoStdio
+            | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedFirstLiveNoStdio
+            | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio
+            | Mode::AardvarkRawCtxPersistentWarmCall
+            | Mode::AardvarkRawCtxPersistentFull
             | Mode::AardvarkRawCtxPersistentShared
             | Mode::AardvarkRawCtxPersistentNone => Some(InvocationKind::RawCtx),
             Mode::HostPythonWarm | Mode::HostPythonPrepareRun | Mode::HostPythonProcess => None,
@@ -206,18 +375,70 @@ impl Mode {
                 Some(PathKind::ResetInPlace)
             }
             Mode::AardvarkJsonPersistent
+            | Mode::AardvarkJsonPersistentWarmCall
+            | Mode::AardvarkJsonPersistentNoStdio
+            | Mode::AardvarkJsonPersistentWarmCallNoStdio
+            | Mode::AardvarkJsonRegistryPersistentNoStdio
+            | Mode::AardvarkJsonRegistryPrepareEachCallNoStdio
+            | Mode::AardvarkJsonRegistryCachedHandlerNoStdio
+            | Mode::AardvarkJsonRegistryRetainedHandlerNoStdio
+            | Mode::AardvarkJsonPersistentFull
             | Mode::AardvarkJsonPersistentShared
             | Mode::AardvarkJsonPersistentNone
             | Mode::AardvarkRawCtxPersistent
+            | Mode::AardvarkRawCtxPersistentNoStdio
+            | Mode::AardvarkRawCtxDirectPersistent
+            | Mode::AardvarkRawCtxDirectOwnedPersistent
+            | Mode::AardvarkRawCtxDirectPersistentWarmCall
+            | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCall
+            | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdio
+            | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnly
+            | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnlyNoOutputMetadata
+            | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmCallNoStdio
+            | Mode::AardvarkRawCtxPersistentWarmCall
+            | Mode::AardvarkRawCtxPersistentFull
             | Mode::AardvarkRawCtxPersistentShared
             | Mode::AardvarkRawCtxPersistentNone => Some(PathKind::Persistent),
+            Mode::AardvarkJsonRegistryRetainedFirstLiveNoStdio
+            | Mode::AardvarkJsonRegistryRetainedWarmAllFirstLiveNoStdio
+            | Mode::AardvarkJsonWarmedHostPooledWarmAllFirstLiveNoStdio
+            | Mode::AardvarkJsonWarmedHostRegistryPooledWarmAllFirstLiveNoStdio
+            | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedFirstLiveNoStdio
+            | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio => {
+                Some(PathKind::FirstLive)
+            }
             Mode::HostPythonWarm | Mode::HostPythonPrepareRun | Mode::HostPythonProcess => None,
         }
     }
 
     fn cleanup_kind(self) -> Option<CleanupKind> {
         match self {
-            Mode::AardvarkJsonPersistent | Mode::AardvarkRawCtxPersistent => {
+            Mode::AardvarkJsonPersistent
+            | Mode::AardvarkJsonPersistentWarmCall
+            | Mode::AardvarkJsonPersistentNoStdio
+            | Mode::AardvarkJsonPersistentWarmCallNoStdio
+            | Mode::AardvarkJsonRegistryPersistentNoStdio
+            | Mode::AardvarkJsonRegistryPrepareEachCallNoStdio
+            | Mode::AardvarkJsonRegistryCachedHandlerNoStdio
+            | Mode::AardvarkJsonRegistryRetainedHandlerNoStdio
+            | Mode::AardvarkJsonRegistryRetainedFirstLiveNoStdio
+            | Mode::AardvarkJsonRegistryRetainedWarmAllFirstLiveNoStdio
+            | Mode::AardvarkJsonWarmedHostPooledWarmAllFirstLiveNoStdio
+            | Mode::AardvarkJsonWarmedHostRegistryPooledWarmAllFirstLiveNoStdio
+            | Mode::AardvarkRawCtxPersistent
+            | Mode::AardvarkRawCtxPersistentNoStdio
+            | Mode::AardvarkRawCtxDirectPersistent
+            | Mode::AardvarkRawCtxDirectOwnedPersistent
+            | Mode::AardvarkRawCtxDirectPersistentWarmCall
+            | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCall
+            | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdio
+            | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnly
+            | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnlyNoOutputMetadata
+            | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmCallNoStdio
+            | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedFirstLiveNoStdio
+            | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio
+            | Mode::AardvarkRawCtxPersistentWarmCall => Some(CleanupKind::SharedBuffersOnly),
+            Mode::AardvarkJsonPersistentFull | Mode::AardvarkRawCtxPersistentFull => {
                 Some(CleanupKind::Full)
             }
             Mode::AardvarkJsonPersistentShared | Mode::AardvarkRawCtxPersistentShared => {
@@ -236,12 +457,37 @@ impl Mode {
             Mode::AardvarkJsonWarm,
             Mode::AardvarkJsonResetInPlace,
             Mode::AardvarkJsonPersistent,
+            Mode::AardvarkJsonPersistentWarmCall,
+            Mode::AardvarkJsonPersistentNoStdio,
+            Mode::AardvarkJsonPersistentWarmCallNoStdio,
+            Mode::AardvarkJsonRegistryPersistentNoStdio,
+            Mode::AardvarkJsonRegistryPrepareEachCallNoStdio,
+            Mode::AardvarkJsonRegistryCachedHandlerNoStdio,
+            Mode::AardvarkJsonRegistryRetainedHandlerNoStdio,
+            Mode::AardvarkJsonRegistryRetainedFirstLiveNoStdio,
+            Mode::AardvarkJsonRegistryRetainedWarmAllFirstLiveNoStdio,
+            Mode::AardvarkJsonWarmedHostPooledWarmAllFirstLiveNoStdio,
+            Mode::AardvarkJsonWarmedHostRegistryPooledWarmAllFirstLiveNoStdio,
+            Mode::AardvarkJsonPersistentFull,
             Mode::AardvarkJsonPersistentShared,
             Mode::AardvarkJsonPersistentNone,
             Mode::AardvarkRawCtxCold,
             Mode::AardvarkRawCtxWarm,
             Mode::AardvarkRawCtxResetInPlace,
             Mode::AardvarkRawCtxPersistent,
+            Mode::AardvarkRawCtxPersistentNoStdio,
+            Mode::AardvarkRawCtxDirectPersistent,
+            Mode::AardvarkRawCtxDirectOwnedPersistent,
+            Mode::AardvarkRawCtxDirectPersistentWarmCall,
+            Mode::AardvarkRawCtxDirectOwnedPersistentWarmCall,
+            Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdio,
+            Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnly,
+            Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnlyNoOutputMetadata,
+            Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmCallNoStdio,
+            Mode::AardvarkRawCtxRegistryRetainedDirectOwnedFirstLiveNoStdio,
+            Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio,
+            Mode::AardvarkRawCtxPersistentWarmCall,
+            Mode::AardvarkRawCtxPersistentFull,
             Mode::AardvarkRawCtxPersistentShared,
             Mode::AardvarkRawCtxPersistentNone,
         ]
@@ -257,6 +503,165 @@ impl Mode {
 
     fn is_aardvark(self) -> bool {
         self.invocation_kind().is_some()
+    }
+
+    fn uses_explicit_warm_call(self) -> bool {
+        matches!(
+            self,
+            Mode::AardvarkJsonPersistentWarmCall
+                | Mode::AardvarkJsonPersistentWarmCallNoStdio
+                | Mode::AardvarkRawCtxPersistentWarmCall
+                | Mode::AardvarkRawCtxDirectPersistentWarmCall
+                | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCall
+                | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdio
+                | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnly
+                | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnlyNoOutputMetadata
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmCallNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio
+        )
+    }
+
+    fn uses_direct_rawctx_contract(self) -> bool {
+        matches!(
+            self,
+            Mode::AardvarkRawCtxDirectPersistent
+                | Mode::AardvarkRawCtxDirectOwnedPersistent
+                | Mode::AardvarkRawCtxDirectPersistentWarmCall
+                | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCall
+                | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdio
+                | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnly
+                | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnlyNoOutputMetadata
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmCallNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedFirstLiveNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio
+        )
+    }
+
+    fn uses_owned_rawctx_inputs(self) -> bool {
+        matches!(
+            self,
+            Mode::AardvarkRawCtxDirectOwnedPersistent
+                | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCall
+                | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdio
+                | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnly
+                | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnlyNoOutputMetadata
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmCallNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedFirstLiveNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio
+        )
+    }
+
+    fn uses_registry_pool(self) -> bool {
+        matches!(
+            self,
+            Mode::AardvarkJsonRegistryPersistentNoStdio
+                | Mode::AardvarkJsonRegistryPrepareEachCallNoStdio
+                | Mode::AardvarkJsonRegistryCachedHandlerNoStdio
+                | Mode::AardvarkJsonRegistryRetainedHandlerNoStdio
+                | Mode::AardvarkJsonRegistryRetainedFirstLiveNoStdio
+                | Mode::AardvarkJsonRegistryRetainedWarmAllFirstLiveNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmCallNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedFirstLiveNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio
+        )
+    }
+
+    fn uses_warmed_host(self) -> bool {
+        matches!(
+            self,
+            Mode::AardvarkJsonWarmedHostPooledWarmAllFirstLiveNoStdio
+        )
+    }
+
+    fn uses_warmed_host_registry(self) -> bool {
+        matches!(
+            self,
+            Mode::AardvarkJsonWarmedHostRegistryPooledWarmAllFirstLiveNoStdio
+        )
+    }
+
+    fn prepares_handler_each_call(self) -> bool {
+        matches!(self, Mode::AardvarkJsonRegistryPrepareEachCallNoStdio)
+    }
+
+    fn uses_registry_cached_handler(self) -> bool {
+        matches!(self, Mode::AardvarkJsonRegistryCachedHandlerNoStdio)
+    }
+
+    fn uses_registry_retained_handler(self) -> bool {
+        matches!(
+            self,
+            Mode::AardvarkJsonRegistryRetainedHandlerNoStdio
+                | Mode::AardvarkJsonRegistryRetainedFirstLiveNoStdio
+                | Mode::AardvarkJsonRegistryRetainedWarmAllFirstLiveNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmCallNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedFirstLiveNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio
+        )
+    }
+
+    fn uses_pool_wide_warmup(self) -> bool {
+        matches!(
+            self,
+            Mode::AardvarkJsonRegistryRetainedWarmAllFirstLiveNoStdio
+                | Mode::AardvarkJsonWarmedHostPooledWarmAllFirstLiveNoStdio
+                | Mode::AardvarkJsonWarmedHostRegistryPooledWarmAllFirstLiveNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio
+        )
+    }
+
+    fn uses_rawctx_shared_buffer_only_success(self) -> bool {
+        matches!(
+            self,
+            Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnly
+                | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnlyNoOutputMetadata
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmCallNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedFirstLiveNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio
+        )
+    }
+
+    fn collects_rawctx_output_metadata(self) -> bool {
+        !matches!(
+            self,
+            Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnlyNoOutputMetadata
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmCallNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedFirstLiveNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio
+        )
+    }
+
+    fn uses_rawctx_flat_input_buffers(self) -> bool {
+        matches!(
+            self,
+            Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnlyNoOutputMetadata
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmCallNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedFirstLiveNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio
+        )
+    }
+
+    fn captures_stdio(self) -> bool {
+        !matches!(
+            self,
+            Mode::AardvarkJsonPersistentNoStdio
+                | Mode::AardvarkJsonPersistentWarmCallNoStdio
+                | Mode::AardvarkJsonRegistryPersistentNoStdio
+                | Mode::AardvarkJsonRegistryPrepareEachCallNoStdio
+                | Mode::AardvarkJsonRegistryCachedHandlerNoStdio
+                | Mode::AardvarkJsonRegistryRetainedHandlerNoStdio
+                | Mode::AardvarkJsonRegistryRetainedFirstLiveNoStdio
+                | Mode::AardvarkJsonRegistryRetainedWarmAllFirstLiveNoStdio
+                | Mode::AardvarkJsonWarmedHostPooledWarmAllFirstLiveNoStdio
+                | Mode::AardvarkJsonWarmedHostRegistryPooledWarmAllFirstLiveNoStdio
+                | Mode::AardvarkRawCtxPersistentNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmCallNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedFirstLiveNoStdio
+                | Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio
+                | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdio
+                | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnly
+                | Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnlyNoOutputMetadata
+        )
     }
 }
 
@@ -289,6 +694,14 @@ struct BenchResult {
     host_python_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     host_packages: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    samples: Option<TimingSamples>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    setup_breakdown: Option<SetupBreakdownStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    setup_breakdown_samples: Option<SetupBreakdownSamples>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    setup_pool_desired_size: Option<usize>,
 }
 
 #[derive(Serialize, serde::Deserialize, Default, Clone)]
@@ -302,10 +715,52 @@ struct TimingStats {
     p99_ms: f64,
 }
 
+#[derive(Clone, Serialize)]
+struct TimingSamples {
+    total_ms: Vec<f64>,
+    prepare_ms: Vec<f64>,
+    run_ms: Vec<f64>,
+}
+
+#[derive(Clone, Serialize)]
+struct SetupBreakdownStats {
+    registry_init: TimingStats,
+    artifact_parse: TimingStats,
+    pool_create: TimingStats,
+    handler_prepare: TimingStats,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warm_all: Option<TimingStats>,
+}
+
+#[derive(Clone, Serialize)]
+struct SetupBreakdownSamples {
+    registry_init_ms: Vec<f64>,
+    artifact_parse_ms: Vec<f64>,
+    pool_create_ms: Vec<f64>,
+    handler_prepare_ms: Vec<f64>,
+    warm_all_ms: Vec<f64>,
+}
+
+#[derive(Default)]
+struct SetupBreakdownBuckets {
+    registry_init: Vec<Duration>,
+    artifact_parse: Vec<Duration>,
+    pool_create: Vec<Duration>,
+    handler_prepare: Vec<Duration>,
+    warm_all: Vec<Duration>,
+}
+
 struct TimingBuckets<'a> {
     prepare: &'a mut Vec<Duration>,
     run: &'a mut Vec<Duration>,
     total: &'a mut Vec<Duration>,
+}
+
+#[derive(Clone, Copy)]
+struct AardvarkBenchContext {
+    scenario: Scenario,
+    profile: LoadProfile,
+    invocation: InvocationKind,
 }
 
 fn main() -> Result<()> {
@@ -316,6 +771,11 @@ fn main() -> Result<()> {
             json,
             csv,
             profile,
+            samples,
+            pyodide_profile,
+            warm_preimports,
+            manifest_preload_imports,
+            setup_pool_desired_size,
         } => {
             let mut results = Vec::new();
             let profiles: Vec<LoadProfile> = match profile {
@@ -331,12 +791,26 @@ fn main() -> Result<()> {
                 for scenario in [
                     Scenario::Echo,
                     Scenario::Numpy,
+                    Scenario::NumpyMatmul,
                     Scenario::Pandas,
+                    Scenario::ScipySgemm,
                     Scenario::Tensor,
                     Scenario::Matplotlib,
                 ] {
-                    for mode in Mode::aardvark_modes() {
-                        results.push(bench_aardvark(scenario, *mode, iterations, profile)?);
+                    for mode in aardvark_modes_for_scenario(scenario) {
+                        results.push(bench_aardvark(
+                            scenario,
+                            *mode,
+                            AardvarkBenchOptions {
+                                iterations,
+                                profile,
+                                include_samples: samples,
+                                pyodide_profile: pyodide_profile.as_deref(),
+                                warm_preimports: &warm_preimports,
+                                manifest_preload_imports: &manifest_preload_imports,
+                                setup_pool_desired_size,
+                            },
+                        )?);
                     }
                     for mode in host_modes_for_scenario(scenario) {
                         results.push(bench_host(scenario, *mode, iterations, profile)?);
@@ -357,10 +831,27 @@ fn main() -> Result<()> {
             mode,
             iterations,
             profile,
+            samples,
+            pyodide_profile,
+            warm_preimports,
+            manifest_preload_imports,
+            setup_pool_desired_size,
         } => {
             let profile = profile.unwrap_or(LoadProfile::None);
             let result = if mode.is_aardvark() {
-                bench_aardvark(scenario, mode, iterations, profile)?
+                bench_aardvark(
+                    scenario,
+                    mode,
+                    AardvarkBenchOptions {
+                        iterations,
+                        profile,
+                        include_samples: samples,
+                        pyodide_profile: pyodide_profile.as_deref(),
+                        warm_preimports: &warm_preimports,
+                        manifest_preload_imports: &manifest_preload_imports,
+                        setup_pool_desired_size,
+                    },
+                )?
             } else {
                 bench_host(scenario, mode, iterations, profile)?
             };
@@ -371,15 +862,35 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+struct AardvarkBenchOptions<'a> {
+    iterations: usize,
+    profile: LoadProfile,
+    include_samples: bool,
+    pyodide_profile: Option<&'a str>,
+    warm_preimports: &'a [String],
+    manifest_preload_imports: &'a [String],
+    setup_pool_desired_size: usize,
+}
+
 fn bench_aardvark(
     scenario: Scenario,
     mode: Mode,
-    iterations: usize,
-    profile: LoadProfile,
+    options: AardvarkBenchOptions<'_>,
 ) -> Result<BenchResult> {
+    let iterations = options.iterations;
+    let profile = options.profile;
+    let include_samples = options.include_samples;
+    let pyodide_profile = options.pyodide_profile;
+    let warm_preimports = options.warm_preimports;
+    let setup_pool_desired_size = options.setup_pool_desired_size;
     let invocation = mode
         .invocation_kind()
         .ok_or_else(|| anyhow!("mode '{}' is not an Aardvark variant", mode.name()))?;
+    let bench_context = AardvarkBenchContext {
+        scenario,
+        profile,
+        invocation,
+    };
     let path = mode
         .path_kind()
         .ok_or_else(|| anyhow!("mode '{}' is missing a path kind", mode.name()))?;
@@ -387,12 +898,22 @@ fn bench_aardvark(
     let mut applied_cleanup = cleanup_kind;
 
     let python_source = scenario_source(scenario);
-    let manifest = scenario_manifest(scenario, invocation);
-    let bundle = build_bundle(&python_source, manifest.as_bytes())?;
-    let descriptor = descriptor_for(scenario, invocation, profile);
+    let manifest = scenario_manifest(
+        scenario,
+        invocation,
+        options.pyodide_profile,
+        options.manifest_preload_imports,
+    );
+    let bundle_bytes = build_bundle_bytes(&python_source, manifest.as_bytes())?;
+    let bundle = Bundle::from_zip_bytes(&bundle_bytes)?;
+    let descriptor = if mode.uses_direct_rawctx_contract() && mode.captures_stdio() {
+        None
+    } else {
+        descriptor_for(scenario, invocation, profile, mode)
+    };
 
-    let json_payload = json_payload_for(scenario, profile);
-    let raw_inputs = Arc::new(rawctx_inputs_for(scenario, profile)?);
+    let json_input = json_input_for(scenario, profile);
+    let raw_inputs = Arc::new(rawctx_inputs_for(scenario, profile, mode)?);
 
     let mut prepare = Vec::with_capacity(iterations);
     let mut run = Vec::with_capacity(iterations);
@@ -400,22 +921,24 @@ fn bench_aardvark(
     let mut cold_total_stats: Option<TimingStats> = None;
     let mut cold_prepare_stats: Option<TimingStats> = None;
     let mut cold_run_stats: Option<TimingStats> = None;
+    let mut setup_breakdown_buckets = SetupBreakdownBuckets::default();
+    let mut has_setup_breakdown = false;
 
     match path {
         PathKind::Cold => {
             for _ in 0..iterations {
-                let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+                let mut runtime = PyRuntime::new(runtime_config_for(pyodide_profile)?)?;
                 let mut buckets = TimingBuckets {
                     prepare: &mut prepare,
                     run: &mut run,
                     total: &mut total,
                 };
                 execute_iteration(
+                    bench_context,
                     &mut runtime,
-                    invocation,
                     descriptor.as_ref(),
                     &bundle,
-                    json_payload.clone(),
+                    json_input.clone(),
                     raw_inputs.as_ref(),
                     &mut buckets,
                 )?;
@@ -423,19 +946,19 @@ fn bench_aardvark(
         }
         PathKind::Warm => {
             let (warm_state, cold_total, cold_prepare, cold_run) = capture_warm_state(
-                invocation,
+                bench_context,
                 &bundle,
                 descriptor.as_ref(),
-                json_payload.clone(),
+                json_input.clone(),
                 raw_inputs.as_ref(),
+                pyodide_profile,
+                warm_preimports,
             )?;
             cold_total_stats = Some(cold_total);
             cold_prepare_stats = Some(cold_prepare);
             cold_run_stats = Some(cold_run);
-            let config = PyRuntimeConfig {
-                warm_state: Some(warm_state),
-                ..PyRuntimeConfig::default()
-            };
+            let mut config = runtime_config_for(pyodide_profile)?;
+            config.warm_state = Some(warm_state);
             for _ in 0..iterations {
                 let mut runtime = PyRuntime::new(config.clone())?;
                 let mut buckets = TimingBuckets {
@@ -444,11 +967,11 @@ fn bench_aardvark(
                     total: &mut total,
                 };
                 execute_iteration(
+                    bench_context,
                     &mut runtime,
-                    invocation,
                     descriptor.as_ref(),
                     &bundle,
-                    json_payload.clone(),
+                    json_input.clone(),
                     raw_inputs.as_ref(),
                     &mut buckets,
                 )?;
@@ -456,20 +979,20 @@ fn bench_aardvark(
         }
         PathKind::ResetInPlace => {
             let (warm_state, cold_total, cold_prepare, cold_run) = capture_warm_state(
-                invocation,
+                bench_context,
                 &bundle,
                 descriptor.as_ref(),
-                json_payload.clone(),
+                json_input.clone(),
                 raw_inputs.as_ref(),
+                pyodide_profile,
+                warm_preimports,
             )?;
             cold_total_stats = Some(cold_total);
             cold_prepare_stats = Some(cold_prepare);
             cold_run_stats = Some(cold_run);
-            let runtime_config = PyRuntimeConfig {
-                warm_state: Some(warm_state),
-                reset_policy: ResetPolicy::Manual,
-                ..PyRuntimeConfig::default()
-            };
+            let mut runtime_config = runtime_config_for(pyodide_profile)?;
+            runtime_config.warm_state = Some(warm_state);
+            runtime_config.reset_policy = ResetPolicy::Manual;
             let pool = PyRuntimePool::new(PoolConfig {
                 max_runtimes: 1,
                 runtime_config,
@@ -485,11 +1008,11 @@ fn bench_aardvark(
                         total: &mut total,
                     };
                     execute_iteration(
+                        bench_context,
                         runtime,
-                        invocation,
                         descriptor.as_ref(),
                         &bundle,
-                        json_payload.clone(),
+                        json_input.clone(),
                         raw_inputs.as_ref(),
                         &mut buckets,
                     )?;
@@ -497,19 +1020,266 @@ fn bench_aardvark(
                 drop(handle);
             }
         }
-        PathKind::Persistent => {
+        PathKind::FirstLive => {
             let (warm_state, cold_total, cold_prepare, cold_run) = capture_warm_state(
-                invocation,
+                bench_context,
                 &bundle,
                 descriptor.as_ref(),
-                json_payload.clone(),
+                json_input.clone(),
                 raw_inputs.as_ref(),
+                pyodide_profile,
+                warm_preimports,
             )?;
             cold_total_stats = Some(cold_total);
             cold_prepare_stats = Some(cold_prepare);
             cold_run_stats = Some(cold_run);
 
-            let mut isolate_config = IsolateConfig::default();
+            let bench_cleanup = cleanup_kind.unwrap_or(CleanupKind::SharedBuffersOnly);
+            applied_cleanup = Some(bench_cleanup);
+            for _ in 0..iterations {
+                let mut isolate_config = IsolateConfig {
+                    runtime: runtime_config_for(pyodide_profile)?,
+                    ..IsolateConfig::default()
+                };
+                isolate_config.runtime.warm_state = Some(warm_state.clone());
+                isolate_config.cleanup = bench_cleanup.to_cleanup_mode();
+
+                if mode.uses_warmed_host_registry() {
+                    has_setup_breakdown = true;
+                    let setup_start = Instant::now();
+                    let registry_start = Instant::now();
+                    let descriptor = descriptor
+                        .clone()
+                        .unwrap_or_else(|| InvocationDescriptor::new("main:entrypoint"));
+                    let warmup = match invocation {
+                        InvocationKind::Json => {
+                            WarmedBundleHostWarmup::json_input(json_input.clone())
+                        }
+                        InvocationKind::RawCtx => WarmedBundleHostWarmup::rawctx(
+                            rawctx_inputs_for_call(scenario, profile, raw_inputs.as_ref(), mode)?,
+                        ),
+                    };
+                    let registry = WarmedBundleHostRegistry::new(
+                        WarmedBundleHostOptions::pooled(PoolOptions {
+                            isolate: isolate_config,
+                            desired_size: setup_pool_desired_size,
+                            max_size: setup_pool_desired_size.max(1),
+                            telemetry_interval: None,
+                            ..PoolOptions::default()
+                        })
+                        .with_descriptor(descriptor)
+                        .with_warmup(warmup),
+                    );
+                    let host = registry.host_for_bytes(&bundle_bytes)?;
+                    setup_breakdown_buckets
+                        .registry_init
+                        .push(registry_start.elapsed());
+                    setup_breakdown_buckets.artifact_parse.push(Duration::ZERO);
+                    setup_breakdown_buckets.pool_create.push(Duration::ZERO);
+                    setup_breakdown_buckets.handler_prepare.push(Duration::ZERO);
+
+                    let setup_elapsed = setup_start.elapsed();
+                    let raw_inputs_for_iteration = if matches!(invocation, InvocationKind::RawCtx) {
+                        Some(rawctx_inputs_for_call(
+                            scenario,
+                            profile,
+                            raw_inputs.as_ref(),
+                            mode,
+                        )?)
+                    } else {
+                        None
+                    };
+                    let live_start = Instant::now();
+                    let outcome = match invocation {
+                        InvocationKind::Json => host.call_json_input(json_input.clone())?,
+                        InvocationKind::RawCtx => {
+                            host.call_rawctx(raw_inputs_for_iteration.unwrap_or_default())?
+                        }
+                    };
+                    let live_elapsed = live_start.elapsed();
+
+                    validate_aardvark_outcome(scenario, profile, invocation, &outcome)?;
+                    prepare.push(setup_elapsed);
+                    run.push(live_elapsed);
+                    total.push(setup_elapsed + live_elapsed);
+                    continue;
+                }
+
+                if mode.uses_warmed_host() {
+                    has_setup_breakdown = true;
+                    let setup_start = Instant::now();
+
+                    setup_breakdown_buckets.registry_init.push(Duration::ZERO);
+
+                    let artifact_start = Instant::now();
+                    let artifact = BundleArtifact::from_bytes(&bundle_bytes)?;
+                    setup_breakdown_buckets
+                        .artifact_parse
+                        .push(artifact_start.elapsed());
+
+                    let host_start = Instant::now();
+                    let descriptor = descriptor
+                        .clone()
+                        .unwrap_or_else(|| InvocationDescriptor::new("main:entrypoint"));
+                    let host_options = WarmedBundleHostOptions::pooled(PoolOptions {
+                        isolate: isolate_config,
+                        desired_size: setup_pool_desired_size,
+                        max_size: setup_pool_desired_size.max(1),
+                        telemetry_interval: None,
+                        ..PoolOptions::default()
+                    })
+                    .with_descriptor(descriptor);
+                    let host = WarmedBundleHost::from_artifact(artifact, host_options)?;
+                    setup_breakdown_buckets
+                        .handler_prepare
+                        .push(host_start.elapsed());
+
+                    if mode.uses_pool_wide_warmup() {
+                        let warm_all_start = Instant::now();
+                        let outcomes = match invocation {
+                            InvocationKind::Json => host
+                                .warm_all(WarmedBundleHostWarmup::json_input(json_input.clone()))?,
+                            InvocationKind::RawCtx => host.warm_all(
+                                WarmedBundleHostWarmup::rawctx(rawctx_inputs_for_call(
+                                    scenario,
+                                    profile,
+                                    raw_inputs.as_ref(),
+                                    mode,
+                                )?),
+                            )?,
+                        };
+                        for outcome in &outcomes {
+                            validate_aardvark_outcome(scenario, profile, invocation, outcome)?;
+                        }
+                        setup_breakdown_buckets
+                            .warm_all
+                            .push(warm_all_start.elapsed());
+                    }
+
+                    let setup_elapsed = setup_start.elapsed();
+                    let raw_inputs_for_iteration = if matches!(invocation, InvocationKind::RawCtx) {
+                        Some(rawctx_inputs_for_call(
+                            scenario,
+                            profile,
+                            raw_inputs.as_ref(),
+                            mode,
+                        )?)
+                    } else {
+                        None
+                    };
+                    let live_start = Instant::now();
+                    let outcome = match invocation {
+                        InvocationKind::Json => host.call_json_input(json_input.clone())?,
+                        InvocationKind::RawCtx => {
+                            host.call_rawctx(raw_inputs_for_iteration.unwrap_or_default())?
+                        }
+                    };
+                    let live_elapsed = live_start.elapsed();
+
+                    validate_aardvark_outcome(scenario, profile, invocation, &outcome)?;
+                    prepare.push(setup_elapsed);
+                    run.push(live_elapsed);
+                    total.push(setup_elapsed + live_elapsed);
+                    continue;
+                }
+
+                let options = PoolOptions {
+                    isolate: isolate_config,
+                    desired_size: setup_pool_desired_size,
+                    max_size: setup_pool_desired_size.max(1),
+                    telemetry_interval: None,
+                    ..PoolOptions::default()
+                };
+
+                has_setup_breakdown = true;
+                let setup_start = Instant::now();
+
+                let registry_start = Instant::now();
+                let registry = BundlePoolRegistry::new(options)?;
+                setup_breakdown_buckets
+                    .registry_init
+                    .push(registry_start.elapsed());
+
+                let artifact_start = Instant::now();
+                let artifact = BundleArtifact::from_bytes(&bundle_bytes)?;
+                setup_breakdown_buckets
+                    .artifact_parse
+                    .push(artifact_start.elapsed());
+
+                let pool_start = Instant::now();
+                let _pool = registry.pool_for_artifact(artifact.clone())?;
+                setup_breakdown_buckets
+                    .pool_create
+                    .push(pool_start.elapsed());
+
+                let handler_start = Instant::now();
+                let prepared =
+                    registry.prepare_handler_for_artifact(artifact, descriptor.clone())?;
+                setup_breakdown_buckets
+                    .handler_prepare
+                    .push(handler_start.elapsed());
+
+                if mode.uses_pool_wide_warmup() {
+                    let warm_all_start = Instant::now();
+                    let outcomes = match invocation {
+                        InvocationKind::Json => prepared.warm_all_json_input(json_input.clone())?,
+                        InvocationKind::RawCtx => prepared.warm_all_rawctx_with(|_| {
+                            rawctx_inputs_for_call(scenario, profile, raw_inputs.as_ref(), mode)
+                                .map_err(|err| PyRunnerError::Validation(err.to_string()))
+                        })?,
+                    };
+                    for outcome in &outcomes {
+                        validate_aardvark_outcome(scenario, profile, invocation, outcome)?;
+                    }
+                    setup_breakdown_buckets
+                        .warm_all
+                        .push(warm_all_start.elapsed());
+                }
+                let setup_elapsed = setup_start.elapsed();
+
+                let raw_inputs_for_iteration = if matches!(invocation, InvocationKind::RawCtx) {
+                    Some(rawctx_inputs_for_call(
+                        scenario,
+                        profile,
+                        raw_inputs.as_ref(),
+                        mode,
+                    )?)
+                } else {
+                    None
+                };
+                let live_start = Instant::now();
+                let outcome = match invocation {
+                    InvocationKind::Json => prepared.call_json_input(json_input.clone())?,
+                    InvocationKind::RawCtx => {
+                        prepared.call_rawctx(raw_inputs_for_iteration.unwrap_or_default())?
+                    }
+                };
+                let live_elapsed = live_start.elapsed();
+
+                validate_aardvark_outcome(scenario, profile, invocation, &outcome)?;
+                prepare.push(setup_elapsed);
+                run.push(live_elapsed);
+                total.push(setup_elapsed + live_elapsed);
+            }
+        }
+        PathKind::Persistent => {
+            let (warm_state, cold_total, cold_prepare, cold_run) = capture_warm_state(
+                bench_context,
+                &bundle,
+                descriptor.as_ref(),
+                json_input.clone(),
+                raw_inputs.as_ref(),
+                pyodide_profile,
+                warm_preimports,
+            )?;
+            cold_total_stats = Some(cold_total);
+            cold_prepare_stats = Some(cold_prepare);
+            cold_run_stats = Some(cold_run);
+
+            let mut isolate_config = IsolateConfig {
+                runtime: runtime_config_for(pyodide_profile)?,
+                ..IsolateConfig::default()
+            };
             isolate_config.runtime.warm_state = Some(warm_state);
             let bench_cleanup = cleanup_kind.unwrap_or(CleanupKind::Full);
             isolate_config.cleanup = bench_cleanup.to_cleanup_mode();
@@ -521,20 +1291,127 @@ fn bench_aardvark(
                 ..PoolOptions::default()
             };
 
-            let artifact = BundleArtifact::from_bundle(bundle.clone())?;
-            let pool = BundlePool::from_artifact(artifact, options)?;
-            let handle = pool.handle();
-            let handler = match descriptor.clone() {
-                Some(desc) => handle.prepare_handler(Some(desc)),
-                None => handle.prepare_default_handler(),
+            let registry = if mode.uses_registry_pool() {
+                Some(BundlePoolRegistry::new(options.clone())?)
+            } else {
+                None
+            };
+            let pool = if let Some(registry) = &registry {
+                registry.pool_for_bytes(&bundle_bytes)?
+            } else {
+                let artifact = BundleArtifact::from_bundle(bundle.clone())?;
+                BundlePool::from_artifact(artifact, options)?
+            };
+            let retained_prepared = if mode.uses_registry_retained_handler() {
+                Some(
+                    registry
+                        .as_ref()
+                        .expect("registry retained handler mode requires a registry")
+                        .prepare_handler_for_bytes(&bundle_bytes, descriptor.clone())?,
+                )
+            } else {
+                None
+            };
+            let handler = if mode.uses_registry_cached_handler() {
+                if let Some(registry) = &registry {
+                    let _ =
+                        registry.prepare_handler_for_bytes(&bundle_bytes, descriptor.clone())?;
+                }
+                None
+            } else if mode.uses_registry_retained_handler() {
+                None
+            } else {
+                Some(match descriptor.clone() {
+                    Some(desc) => pool.prepare_handler(Some(desc))?,
+                    None => pool.prepare_default_handler()?,
+                })
             };
 
-            for _ in 0..iterations {
-                let start = Instant::now();
-                let outcome = match invocation {
-                    InvocationKind::Json => pool.call_json(&handler, json_payload.clone())?,
-                    InvocationKind::RawCtx => pool.call_rawctx(&handler, (*raw_inputs).clone())?,
+            if mode.uses_explicit_warm_call() {
+                let outcome = if let Some(prepared) = retained_prepared.as_ref() {
+                    match invocation {
+                        InvocationKind::Json => prepared.call_json_input(json_input.clone())?,
+                        InvocationKind::RawCtx => prepared.call_rawctx(rawctx_inputs_for_call(
+                            scenario,
+                            profile,
+                            raw_inputs.as_ref(),
+                            mode,
+                        )?)?,
+                    }
+                } else {
+                    let handler = handler
+                        .as_ref()
+                        .expect("explicit warm call modes prepare a local handler");
+                    match invocation {
+                        InvocationKind::Json => {
+                            pool.warm_json_input(handler, json_input.clone())?
+                        }
+                        InvocationKind::RawCtx => pool.warm_rawctx(
+                            handler,
+                            rawctx_inputs_for_call(scenario, profile, raw_inputs.as_ref(), mode)?,
+                        )?,
+                    }
                 };
+                validate_aardvark_outcome(scenario, profile, invocation, &outcome)?;
+            }
+
+            for _ in 0..iterations {
+                let raw_inputs_for_iteration = if matches!(invocation, InvocationKind::RawCtx) {
+                    Some(rawctx_inputs_for_call(
+                        scenario,
+                        profile,
+                        raw_inputs.as_ref(),
+                        mode,
+                    )?)
+                } else {
+                    None
+                };
+                let start = Instant::now();
+                let outcome =
+                    if let Some(prepared) = retained_prepared.as_ref() {
+                        match invocation {
+                            InvocationKind::Json => prepared.call_json_input(json_input.clone())?,
+                            InvocationKind::RawCtx => prepared
+                                .call_rawctx(raw_inputs_for_iteration.unwrap_or_default())?,
+                        }
+                    } else if mode.uses_registry_cached_handler() {
+                        let prepared = registry
+                            .as_ref()
+                            .expect("registry cached handler mode requires a registry")
+                            .prepare_handler_for_bytes(&bundle_bytes, descriptor.clone())?;
+                        match invocation {
+                            InvocationKind::Json => prepared.call_json_input(json_input.clone())?,
+                            InvocationKind::RawCtx => prepared
+                                .call_rawctx(raw_inputs_for_iteration.unwrap_or_default())?,
+                        }
+                    } else {
+                        let pool_for_call = if let Some(registry) = &registry {
+                            registry.pool_for_bytes(&bundle_bytes)?
+                        } else {
+                            pool.clone()
+                        };
+                        let local_handler;
+                        let handler_for_call = if mode.prepares_handler_each_call() {
+                            local_handler = match descriptor.clone() {
+                                Some(desc) => pool_for_call.prepare_handler(Some(desc))?,
+                                None => pool_for_call.prepare_default_handler()?,
+                            };
+                            &local_handler
+                        } else {
+                            handler
+                                .as_ref()
+                                .expect("persistent mode should have a prepared handler")
+                        };
+                        match invocation {
+                            InvocationKind::Json => pool_for_call
+                                .call_json_input(handler_for_call, json_input.clone())?,
+                            InvocationKind::RawCtx => pool_for_call.call_rawctx(
+                                handler_for_call,
+                                raw_inputs_for_iteration.unwrap_or_default(),
+                            )?,
+                        }
+                    };
+                validate_aardvark_outcome(scenario, profile, invocation, &outcome)?;
                 let total_elapsed = start.elapsed();
                 let prepare_ms = outcome.diagnostics.prepare_ms.unwrap_or(0);
                 let cleanup_ms = outcome.diagnostics.cleanup_ms.unwrap_or(0);
@@ -572,15 +1449,21 @@ fn bench_aardvark(
         cold_run: cold_run_stats,
         host_python_version: None,
         host_packages: None,
+        samples: timing_samples(include_samples, &total, &prepare, &run),
+        setup_breakdown: has_setup_breakdown
+            .then(|| setup_breakdown_stats(&setup_breakdown_buckets)),
+        setup_breakdown_samples: (has_setup_breakdown && include_samples)
+            .then(|| setup_breakdown_samples(&setup_breakdown_buckets)),
+        setup_pool_desired_size: has_setup_breakdown.then_some(setup_pool_desired_size),
     })
 }
 
 fn execute_iteration(
+    bench_context: AardvarkBenchContext,
     runtime: &mut PyRuntime,
-    invocation: InvocationKind,
     descriptor: Option<&InvocationDescriptor>,
     bundle: &Bundle,
-    json_payload: Option<JsonValue>,
+    json_input: Option<JsonInput>,
     raw_inputs: &[RawCtxInput],
     timings: &mut TimingBuckets<'_>,
 ) -> Result<()> {
@@ -594,9 +1477,9 @@ fn execute_iteration(
     let prep_elapsed = prep_start.elapsed();
 
     let run_start = Instant::now();
-    let outcome = match invocation {
+    let outcome = match bench_context.invocation {
         InvocationKind::Json => {
-            let mut strategy = JsonInvocationStrategy::new(json_payload);
+            let mut strategy = JsonInvocationStrategy::with_input(json_input);
             runtime.run_session_with_strategy(&session, &mut strategy)?
         }
         InvocationKind::RawCtx => {
@@ -607,17 +1490,19 @@ fn execute_iteration(
     let run_elapsed = run_start.elapsed();
 
     if !outcome.is_success() {
-        return Err(anyhow!("handler failed: {:?}", outcome.status));
+        return Err(anyhow!(
+            "handler failed: {:?}; diagnostics: {:?}",
+            outcome.status,
+            outcome.diagnostics
+        ));
     }
 
-    if matches!(invocation, InvocationKind::RawCtx)
-        && !matches!(
-            outcome.status,
-            OutcomeStatus::Success(ResultPayload::SharedBuffers(_))
-        )
-    {
-        return Err(anyhow!("rawctx run did not return shared buffers"));
-    }
+    validate_aardvark_outcome(
+        bench_context.scenario,
+        bench_context.profile,
+        bench_context.invocation,
+        &outcome,
+    )?;
 
     timings.prepare.push(prep_elapsed);
     timings.run.push(run_elapsed);
@@ -626,14 +1511,303 @@ fn execute_iteration(
     Ok(())
 }
 
-fn capture_warm_state(
+fn validate_aardvark_outcome(
+    scenario: Scenario,
+    profile: LoadProfile,
     invocation: InvocationKind,
+    outcome: &aardvark_core::ExecutionOutcome,
+) -> Result<()> {
+    if !outcome.is_success() {
+        return Err(anyhow!(
+            "handler failed: {:?}; diagnostics: {:?}",
+            outcome.status,
+            outcome.diagnostics
+        ));
+    }
+
+    match invocation {
+        InvocationKind::Json => validate_json_outcome(scenario, profile, outcome),
+        InvocationKind::RawCtx => validate_rawctx_outcome(scenario, profile, outcome),
+    }
+}
+
+fn validate_json_outcome(
+    scenario: Scenario,
+    profile: LoadProfile,
+    outcome: &aardvark_core::ExecutionOutcome,
+) -> Result<()> {
+    if matches!(scenario, Scenario::Tensor) {
+        return validate_tensor_buffer_outcome("tensor JSON", profile, outcome);
+    }
+
+    if matches!(scenario, Scenario::Echo) {
+        let expected_len = perf::echo_payload(profile)
+            .map(|payload| payload.len())
+            .unwrap_or("aardvark".len());
+        if let Some(ResultPayload::SharedBuffers(buffers)) = outcome.payload() {
+            if buffers.len() != 1 {
+                return Err(anyhow!(
+                    "echo JSON shared-buffer payload returned {} buffers, expected 1",
+                    buffers.len()
+                ));
+            }
+            let bytes = buffers[0]
+                .as_slice()
+                .ok_or_else(|| anyhow!("echo JSON buffer did not retain bytes"))?;
+            if bytes.len() != expected_len {
+                return Err(anyhow!(
+                    "echo JSON shared-buffer length {} did not match expected {}",
+                    bytes.len(),
+                    expected_len
+                ));
+            }
+            return Ok(());
+        }
+    }
+
+    let Some(ResultPayload::Json(value)) = outcome.payload() else {
+        return Err(anyhow!("json run did not return a JSON payload"));
+    };
+
+    match scenario {
+        Scenario::Echo => {
+            let expected_len = perf::echo_payload(profile)
+                .map(|payload| payload.len())
+                .unwrap_or("aardvark".len());
+            let Some(text) = value.as_str() else {
+                return Err(anyhow!("echo JSON payload was not a string"));
+            };
+            if text.len() != expected_len {
+                return Err(anyhow!(
+                    "echo JSON payload length {} did not match expected {}",
+                    text.len(),
+                    expected_len
+                ));
+            }
+        }
+        Scenario::Numpy => {
+            let Some(number) = value.as_f64() else {
+                return Err(anyhow!("numpy JSON payload was not numeric"));
+            };
+            if !number.is_finite() {
+                return Err(anyhow!("numpy JSON payload was not finite"));
+            }
+            validate_numpy_total(profile, number, "JSON")?;
+        }
+        Scenario::NumpyMatmul | Scenario::ScipySgemm => {
+            let Some(number) = value.as_f64() else {
+                return Err(anyhow!("matrix JSON payload was not numeric"));
+            };
+            validate_matrix_total(number, "JSON")?;
+        }
+        Scenario::Pandas => {
+            let Some(object) = value.as_object() else {
+                return Err(anyhow!("pandas JSON payload was not an object"));
+            };
+            if object.is_empty() {
+                return Err(anyhow!("pandas JSON payload was empty"));
+            }
+        }
+        Scenario::Tensor => unreachable!("tensor JSON is validated as a shared buffer"),
+        Scenario::Matplotlib => {
+            let Some(byte_count) = value.as_u64() else {
+                return Err(anyhow!(
+                    "matplotlib JSON payload was not an unsigned byte count"
+                ));
+            };
+            if byte_count == 0 {
+                return Err(anyhow!("matplotlib JSON payload byte count was zero"));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_tensor_buffer_outcome(
+    label: &str,
+    profile: LoadProfile,
+    outcome: &aardvark_core::ExecutionOutcome,
+) -> Result<()> {
+    let Some(ResultPayload::SharedBuffers(buffers)) = outcome.payload() else {
+        return Err(anyhow!("{label} payload was not a shared buffer"));
+    };
+    if buffers.len() != 1 {
+        return Err(anyhow!(
+            "{label} returned {} shared buffers, expected 1",
+            buffers.len()
+        ));
+    }
+    let bytes = buffers[0]
+        .as_slice()
+        .ok_or_else(|| anyhow!("{label} buffer did not retain bytes"))?;
+    let expected_len = perf::tensor_length(profile) * std::mem::size_of::<f32>();
+    if bytes.len() != expected_len {
+        return Err(anyhow!(
+            "{label} buffer length {} did not match expected {}",
+            bytes.len(),
+            expected_len
+        ));
+    }
+    Ok(())
+}
+
+fn validate_pandas_bytes(label: &str, profile: LoadProfile, bytes: &[u8]) -> Result<()> {
+    if bytes.len() < 4 {
+        return Err(anyhow!("{label} payload was too short"));
+    }
+    let count = u32::from_le_bytes(bytes[0..4].try_into().expect("slice length checked")) as usize;
+    let rows = perf::pandas_rows(profile).unwrap_or(128);
+    let expected_count = usize::try_from(rows.min(128)).unwrap_or(128);
+    let expected_len = 4 + expected_count * 12;
+    if count != expected_count || bytes.len() != expected_len {
+        return Err(anyhow!(
+            "{label} payload count/len {}/{} did not match expected {}/{}",
+            count,
+            bytes.len(),
+            expected_count,
+            expected_len
+        ));
+    }
+    Ok(())
+}
+
+fn validate_rawctx_outcome(
+    scenario: Scenario,
+    profile: LoadProfile,
+    outcome: &aardvark_core::ExecutionOutcome,
+) -> Result<()> {
+    let Some(ResultPayload::SharedBuffers(buffers)) = outcome.payload() else {
+        return Err(anyhow!("rawctx run did not return shared buffers"));
+    };
+    if buffers.len() != 1 {
+        return Err(anyhow!(
+            "rawctx run returned {} shared buffers, expected 1",
+            buffers.len()
+        ));
+    }
+
+    let buffer = &buffers[0];
+    let expected_id = match scenario {
+        Scenario::Echo => "echo-output",
+        Scenario::Numpy => "numpy-output",
+        Scenario::NumpyMatmul => "numpy-matmul-output",
+        Scenario::Pandas => "pandas-output",
+        Scenario::ScipySgemm => "scipy-sgemm-output",
+        Scenario::Tensor => "tensor-output",
+        Scenario::Matplotlib => "matplotlib-output",
+    };
+    if buffer.id != expected_id {
+        return Err(anyhow!(
+            "rawctx buffer id '{}' did not match expected '{}'",
+            buffer.id,
+            expected_id
+        ));
+    }
+
+    let bytes = buffer
+        .as_slice()
+        .ok_or_else(|| anyhow!("rawctx buffer '{}' did not retain bytes", buffer.id))?;
+
+    match scenario {
+        Scenario::Echo => {
+            let expected_len = perf::echo_payload(profile)
+                .map(|payload| payload.len())
+                .unwrap_or("aardvark".len());
+            if bytes.len() != expected_len {
+                return Err(anyhow!(
+                    "echo rawctx payload length {} did not match expected {}",
+                    bytes.len(),
+                    expected_len
+                ));
+            }
+        }
+        Scenario::Numpy => {
+            if bytes.len() != 8 {
+                return Err(anyhow!(
+                    "numpy rawctx payload length {} did not match expected 8",
+                    bytes.len()
+                ));
+            }
+            let total = f64::from_le_bytes(bytes[0..8].try_into().expect("slice length checked"));
+            if !total.is_finite() {
+                return Err(anyhow!("numpy rawctx payload was not finite"));
+            }
+            validate_numpy_total(profile, total, "rawctx")?;
+        }
+        Scenario::NumpyMatmul | Scenario::ScipySgemm => {
+            if bytes.len() != 8 {
+                return Err(anyhow!(
+                    "matrix rawctx payload length {} did not match expected 8",
+                    bytes.len()
+                ));
+            }
+            let total = f64::from_le_bytes(bytes[0..8].try_into().expect("slice length checked"));
+            validate_matrix_total(total, "rawctx")?;
+        }
+        Scenario::Pandas => {
+            validate_pandas_bytes("pandas rawctx", profile, bytes)?;
+        }
+        Scenario::Tensor => {
+            let expected_len = perf::tensor_length(profile) * std::mem::size_of::<f32>();
+            if bytes.len() != expected_len {
+                return Err(anyhow!(
+                    "tensor rawctx payload length {} did not match expected {}",
+                    bytes.len(),
+                    expected_len
+                ));
+            }
+        }
+        Scenario::Matplotlib => {
+            if bytes.len() != 8 {
+                return Err(anyhow!(
+                    "matplotlib rawctx payload length {} did not match expected 8",
+                    bytes.len()
+                ));
+            }
+            let byte_count =
+                u64::from_le_bytes(bytes[0..8].try_into().expect("slice length checked"));
+            if byte_count == 0 {
+                return Err(anyhow!("matplotlib rawctx byte count was zero"));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_numpy_total(profile: LoadProfile, total: f64, invocation: &str) -> Result<()> {
+    let size = perf::numpy_size(profile).unwrap_or(64) as f64;
+    let lower = size * 0.25;
+    let upper = size * 0.75;
+    if !(lower..=upper).contains(&total) {
+        return Err(anyhow!(
+            "numpy {invocation} total {total} was outside expected range [{lower}, {upper}] for profile {}",
+            profile.name()
+        ));
+    }
+    Ok(())
+}
+
+fn validate_matrix_total(total: f64, invocation: &str) -> Result<()> {
+    if !total.is_finite() || total <= 0.0 {
+        return Err(anyhow!(
+            "matrix {invocation} total {total} was not a positive finite value"
+        ));
+    }
+    Ok(())
+}
+
+fn capture_warm_state(
+    bench_context: AardvarkBenchContext,
     bundle: &Bundle,
     descriptor: Option<&InvocationDescriptor>,
-    json_payload: Option<JsonValue>,
+    json_input: Option<JsonInput>,
     raw_inputs: &[RawCtxInput],
+    pyodide_profile: Option<&str>,
+    warm_preimports: &[String],
 ) -> Result<(WarmState, TimingStats, TimingStats, TimingStats)> {
-    let mut baseline_runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let mut baseline_runtime = PyRuntime::new(runtime_config_for(pyodide_profile)?)?;
     let mut cold_prepare = Vec::with_capacity(1);
     let mut cold_run = Vec::with_capacity(1);
     let mut cold_total = Vec::with_capacity(1);
@@ -644,19 +1818,28 @@ fn capture_warm_state(
             total: &mut cold_total,
         };
         execute_iteration(
+            bench_context,
             &mut baseline_runtime,
-            invocation,
             descriptor,
             bundle,
-            json_payload.clone(),
+            json_input.clone(),
             raw_inputs,
             &mut buckets,
         )?;
     }
     drop(baseline_runtime);
 
-    let mut warm_config = PyRuntimeConfig::default();
+    let mut warm_config = runtime_config_for(pyodide_profile)?;
     warm_config.snapshot.save_to = Some(PathBuf::from("target/perf/bench_warm_snapshot.bin"));
+    if !warm_preimports.is_empty() {
+        let scripts = warm_preimport_scripts(warm_preimports)?;
+        warm_config.hooks.before_warm_snapshot = Some(Arc::new(move |runtime| {
+            for script in scripts.iter() {
+                runtime.js_runtime().run_python_snippet(script)?;
+            }
+            Ok(())
+        }));
+    }
     let mut runtime = PyRuntime::new(warm_config)?;
     if let Some(desc) = descriptor {
         runtime.prepare_session_with_manifest_and_descriptor(bundle.clone(), desc.clone())?;
@@ -670,6 +1853,28 @@ fn capture_warm_state(
         timing_stats(&cold_prepare),
         timing_stats(&cold_run),
     ))
+}
+
+fn warm_preimport_scripts(modules: &[String]) -> Result<Arc<Vec<String>>> {
+    let mut scripts = Vec::with_capacity(modules.len());
+    for module in modules {
+        let module = module.trim();
+        if module.is_empty() {
+            continue;
+        }
+        let literal = serde_json::to_string(module)
+            .map_err(|err| anyhow!("failed to encode warm preimport module {module}: {err}"))?;
+        scripts.push(format!("__import__({literal})"));
+    }
+    Ok(Arc::new(scripts))
+}
+
+fn runtime_config_for(pyodide_profile: Option<&str>) -> Result<PyRuntimeConfig> {
+    let mut config = PyRuntimeConfig::default();
+    if let Some(profile) = pyodide_profile {
+        config.set_pyodide_distribution_profile(profile)?;
+    }
+    Ok(config)
 }
 
 fn bench_host(
@@ -727,6 +1932,10 @@ fn bench_host(
         cold_run: None,
         host_python_version: result.python_version.or(Some(host_plan.python_version)),
         host_packages: Some(host_plan.packages),
+        samples: None,
+        setup_breakdown: None,
+        setup_breakdown_samples: None,
+        setup_pool_desired_size: None,
     })
 }
 
@@ -734,19 +1943,50 @@ fn scenario_source(scenario: Scenario) -> String {
     match scenario {
         Scenario::Echo => perf::echo_script().to_owned(),
         Scenario::Numpy => perf::numpy_script().to_owned(),
+        Scenario::NumpyMatmul => perf::numpy_matmul_script().to_owned(),
         Scenario::Pandas => perf::pandas_script().to_owned(),
+        Scenario::ScipySgemm => perf::scipy_sgemm_script().to_owned(),
         Scenario::Tensor => perf::tensor_script().to_owned(),
         Scenario::Matplotlib => perf::matplotlib_script().to_owned(),
     }
 }
 
-fn scenario_manifest(scenario: Scenario, invocation: InvocationKind) -> String {
+fn scenario_manifest(
+    scenario: Scenario,
+    invocation: InvocationKind,
+    pyodide_profile: Option<&str>,
+    manifest_preload_imports: &[String],
+) -> String {
     let packages = scenario_packages(scenario);
     let mut manifest = json!({
         "schemaVersion": "1.0",
         "entrypoint": "main:entrypoint",
         "packages": packages,
     });
+    if let Some(profile) = pyodide_profile {
+        manifest["runtime"] = json!({
+            "language": "python",
+            "pyodide": {"profile": profile},
+        });
+    }
+    if !manifest_preload_imports.is_empty() {
+        let runtime = manifest
+            .as_object_mut()
+            .expect("manifest should be a JSON object")
+            .entry("runtime")
+            .or_insert_with(|| json!({"language": "python"}));
+        let runtime_obj = runtime
+            .as_object_mut()
+            .expect("runtime should be a JSON object");
+        runtime_obj
+            .entry("language")
+            .or_insert_with(|| json!("python"));
+        let pyodide = runtime_obj.entry("pyodide").or_insert_with(|| json!({}));
+        pyodide
+            .as_object_mut()
+            .expect("pyodide should be a JSON object")
+            .insert("preloadImports".to_owned(), json!(manifest_preload_imports));
+    }
     if matches!(invocation, InvocationKind::RawCtx) {
         manifest["resources"] = json!({
             "hostCapabilities": ["rawctx_buffers"],
@@ -759,11 +1999,28 @@ fn descriptor_for(
     scenario: Scenario,
     invocation: InvocationKind,
     _profile: LoadProfile,
+    mode: Mode,
 ) -> Option<InvocationDescriptor> {
     match invocation {
-        InvocationKind::Json => None,
+        InvocationKind::Json => (!mode.captures_stdio())
+            .then(|| InvocationDescriptor::new("main:entrypoint").with_capture_stdio(false)),
         InvocationKind::RawCtx => {
             let mut descriptor = InvocationDescriptor::new("main:entrypoint");
+            if !mode.captures_stdio() {
+                descriptor = descriptor.with_capture_stdio(false);
+            }
+            if mode.uses_rawctx_shared_buffer_only_success() {
+                descriptor = descriptor.with_rawctx_shared_buffer_only_success(true);
+            }
+            if !mode.collects_rawctx_output_metadata() {
+                descriptor = descriptor.with_rawctx_output_metadata(false);
+            }
+            if mode.uses_rawctx_flat_input_buffers() {
+                descriptor = descriptor.with_rawctx_flat_input_buffers(true);
+            }
+            if mode.uses_direct_rawctx_contract() {
+                return Some(descriptor);
+            }
             let metadata = match scenario {
                 Scenario::Echo => RawCtxPublishBuilder::new("echo-output")
                     .transform("memoryview")
@@ -773,6 +2030,10 @@ fn descriptor_for(
                     .transform("memoryview")
                     .metadata(json!({"scenario": "numpy", "profile": _profile.name()}))
                     .build(),
+                Scenario::NumpyMatmul => RawCtxPublishBuilder::new("numpy-matmul-output")
+                    .transform("memoryview")
+                    .metadata(json!({"scenario": "numpy-matmul", "profile": _profile.name()}))
+                    .build(),
                 Scenario::Pandas => RawCtxPublishBuilder::new("pandas-output")
                     .transform("memoryview")
                     .metadata(json!({
@@ -780,6 +2041,10 @@ fn descriptor_for(
                         "fields": ["category", "value_mean"],
                         "profile": _profile.name(),
                     }))
+                    .build(),
+                Scenario::ScipySgemm => RawCtxPublishBuilder::new("scipy-sgemm-output")
+                    .transform("memoryview")
+                    .metadata(json!({"scenario": "scipy-sgemm", "profile": _profile.name()}))
                     .build(),
                 Scenario::Tensor => RawCtxPublishBuilder::new("tensor-output")
                     .transform("memoryview")
@@ -822,13 +2087,15 @@ fn scenario_packages(scenario: Scenario) -> &'static [&'static str] {
     match scenario {
         Scenario::Echo => &[],
         Scenario::Numpy => &["numpy"],
+        Scenario::NumpyMatmul => &["numpy"],
         Scenario::Pandas => &["numpy", "pandas"],
+        Scenario::ScipySgemm => &["scipy"],
         Scenario::Tensor => &["numpy"],
         Scenario::Matplotlib => &["numpy", "matplotlib"],
     }
 }
 
-fn build_bundle(source: &str, manifest: &[u8]) -> Result<Bundle> {
+fn build_bundle_bytes(source: &str, manifest: &[u8]) -> Result<Vec<u8>> {
     use zip::write::SimpleFileOptions;
     use zip::CompressionMethod;
 
@@ -842,7 +2109,7 @@ fn build_bundle(source: &str, manifest: &[u8]) -> Result<Bundle> {
         writer.write_all(manifest)?;
         writer.finish()?;
     }
-    Ok(Bundle::from_zip_bytes(buffer)?)
+    Ok(buffer)
 }
 
 fn timing_stats(samples: &[Duration]) -> TimingStats {
@@ -889,6 +2156,46 @@ fn timing_stats(samples: &[Duration]) -> TimingStats {
     }
 }
 
+fn timing_samples(
+    include_samples: bool,
+    total: &[Duration],
+    prepare: &[Duration],
+    run: &[Duration],
+) -> Option<TimingSamples> {
+    include_samples.then(|| TimingSamples {
+        total_ms: durations_ms(total),
+        prepare_ms: durations_ms(prepare),
+        run_ms: durations_ms(run),
+    })
+}
+
+fn setup_breakdown_stats(buckets: &SetupBreakdownBuckets) -> SetupBreakdownStats {
+    SetupBreakdownStats {
+        registry_init: timing_stats(&buckets.registry_init),
+        artifact_parse: timing_stats(&buckets.artifact_parse),
+        pool_create: timing_stats(&buckets.pool_create),
+        handler_prepare: timing_stats(&buckets.handler_prepare),
+        warm_all: (!buckets.warm_all.is_empty()).then(|| timing_stats(&buckets.warm_all)),
+    }
+}
+
+fn setup_breakdown_samples(buckets: &SetupBreakdownBuckets) -> SetupBreakdownSamples {
+    SetupBreakdownSamples {
+        registry_init_ms: durations_ms(&buckets.registry_init),
+        artifact_parse_ms: durations_ms(&buckets.artifact_parse),
+        pool_create_ms: durations_ms(&buckets.pool_create),
+        handler_prepare_ms: durations_ms(&buckets.handler_prepare),
+        warm_all_ms: durations_ms(&buckets.warm_all),
+    }
+}
+
+fn durations_ms(samples: &[Duration]) -> Vec<f64> {
+    samples
+        .iter()
+        .map(|duration| duration.as_secs_f64() * 1000.0)
+        .collect()
+}
+
 fn expand_results(results: &[BenchResult]) -> Vec<BenchResult> {
     let mut expanded = Vec::new();
     for result in results {
@@ -904,6 +2211,9 @@ fn expand_results(results: &[BenchResult]) -> Vec<BenchResult> {
             first.cold_total = None;
             first.cold_prepare = None;
             first.cold_run = None;
+            first.samples = None;
+            first.setup_breakdown = None;
+            first.setup_breakdown_samples = None;
             expanded.push(first);
         }
 
@@ -957,6 +2267,7 @@ fn write_csv(path: &Path, results: &[BenchResult]) -> Result<()> {
                 PathKind::ResetInPlace => "reset-in-place",
                 PathKind::Persistent => "persistent",
                 PathKind::FirstCall => "first-call",
+                PathKind::FirstLive => "first-live",
             })
             .unwrap_or("-");
         let cleanup = result.cleanup.map(|kind| kind.label()).unwrap_or("-");
@@ -1028,6 +2339,7 @@ fn print_summary(results: &[BenchResult]) {
                 PathKind::ResetInPlace => "reset-in-place",
                 PathKind::Persistent => "persistent",
                 PathKind::FirstCall => "first-call",
+                PathKind::FirstLive => "first-live",
             })
             .unwrap_or("-");
         let cleanup = r
@@ -1096,8 +2408,15 @@ fn host_modes_for_scenario(scenario: Scenario) -> &'static [Mode] {
         // Pyodide 0.29.4 pins matplotlib 3.8.4 for Python 3.13.2. That exact
         // native CPython package set is not generally wheel-installable, so the
         // default full matrix avoids producing a misleading or host-dependent row.
-        Scenario::Matplotlib => &[],
+        Scenario::Matplotlib | Scenario::NumpyMatmul | Scenario::ScipySgemm => &[],
         _ => Mode::host_modes(),
+    }
+}
+
+fn aardvark_modes_for_scenario(scenario: Scenario) -> &'static [Mode] {
+    match scenario {
+        Scenario::Tensor => Mode::aardvark_modes(),
+        _ => Mode::aardvark_modes(),
     }
 }
 
@@ -1260,7 +2579,9 @@ impl ScenarioExt for Scenario {
         match self {
             Scenario::Echo => "echo",
             Scenario::Numpy => "numpy",
+            Scenario::NumpyMatmul => "numpy-matmul",
             Scenario::Pandas => "pandas",
+            Scenario::ScipySgemm => "scipy-sgemm",
             Scenario::Tensor => "tensor",
             Scenario::Matplotlib => "matplotlib",
         }
@@ -1278,43 +2599,99 @@ impl LoadProfile {
     }
 }
 
-fn json_payload_for(scenario: Scenario, profile: LoadProfile) -> Option<JsonValue> {
+fn json_input_for(scenario: Scenario, profile: LoadProfile) -> Option<JsonInput> {
     match scenario {
-        Scenario::Echo => perf::echo_payload(profile).map(|bytes| {
-            let text = std::str::from_utf8(bytes)
-                .expect("echo fixtures must be valid utf-8")
-                .to_owned();
-            JsonValue::String(text)
+        Scenario::Echo => perf::echo_payload(profile)
+            .map(|bytes| JsonInput::Utf8Bytes(Bytes::copy_from_slice(bytes))),
+        Scenario::Numpy => perf::numpy_size(profile).map(|size| JsonInput::SingleI64Object {
+            key: "size".to_owned(),
+            value: i64::try_from(size).expect("numpy size should fit i64"),
         }),
-        Scenario::Numpy => perf::numpy_size(profile).map(|size| json!({"size": size})),
-        Scenario::Pandas => perf::pandas_rows(profile).map(|rows| json!({"rows": rows})),
+        Scenario::NumpyMatmul | Scenario::ScipySgemm => {
+            perf::matrix_size(profile).map(|size| JsonInput::SingleI64Object {
+                key: "size".to_owned(),
+                value: i64::try_from(size).expect("matrix size should fit i64"),
+            })
+        }
+        Scenario::Pandas => perf::pandas_rows(profile).map(|rows| JsonInput::SingleI64Object {
+            key: "rows".to_owned(),
+            value: i64::try_from(rows).expect("pandas rows should fit i64"),
+        }),
         Scenario::Tensor => {
-            let data = perf::tensor_data(profile);
-            if data.is_empty() {
+            let bytes = perf::tensor_bytes(profile);
+            if bytes.is_empty() {
                 None
             } else {
-                let values = data.into_iter().map(JsonValue::from).collect::<Vec<_>>();
-                Some(JsonValue::Array(values))
+                Some(JsonInput::F32LeBytes(Bytes::from(bytes)))
             }
         }
         Scenario::Matplotlib => {
-            perf::matplotlib_points(profile).map(|points| json!({"points": points}))
+            perf::matplotlib_points(profile).map(|points| JsonInput::SingleI64Object {
+                key: "points".to_owned(),
+                value: i64::try_from(points).expect("matplotlib points should fit i64"),
+            })
         }
     }
 }
 
-fn rawctx_inputs_for(scenario: Scenario, profile: LoadProfile) -> Result<Vec<RawCtxInput>> {
+fn rawctx_inputs_for(
+    scenario: Scenario,
+    profile: LoadProfile,
+    mode: Mode,
+) -> Result<Vec<RawCtxInput>> {
+    rawctx_inputs_for_with_options(
+        scenario,
+        profile,
+        false,
+        !mode.uses_direct_rawctx_contract(),
+    )
+}
+
+fn rawctx_inputs_for_call(
+    scenario: Scenario,
+    profile: LoadProfile,
+    template: &[RawCtxInput],
+    mode: Mode,
+) -> Result<Vec<RawCtxInput>> {
+    if mode.uses_owned_rawctx_inputs() {
+        rawctx_inputs_for_with_options(scenario, profile, true, !mode.uses_direct_rawctx_contract())
+    } else {
+        Ok(template.to_vec())
+    }
+}
+
+fn rawctx_inputs_for_with_options(
+    scenario: Scenario,
+    profile: LoadProfile,
+    force_owned: bool,
+    include_metadata: bool,
+) -> Result<Vec<RawCtxInput>> {
     match scenario {
         Scenario::Echo => {
             let Some(bytes) = perf::echo_payload(profile) else {
                 return Ok(Vec::new());
             };
-            let data = Bytes::from_static(bytes);
-            let meta = RawCtxMetadata::new("binary");
-            Ok(vec![RawCtxInput::new("payload", data, Some(meta))?])
+            let metadata = include_metadata.then(|| RawCtxMetadata::new("binary"));
+            let data = if force_owned {
+                return Ok(vec![RawCtxInput::from_vec(
+                    "payload",
+                    bytes.to_vec(),
+                    metadata,
+                )?]);
+            } else {
+                Bytes::from_static(bytes)
+            };
+            Ok(vec![RawCtxInput::new("payload", data, metadata)?])
         }
         Scenario::Numpy => {
             let Some(size) = perf::numpy_size(profile) else {
+                return Ok(Vec::new());
+            };
+            let data = Bytes::copy_from_slice(&size.to_le_bytes());
+            Ok(vec![RawCtxInput::new("control", data, None)?])
+        }
+        Scenario::NumpyMatmul | Scenario::ScipySgemm => {
+            let Some(size) = perf::matrix_size(profile) else {
                 return Ok(Vec::new());
             };
             let data = Bytes::copy_from_slice(&size.to_le_bytes());
@@ -1333,14 +2710,16 @@ fn rawctx_inputs_for(scenario: Scenario, profile: LoadProfile) -> Result<Vec<Raw
                 return Ok(Vec::new());
             }
             let length = bytes.len() / std::mem::size_of::<f32>();
-            let metadata = RawCtxMetadata::new("binary")
-                .with_shape(vec![length])
-                .with_extra(json!({"format": "f32_le"}))?;
-            Ok(vec![RawCtxInput::new(
-                "tensor",
-                Bytes::from(bytes),
-                Some(metadata),
-            )?])
+            let metadata = if include_metadata {
+                Some(
+                    RawCtxMetadata::new("binary")
+                        .with_shape(vec![length])
+                        .with_extra(json!({"format": "f32_le"}))?,
+                )
+            } else {
+                None
+            };
+            Ok(vec![RawCtxInput::from_vec("tensor", bytes, metadata)?])
         }
         Scenario::Matplotlib => {
             let Some(points) = perf::matplotlib_points(profile) else {
@@ -1359,7 +2738,9 @@ impl std::str::FromStr for Scenario {
         match s.to_ascii_lowercase().as_str() {
             "echo" => Ok(Scenario::Echo),
             "numpy" => Ok(Scenario::Numpy),
+            "numpy-matmul" | "numpymatmul" => Ok(Scenario::NumpyMatmul),
             "pandas" => Ok(Scenario::Pandas),
+            "scipy-sgemm" | "scipysgemm" => Ok(Scenario::ScipySgemm),
             "tensor" => Ok(Scenario::Tensor),
             "matplotlib" => Ok(Scenario::Matplotlib),
             other => Err(format!("unknown scenario '{other}'")),
@@ -1389,17 +2770,74 @@ impl std::str::FromStr for Mode {
             "aardvark-json-cold" => Ok(Mode::AardvarkJsonCold),
             "aardvark-json-warm" => Ok(Mode::AardvarkJsonWarm),
             "aardvark-json-reset-in-place" => Ok(Mode::AardvarkJsonResetInPlace),
-            "aardvark-json-persistent" | "aardvark-json-persistent-full" => {
-                Ok(Mode::AardvarkJsonPersistent)
+            "aardvark-json-persistent" => Ok(Mode::AardvarkJsonPersistent),
+            "aardvark-json-persistent-warm-call" => Ok(Mode::AardvarkJsonPersistentWarmCall),
+            "aardvark-json-persistent-no-stdio" => Ok(Mode::AardvarkJsonPersistentNoStdio),
+            "aardvark-json-persistent-warm-call-no-stdio" => {
+                Ok(Mode::AardvarkJsonPersistentWarmCallNoStdio)
             }
+            "aardvark-json-registry-persistent-no-stdio" => {
+                Ok(Mode::AardvarkJsonRegistryPersistentNoStdio)
+            }
+            "aardvark-json-registry-prepare-each-call-no-stdio" => {
+                Ok(Mode::AardvarkJsonRegistryPrepareEachCallNoStdio)
+            }
+            "aardvark-json-registry-cached-handler-no-stdio" => {
+                Ok(Mode::AardvarkJsonRegistryCachedHandlerNoStdio)
+            }
+            "aardvark-json-registry-retained-handler-no-stdio" => {
+                Ok(Mode::AardvarkJsonRegistryRetainedHandlerNoStdio)
+            }
+            "aardvark-json-registry-retained-first-live-no-stdio" => {
+                Ok(Mode::AardvarkJsonRegistryRetainedFirstLiveNoStdio)
+            }
+            "aardvark-json-registry-retained-warm-all-first-live-no-stdio" => {
+                Ok(Mode::AardvarkJsonRegistryRetainedWarmAllFirstLiveNoStdio)
+            }
+            "aardvark-json-warmed-host-pooled-warm-all-first-live-no-stdio" => {
+                Ok(Mode::AardvarkJsonWarmedHostPooledWarmAllFirstLiveNoStdio)
+            }
+            "aardvark-json-warmed-host-registry-pooled-warm-all-first-live-no-stdio" => Ok(
+                Mode::AardvarkJsonWarmedHostRegistryPooledWarmAllFirstLiveNoStdio,
+            ),
+            "aardvark-json-persistent-full" => Ok(Mode::AardvarkJsonPersistentFull),
             "aardvark-json-persistent-shared" => Ok(Mode::AardvarkJsonPersistentShared),
             "aardvark-json-persistent-none" => Ok(Mode::AardvarkJsonPersistentNone),
             "aardvark-rawctx-cold" => Ok(Mode::AardvarkRawCtxCold),
             "aardvark-rawctx-warm" => Ok(Mode::AardvarkRawCtxWarm),
             "aardvark-rawctx-reset-in-place" => Ok(Mode::AardvarkRawCtxResetInPlace),
-            "aardvark-rawctx-persistent" | "aardvark-rawctx-persistent-full" => {
-                Ok(Mode::AardvarkRawCtxPersistent)
+            "aardvark-rawctx-persistent" => Ok(Mode::AardvarkRawCtxPersistent),
+            "aardvark-rawctx-persistent-no-stdio" => Ok(Mode::AardvarkRawCtxPersistentNoStdio),
+            "aardvark-rawctx-direct-persistent" => Ok(Mode::AardvarkRawCtxDirectPersistent),
+            "aardvark-rawctx-direct-owned-persistent" => {
+                Ok(Mode::AardvarkRawCtxDirectOwnedPersistent)
             }
+            "aardvark-rawctx-direct-persistent-warm-call" => {
+                Ok(Mode::AardvarkRawCtxDirectPersistentWarmCall)
+            }
+            "aardvark-rawctx-direct-owned-persistent-warm-call" => {
+                Ok(Mode::AardvarkRawCtxDirectOwnedPersistentWarmCall)
+            }
+            "aardvark-rawctx-direct-owned-persistent-warm-call-no-stdio" => {
+                Ok(Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdio)
+            }
+            "aardvark-rawctx-direct-owned-persistent-warm-call-no-stdio-shared-buffer-only" => {
+                Ok(Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnly)
+            }
+            "aardvark-rawctx-direct-owned-persistent-warm-call-no-stdio-shared-buffer-only-no-output-metadata" => {
+                Ok(Mode::AardvarkRawCtxDirectOwnedPersistentWarmCallNoStdioSharedBufferOnlyNoOutputMetadata)
+            }
+            "aardvark-rawctx-registry-retained-direct-owned-warm-call-no-stdio" => {
+                Ok(Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmCallNoStdio)
+            }
+            "aardvark-rawctx-registry-retained-direct-owned-first-live-no-stdio" => {
+                Ok(Mode::AardvarkRawCtxRegistryRetainedDirectOwnedFirstLiveNoStdio)
+            }
+            "aardvark-rawctx-registry-retained-direct-owned-warm-all-first-live-no-stdio" => {
+                Ok(Mode::AardvarkRawCtxRegistryRetainedDirectOwnedWarmAllFirstLiveNoStdio)
+            }
+            "aardvark-rawctx-persistent-warm-call" => Ok(Mode::AardvarkRawCtxPersistentWarmCall),
+            "aardvark-rawctx-persistent-full" => Ok(Mode::AardvarkRawCtxPersistentFull),
             "aardvark-rawctx-persistent-shared" => Ok(Mode::AardvarkRawCtxPersistentShared),
             "aardvark-rawctx-persistent-none" => Ok(Mode::AardvarkRawCtxPersistentNone),
             "host-python" | "host-python-warm" | "host" | "python" => Ok(Mode::HostPythonWarm),
@@ -1412,15 +2850,18 @@ impl std::str::FromStr for Mode {
 
 #[cfg(unix)]
 #[cfg(target_os = "macos")]
-#[allow(deprecated)]
 fn current_rss_mib() -> Option<f64> {
     unsafe {
+        unsafe extern "C" {
+            #[link_name = "mach_task_self_"]
+            static MACH_TASK_SELF: libc::mach_port_t;
+        }
         let mut info: libc::mach_task_basic_info = std::mem::zeroed();
         let mut count = (std::mem::size_of::<libc::mach_task_basic_info>()
             / std::mem::size_of::<libc::integer_t>())
             as libc::mach_msg_type_number_t;
         let result = libc::task_info(
-            libc::mach_task_self(),
+            MACH_TASK_SELF,
             libc::MACH_TASK_BASIC_INFO,
             (&mut info as *mut _) as *mut libc::integer_t,
             &mut count,
@@ -1499,5 +2940,9 @@ mod tests {
     fn full_matrix_omits_default_matplotlib_host_rows() {
         assert!(host_modes_for_scenario(Scenario::Matplotlib).is_empty());
         assert_eq!(host_modes_for_scenario(Scenario::Pandas).len(), 3);
+        assert_eq!(
+            aardvark_modes_for_scenario(Scenario::Tensor),
+            Mode::aardvark_modes()
+        );
     }
 }

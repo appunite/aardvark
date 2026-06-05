@@ -8,8 +8,16 @@ pub fn numpy_script() -> &'static str {
     include_str!("../../../fixtures/scenarios/numpy.py")
 }
 
+pub fn numpy_matmul_script() -> &'static str {
+    include_str!("../../../fixtures/scenarios/numpy_matmul.py")
+}
+
 pub fn pandas_script() -> &'static str {
     include_str!("../../../fixtures/scenarios/pandas.py")
+}
+
+pub fn scipy_sgemm_script() -> &'static str {
+    include_str!("../../../fixtures/scenarios/scipy_sgemm.py")
 }
 
 pub fn tensor_script() -> &'static str {
@@ -41,6 +49,15 @@ pub fn numpy_size(profile: LoadProfile) -> Option<u64> {
         LoadProfile::High => Some(parse_u64(include_str!(
             "../../../fixtures/inputs/numpy_high.txt"
         ))),
+    }
+}
+
+pub fn matrix_size(profile: LoadProfile) -> Option<u64> {
+    match profile {
+        LoadProfile::None => None,
+        LoadProfile::Low => Some(64),
+        LoadProfile::Medium => Some(128),
+        LoadProfile::High => Some(256),
     }
 }
 

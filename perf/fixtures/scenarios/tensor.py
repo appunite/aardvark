@@ -1,3 +1,5 @@
+import builtins
+
 import numpy as np
 
 
@@ -30,7 +32,18 @@ def _compute(array: np.ndarray) -> np.ndarray:
 def _publish_raw(result: np.ndarray):
     buffer_factory = globals().get("__aardvark_output_buffer")
     if not callable(buffer_factory):
-        return result.astype(np.float32, copy=False).tobytes()
+        buffer_factory = getattr(builtins, "__aardvark_output_buffer", None)
+    if not callable(buffer_factory):
+        publisher = getattr(builtins, "__aardvark_publish_buffer", None)
+        view = np.asarray(result, dtype=np.float32, order="C")
+        if callable(publisher):
+            publisher(
+                "tensor-output",
+                memoryview(view),
+                {"format": "f32_le"},
+            )
+            return None
+        return view.tobytes()
     view = np.asarray(result, dtype=np.float32, order="C")
     buffer = buffer_factory(view.nbytes, id="tensor-output", metadata={"format": "f32_le"})
     memoryview(buffer).cast("f")[:] = view
@@ -44,9 +57,15 @@ def main(tensor: np.ndarray):
 def entrypoint(input=None, tensor_payload=None, tensor=None):
     raw_tensor = _tensor_from_raw(tensor_payload or tensor)
     if raw_tensor is None:
-        raw_tensor = _tensor_from_json(input)
-        result = main(raw_tensor)
-        return result.tolist()
+        source = getattr(builtins, "__aardvark_rawctx_inputs", None)
+        if isinstance(source, dict):
+            raw_tensor = _tensor_from_raw(source.get("tensor"))
+    if raw_tensor is None:
+        json_input = input
+        if json_input is None:
+            json_input = getattr(builtins, "__aardvark_input", None)
+        raw_tensor = _tensor_from_json(json_input)
+        return main(raw_tensor)
 
     result = main(raw_tensor)
     return _publish_raw(result)
