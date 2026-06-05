@@ -15,6 +15,10 @@ def _rawctx_payload(field: str) -> Optional[bytes]:
     if source is None:
         return None
     record = source.get(field)
+    if isinstance(record, memoryview):
+        return record.tobytes()
+    if isinstance(record, (bytes, bytearray)):
+        return bytes(record)
     if isinstance(record, dict):
         data = record.get("data")
         if isinstance(data, memoryview):
@@ -34,6 +38,10 @@ def _publish_raw(data: bytes):
         buffer = factory(len(data), id="echo-output")
         buffer[: len(data)] = data
         return buffer
+    publisher = getattr(builtins, "__aardvark_publish_buffer", None)
+    if callable(publisher):
+        publisher("echo-output", data, {"format": "bytes"})
+        return None
     return data
 
 

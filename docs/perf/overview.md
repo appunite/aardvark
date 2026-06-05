@@ -30,10 +30,11 @@ Workloads:
   point (`PYODIDE_PACKAGES="numpy,matplotlib" make benchmark`) while keeping
   execution inside Aardvark's runtime matrix.
 
-Each workload/profile pair is exercised through four Aardvark paths—cold
-start, warm snapshot, reset-in-place pooling, and the persistent isolate
-pool—and supported native baselines are exercised through three host Python
-comparison modes. The harness records
+Each workload/profile pair is exercised through the current Aardvark runtime
+matrix: cold start, warm snapshot, first-live startup paths, reset-in-place
+pooling, persistent isolates, retained registry handlers, warmed hosts, and
+direct RawCtx variants where applicable. Supported native baselines are
+exercised through the host Python comparison modes. The harness records
 average/min/max wall-clock latency per invocation plus the peak RSS reported by
 the OS.
 
@@ -88,10 +89,14 @@ directly call `make perf-md`, which invokes the same run and pipes the JSON into
 `perf/scripts/render_markdown.py`.
 
 For the cold and warm paths each iteration spins up a fresh runtime, installs
-the requested packages from the staged distribution, prepares the bundle, and executes
-the entrypoint. The persistent rows keep a `BundlePool` isolate hot between
-calls (`CleanupMode::Full` unless noted), highlighting the latency win from
-skipping the hydration step.
+the requested packages from the staged distribution, prepares the bundle, and
+executes the entrypoint. First-live rows include both deploy/startup setup and
+the first live call in their headline `total` latency; their JSON artefacts also
+carry setup breakdown buckets such as registry creation, artifact parsing, pool
+creation, handler preparation, and pool-wide warmup when those phases exist. The
+persistent rows keep a `BundlePool` isolate hot between calls
+(`CleanupMode::Full` unless noted), highlighting the latency win from skipping
+the hydration step.
 
 Sample console output (abbreviated; numbers will vary with hardware and
 iteration count):
