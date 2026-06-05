@@ -79,7 +79,7 @@ Distribution profiles are selected before Pyodide/V8 isolate creation. They are 
     },
     "filesystem": {
       "mode": "readWrite",
-      "quotaBytes": 5_000_000
+      "quotaBytes": 5000000
     },
     "hostCapabilities": ["rawctx_buffers"]
   }

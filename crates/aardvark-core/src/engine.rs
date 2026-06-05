@@ -3232,6 +3232,236 @@ fn native_log_callback(
     rv.set(v8::undefined(scope).into());
 }
 
+#[derive(Debug)]
+struct NativeFetchInit {
+    method: String,
+    headers: Vec<(String, String)>,
+    body: Option<Vec<u8>>,
+}
+
+impl Default for NativeFetchInit {
+    fn default() -> Self {
+        Self {
+            method: "GET".to_owned(),
+            headers: Vec::new(),
+            body: None,
+        }
+    }
+}
+
+fn native_fetch_init_from_value(
+    scope: &mut PinScope<'_, '_>,
+    value: Option<Local<'_, Value>>,
+) -> NativeFetchInit {
+    let mut init = NativeFetchInit::default();
+    let Some(value) = value else {
+        return init;
+    };
+    if value.is_null_or_undefined() {
+        return init;
+    }
+    let Some(object) = value.to_object(scope) else {
+        return init;
+    };
+
+    if let Some(method) = object_string_property(scope, object, "method") {
+        let method = method.trim();
+        if !method.is_empty() {
+            init.method = method.to_ascii_uppercase();
+        }
+    }
+
+    if let Some(headers_value) = object_property(scope, object, "headers") {
+        init.headers = native_fetch_headers_from_value(scope, headers_value);
+    }
+
+    if let Some(body_value) = object_property(scope, object, "body") {
+        init.body = native_fetch_body_from_value(scope, body_value);
+    }
+
+    init
+}
+
+fn object_property<'a>(
+    scope: &mut PinScope<'a, '_>,
+    object: Local<'a, Object>,
+    name: &str,
+) -> Option<Local<'a, Value>> {
+    let key = V8String::new(scope, name)?;
+    object.get(scope, key.into())
+}
+
+fn object_string_property<'a>(
+    scope: &mut PinScope<'a, '_>,
+    object: Local<'a, Object>,
+    name: &str,
+) -> Option<String> {
+    let value = object_property(scope, object, name)?;
+    if value.is_null_or_undefined() {
+        return None;
+    }
+    value
+        .to_string(scope)
+        .map(|value| value.to_rust_string_lossy(scope))
+}
+
+fn native_fetch_headers_from_value(
+    scope: &mut PinScope<'_, '_>,
+    value: Local<'_, Value>,
+) -> Vec<(String, String)> {
+    if value.is_null_or_undefined() {
+        return Vec::new();
+    }
+
+    if let Ok(array) = Local::<Array>::try_from(value) {
+        let mut headers = Vec::new();
+        for index in 0..array.length() {
+            let Some(entry) = array.get_index(scope, index) else {
+                continue;
+            };
+            if let Ok(pair) = Local::<Array>::try_from(entry) {
+                let Some(name_value) = pair.get_index(scope, 0) else {
+                    continue;
+                };
+                let Some(value_value) = pair.get_index(scope, 1) else {
+                    continue;
+                };
+                let Some(name) = name_value
+                    .to_string(scope)
+                    .map(|value| value.to_rust_string_lossy(scope))
+                else {
+                    continue;
+                };
+                let Some(value) = value_value
+                    .to_string(scope)
+                    .map(|value| value.to_rust_string_lossy(scope))
+                else {
+                    continue;
+                };
+                if !name.is_empty() {
+                    headers.push((name, value));
+                }
+            }
+        }
+        return headers;
+    }
+
+    let Some(object) = value.to_object(scope) else {
+        return Vec::new();
+    };
+    let Some(names) = object.get_own_property_names(scope, Default::default()) else {
+        return Vec::new();
+    };
+    let mut headers = Vec::new();
+    for index in 0..names.length() {
+        let Some(name_value) = names.get_index(scope, index) else {
+            continue;
+        };
+        let Some(value_value) = object.get(scope, name_value) else {
+            continue;
+        };
+        let Some(name) = name_value
+            .to_string(scope)
+            .map(|value| value.to_rust_string_lossy(scope))
+        else {
+            continue;
+        };
+        let Some(value) = value_value
+            .to_string(scope)
+            .map(|value| value.to_rust_string_lossy(scope))
+        else {
+            continue;
+        };
+        if !name.is_empty() {
+            headers.push((name, value));
+        }
+    }
+    headers
+}
+
+fn native_fetch_body_from_value(
+    scope: &mut PinScope<'_, '_>,
+    value: Local<'_, Value>,
+) -> Option<Vec<u8>> {
+    if value.is_null_or_undefined() {
+        return None;
+    }
+
+    if let Ok(typed_array) = Local::<Uint8Array>::try_from(value) {
+        return uint8_array_to_vec(scope, typed_array);
+    }
+
+    value
+        .to_string(scope)
+        .map(|value| value.to_rust_string_lossy(scope).into_bytes())
+}
+
+fn uint8_array_to_vec(
+    scope: &mut PinScope<'_, '_>,
+    typed_array: Local<'_, Uint8Array>,
+) -> Option<Vec<u8>> {
+    let byte_len = typed_array.byte_length();
+    if byte_len == 0 {
+        return Some(Vec::new());
+    }
+    let array_buffer = typed_array.buffer(scope)?;
+    let backing_store = array_buffer.get_backing_store();
+    let offset = typed_array.byte_offset();
+    let ptr = backing_store.data()?;
+    let store_size = backing_store.byte_length();
+    let end = offset.checked_add(byte_len)?;
+    if end > store_size {
+        return None;
+    }
+
+    unsafe {
+        let data = ptr.as_ptr().add(offset) as *const u8;
+        Some(std::slice::from_raw_parts(data, byte_len).to_vec())
+    }
+}
+
+fn is_forbidden_xhr_request_header(name: &str) -> bool {
+    let normalized = name.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "accept-charset"
+            | "accept-encoding"
+            | "connection"
+            | "content-length"
+            | "cookie"
+            | "cookie2"
+            | "dnt"
+            | "expect"
+            | "host"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+            | "user-agent"
+    ) || normalized.starts_with("sec-")
+        || normalized.starts_with("access-control-request-")
+}
+
+fn apply_native_fetch_options<B>(
+    request: ureq::RequestBuilder<B>,
+    headers: &[(String, String)],
+) -> ureq::RequestBuilder<B> {
+    let mut request = request.config().http_status_as_error(false).build();
+    for (name, value) in headers {
+        if is_forbidden_xhr_request_header(name) {
+            warn!(
+                target = "aardvark::sandbox",
+                header = name.as_str(),
+                "ignoring forbidden XMLHttpRequest request header"
+            );
+            continue;
+        }
+        request = request.header(name.as_str(), value.as_str());
+    }
+    request
+}
+
 fn native_fetch_callback(
     scope: &mut PinScope<'_, '_>,
     args: FunctionCallbackArguments<'_>,
@@ -3245,6 +3475,14 @@ fn native_fetch_callback(
     } else {
         String::new()
     };
+    let fetch_init = native_fetch_init_from_value(
+        scope,
+        if args.length() > 1 {
+            Some(args.get(1))
+        } else {
+            None
+        },
+    );
 
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         rv.set(v8::undefined(scope).into());
@@ -3406,6 +3644,7 @@ fn native_fetch_callback(
     info!(
         target = "aardvark::sandbox",
         network.allowed = true,
+        method = fetch_init.method.as_str(),
         %url,
         host = host.as_str(),
         port,
@@ -3415,7 +3654,51 @@ fn native_fetch_callback(
 
     context_state.record_network_contact(&host, port, is_https);
 
-    let mut response = match ureq::get(&url).call() {
+    let body = fetch_init.body.as_deref().unwrap_or(&[]);
+    let has_body = fetch_init.body.is_some();
+    let response_result = match fetch_init.method.as_str() {
+        "GET" => {
+            let request = apply_native_fetch_options(ureq::get(&url), &fetch_init.headers);
+            if has_body {
+                request.force_send_body().send(body)
+            } else {
+                request.call()
+            }
+        }
+        "HEAD" => apply_native_fetch_options(ureq::head(&url), &fetch_init.headers).call(),
+        "OPTIONS" => {
+            let request = apply_native_fetch_options(ureq::options(&url), &fetch_init.headers);
+            if has_body {
+                request.force_send_body().send(body)
+            } else {
+                request.call()
+            }
+        }
+        "DELETE" => {
+            let request = apply_native_fetch_options(ureq::delete(&url), &fetch_init.headers);
+            if has_body {
+                request.force_send_body().send(body)
+            } else {
+                request.call()
+            }
+        }
+        "POST" => apply_native_fetch_options(ureq::post(&url), &fetch_init.headers).send(body),
+        "PUT" => apply_native_fetch_options(ureq::put(&url), &fetch_init.headers).send(body),
+        "PATCH" => apply_native_fetch_options(ureq::patch(&url), &fetch_init.headers).send(body),
+        other => {
+            warn!(
+                target = "aardvark::sandbox",
+                method = other,
+                %url,
+                "network request rejected: unsupported http method"
+            );
+            let message = v8::String::new(scope, "unsupported HTTP method").unwrap();
+            scope.throw_exception(message.into());
+            return;
+        }
+    };
+
+    let mut response = match response_result {
         Ok(resp) => resp,
         Err(err) => {
             tracing::warn!(%url, error = ?err, "native fetch failed");

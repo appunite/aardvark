@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "1.0",
+  "entrypoint": "main:main",
+  "packages": ["numpy"],
+  "runtime": {
+    "language": "python",
+    "pyodide": {
+      "version": "0.29.4"
+    }
+  }
+}

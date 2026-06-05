@@ -1,5 +1,3 @@
-import json
-
 import numpy as np
 import sklearn
 from sklearn.datasets import load_iris
@@ -26,9 +24,10 @@ def handler(event=None, context=None):
 
 
 def main():
-    result = handler()
-    print(json.dumps(result, sort_keys=True))
+    return handler()
 
 
 if __name__ == "__main__":
-    main()
+    import json
+
+    print(json.dumps(main(), sort_keys=True))

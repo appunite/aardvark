@@ -10,7 +10,11 @@ use aardvark_core::{
 };
 use bytes::Bytes;
 use serde_json::json;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 
@@ -446,6 +450,377 @@ fn network_denies_hosts_not_in_allowlist() -> Result<()> {
 }
 
 #[test]
+fn xmlhttprequest_sync_data_url_matches_browser_shape() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export default function main() {
+    const seen = [];
+    const xhr = new XMLHttpRequest();
+    xhr.onreadystatechange = () => seen.push(xhr.readyState);
+    xhr.open("GET", "data:text/plain,hello%20xhr", false);
+    xhr.send();
+    return {
+        status: xhr.status,
+        statusText: xhr.statusText,
+        text: xhr.responseText,
+        response: xhr.response,
+        header: xhr.getResponseHeader("Content-Type"),
+        allHeaders: xhr.getAllResponseHeaders(),
+        done: xhr.readyState === XMLHttpRequest.DONE,
+        seen,
+    };
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => {
+            assert_eq!(value["status"], json!(200));
+            assert_eq!(value["statusText"], json!("OK"));
+            assert_eq!(value["text"], json!("hello xhr"));
+            assert_eq!(value["response"], json!("hello xhr"));
+            assert_eq!(value["header"], json!("text/plain"));
+            assert_eq!(value["done"], json!(true));
+            assert!(
+                value["allHeaders"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("content-type: text/plain"),
+                "expected content-type in all headers: {value:?}"
+            );
+            let seen = value["seen"].as_array().expect("seen should be an array");
+            assert!(
+                seen.iter().any(|state| state == &json!(4)),
+                "expected DONE readyState in callback trace: {value:?}"
+            );
+        }
+        other => panic!(
+            "expected json payload, got {:?}; status {:?}",
+            other, outcome.status
+        ),
+    }
+    Ok(())
+}
+
+#[test]
+fn xmlhttprequest_async_json_response_resolves_promise() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export default function main() {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.responseType = "json";
+        xhr.onload = () => resolve({
+            status: xhr.status,
+            ok: xhr.response.ok,
+            value: xhr.response.value,
+        });
+        xhr.onerror = (event) => reject(event.error || new Error("xhr failed"));
+        xhr.open("GET", "data:application/json,%7B%22ok%22%3Atrue%2C%22value%22%3A7%7D");
+        xhr.send();
+    });
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => {
+            assert_eq!(value, &json!({ "status": 200, "ok": true, "value": 7 }));
+        }
+        other => panic!("expected json payload, got {:?}", other),
+    }
+    Ok(())
+}
+
+#[test]
+fn xmlhttprequest_posts_headers_and_body_through_native_fetch() -> Result<()> {
+    let (port, request_rx) = spawn_one_shot_http_server();
+    let manifest = format!(
+        r#"{{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": {{ "language": "javascript" }},
+        "resources": {{
+            "network": {{
+                "allow": ["127.0.0.1:{port}"],
+                "httpsOnly": false
+            }}
+        }}
+    }}"#
+    );
+
+    let bundle = bundle_with_js_main_and_manifest(
+        &format!(
+            r#"
+export default function main() {{
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "http://127.0.0.1:{port}/submit", false);
+    xhr.setRequestHeader("X-Aardvark-Test", "xhr");
+    xhr.setRequestHeader("Content-Type", "text/plain");
+    xhr.send("hello-body");
+    return {{
+        status: xhr.status,
+        response: xhr.responseText,
+        header: xhr.getResponseHeader("x-aardvark-test"),
+    }};
+}}
+"#
+        ),
+        &manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => {
+            assert_eq!(value["status"], json!(200));
+            assert_eq!(value["response"], json!("accepted"));
+            assert_eq!(value["header"], json!("server"));
+        }
+        other => panic!("expected json payload, got {:?}", other),
+    }
+
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("server should receive request");
+    let lowered = request.to_ascii_lowercase();
+    assert!(
+        request.starts_with("POST /submit "),
+        "expected POST request, got {request:?}"
+    );
+    assert!(
+        lowered.contains("x-aardvark-test: xhr"),
+        "expected custom header, got {request:?}"
+    );
+    assert!(
+        lowered.contains("content-type: text/plain"),
+        "expected content-type header, got {request:?}"
+    );
+    assert!(
+        request.ends_with("hello-body"),
+        "expected request body, got {request:?}"
+    );
+    assert!(
+        outcome
+            .diagnostics
+            .network_hosts_contacted
+            .iter()
+            .any(|contact| contact.host == "127.0.0.1"
+                && contact.port == Some(port)
+                && !contact.https),
+        "expected localhost contact in diagnostics: {:?}",
+        outcome.diagnostics.network_hosts_contacted
+    );
+    Ok(())
+}
+
+#[test]
+fn xmlhttprequest_preserves_http_error_status_and_body() -> Result<()> {
+    let response = b"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 7\r\nConnection: close\r\n\r\nmissing".to_vec();
+    let (port, request_rx) = spawn_one_shot_http_server_with_response(response);
+    let manifest = format!(
+        r#"{{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": {{ "language": "javascript" }},
+        "resources": {{
+            "network": {{
+                "allow": ["127.0.0.1:{port}"],
+                "httpsOnly": false
+            }}
+        }}
+    }}"#
+    );
+
+    let bundle = bundle_with_js_main_and_manifest(
+        &format!(
+            r#"
+export default function main() {{
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", "http://127.0.0.1:{port}/missing", false);
+    xhr.send();
+    return {{
+        status: xhr.status,
+        statusText: xhr.statusText,
+        response: xhr.responseText,
+        contentType: xhr.getResponseHeader("content-type"),
+    }};
+}}
+"#
+        ),
+        &manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => {
+            assert_eq!(value["status"], json!(404));
+            assert_eq!(value["statusText"], json!("Not Found"));
+            assert_eq!(value["response"], json!("missing"));
+            assert_eq!(value["contentType"], json!("text/plain"));
+        }
+        other => panic!("expected json payload, got {:?}", other),
+    }
+
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("server should receive request");
+    assert!(
+        request.starts_with("GET /missing "),
+        "expected missing request, got {request:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn xmlhttprequest_ignores_forbidden_request_headers() -> Result<()> {
+    let (port, request_rx) = spawn_one_shot_http_server();
+    let manifest = format!(
+        r#"{{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": {{ "language": "javascript" }},
+        "resources": {{
+            "network": {{
+                "allow": ["127.0.0.1:{port}"],
+                "httpsOnly": false
+            }}
+        }}
+    }}"#
+    );
+
+    let bundle = bundle_with_js_main_and_manifest(
+        &format!(
+            r#"
+export default function main() {{
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", "http://127.0.0.1:{port}/headers", false);
+    xhr.setRequestHeader("Host", "evil.example");
+    xhr.setRequestHeader("Cookie", "session=secret");
+    xhr.setRequestHeader("X-Aardvark-Test", "allowed");
+    xhr.send();
+    return {{
+        status: xhr.status,
+        response: xhr.responseText,
+    }};
+}}
+"#
+        ),
+        &manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => {
+            assert_eq!(value["status"], json!(200));
+            assert_eq!(value["response"], json!("accepted"));
+        }
+        other => panic!("expected json payload, got {:?}", other),
+    }
+
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("server should receive request");
+    let lowered = request.to_ascii_lowercase();
+    assert!(
+        lowered.contains("x-aardvark-test: allowed"),
+        "expected allowed custom header, got {request:?}"
+    );
+    assert!(
+        !lowered.contains("host: evil.example"),
+        "forbidden Host override should not be forwarded: {request:?}"
+    );
+    assert!(
+        !lowered.contains("cookie:"),
+        "forbidden Cookie header should not be forwarded: {request:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn xmlhttprequest_denial_uses_network_policy_telemetry() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" },
+        "resources": {
+            "network": {
+                "allow": [],
+                "httpsOnly": true
+            }
+        }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export default function main() {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", "https://blocked.example/resource", false);
+    try {
+        xhr.send();
+    } catch (err) {
+        return {
+            name: err.name,
+            message: err.message,
+            status: xhr.status,
+        };
+    }
+    return { name: "none" };
+}
+"#,
+        manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => {
+            assert_eq!(value["name"], json!("NetworkError"));
+            assert_eq!(value["status"], json!(0));
+            assert!(
+                value["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("not permitted"),
+                "expected policy message, got {value:?}"
+            );
+        }
+        other => panic!("expected json payload, got {:?}", other),
+    }
+    assert_eq!(outcome.diagnostics.network_hosts_blocked.len(), 1);
+    let blocked = &outcome.diagnostics.network_hosts_blocked[0];
+    assert_eq!(blocked.host, "blocked.example");
+    assert_eq!(blocked.reason, "no-allowlist");
+    Ok(())
+}
+
+#[test]
 fn exception_reports_failure() -> Result<()> {
     let manifest = r#"{
         "schemaVersion": "1.0",
@@ -529,6 +904,57 @@ fn bundle_with_js_main_and_manifest(code: &str, manifest: &str) -> Bundle {
 
     let cursor = writer.finish().expect("failed to finish bundle");
     Bundle::from_zip_bytes(cursor.into_inner()).expect("failed to parse bundle")
+}
+
+fn spawn_one_shot_http_server() -> (u16, mpsc::Receiver<String>) {
+    let response = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nX-Aardvark-Test: server\r\nContent-Length: 8\r\nConnection: close\r\n\r\naccepted".to_vec();
+    spawn_one_shot_http_server_with_response(response)
+}
+
+fn spawn_one_shot_http_server_with_response(response: Vec<u8>) -> (u16, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+    let port = listener
+        .local_addr()
+        .expect("test server local addr")
+        .port();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut bytes = Vec::new();
+        let mut buf = [0_u8; 1024];
+        loop {
+            let read = match stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(_) => break,
+            };
+            bytes.extend_from_slice(&buf[..read]);
+            if http_request_complete(&bytes) {
+                break;
+            }
+        }
+        let request = String::from_utf8_lossy(&bytes).to_string();
+        let _ = tx.send(request);
+        let _ = stream.write_all(&response);
+    });
+    (port, rx)
+}
+
+fn http_request_complete(bytes: &[u8]) -> bool {
+    let Some(headers_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
+        return false;
+    };
+    let headers_len = headers_end + 4;
+    let headers = String::from_utf8_lossy(&bytes[..headers_end]).to_ascii_lowercase();
+    let content_length = headers
+        .lines()
+        .find_map(|line| line.strip_prefix("content-length:"))
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    bytes.len() >= headers_len + content_length
 }
 
 const JS_NETWORK_BLOCK_SCRIPT: &str = r#"
