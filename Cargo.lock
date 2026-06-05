@@ -19,6 +19,9 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ureq",
+ "wasm-encoder",
+ "wasmparser",
+ "zip",
 ]
 
 [[package]]

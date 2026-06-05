@@ -43,13 +43,19 @@ const sharedBufferState = {
 const inputBufferState = {
   buffers: Object.create(null),
   metadata: Object.create(null),
+  names: [],
 };
 
 globalThis.__aardvarkClearInputBuffers = function clearInputBuffers() {
   inputBufferState.buffers = Object.create(null);
   inputBufferState.metadata = Object.create(null);
+  inputBufferState.names = [];
   globalThis.__aardvarkInputBuffers = inputBufferState.buffers;
   globalThis.__aardvarkInputMetadata = inputBufferState.metadata;
+  globalThis.__aardvarkInputBufferNames = inputBufferState.names;
+  globalThis.__aardvarkRawctxInputsAvailable = false;
+  globalThis.__aardvarkRawctxInputViewMode = null;
+  globalThis.__aardvarkSharedBufferMetadataMode = "full";
   return undefined;
 };
 
@@ -65,6 +71,9 @@ globalThis.__aardvarkRegisterInputBuffer = function registerInputBuffer(
   if (!(buffer instanceof Uint8Array)) {
     throw new TypeError("input buffer payload must be a Uint8Array");
   }
+  if (!Object.prototype.hasOwnProperty.call(inputBufferState.buffers, key)) {
+    inputBufferState.names.push(key);
+  }
   inputBufferState.buffers[key] = buffer;
   if (metadata === undefined || metadata === null) {
     delete inputBufferState.metadata[key];
@@ -73,11 +82,13 @@ globalThis.__aardvarkRegisterInputBuffer = function registerInputBuffer(
   }
   globalThis.__aardvarkInputBuffers = inputBufferState.buffers;
   globalThis.__aardvarkInputMetadata = inputBufferState.metadata;
+  globalThis.__aardvarkInputBufferNames = inputBufferState.names;
   return undefined;
 };
 
 globalThis.__aardvarkInputBuffers = inputBufferState.buffers;
 globalThis.__aardvarkInputMetadata = inputBufferState.metadata;
+globalThis.__aardvarkInputBufferNames = inputBufferState.names;
 
 const rawctxState = {
   spec: null,
@@ -441,6 +452,13 @@ function normalizeMetadataInput(metadata) {
   }
 }
 
+function normalizeSharedBufferMetadata(metadata) {
+  if (globalThis.__aardvarkSharedBufferMetadataMode === "none") {
+    return null;
+  }
+  return normalizeMetadataInput(metadata);
+}
+
 function recordSharedBufferEvent(event, id, size, metadata) {
   if (typeof globalThis.__aardvarkRecordBufferEvent === "function") {
     try {
@@ -474,7 +492,7 @@ globalThis.__aardvarkAcquireOutputBuffer = function acquireOutputBuffer(bufferId
     : new ArrayBuffer(byteLength);
   const view = new Uint8Array(backing);
   attachBufferId(view, assigned);
-  const metaObject = normalizeMetadataInput(metadata);
+  const metaObject = normalizeSharedBufferMetadata(metadata);
   sharedBufferState.map.set(assigned, {
     view,
     metadata: metaObject,
@@ -486,7 +504,7 @@ globalThis.__aardvarkAcquireOutputBuffer = function acquireOutputBuffer(bufferId
 globalThis.__aardvarkPublishBuffer = function publishBuffer(bufferId, data, metadata) {
   requireCapability("rawctx_buffers");
   const explicitId = bufferId != null && bufferId !== "" ? String(bufferId) : null;
-  const metaObject = normalizeMetadataInput(metadata);
+  const metaObject = normalizeSharedBufferMetadata(metadata);
 
   let candidateId = null;
   if (data && typeof data === "object" && Object.prototype.hasOwnProperty.call(data, "__aardvarkBufferId")) {
@@ -524,6 +542,21 @@ globalThis.__aardvarkCollectSharedBuffers = function collectSharedBuffers() {
       buffer: entry.view,
       metadata: entry.metadata ?? null,
     });
+  }
+  return result;
+};
+
+globalThis.__aardvarkDrainSharedBuffers = function drainSharedBuffers() {
+  requireCapability("rawctx_buffers");
+  const result = [];
+  for (const [id, entry] of Array.from(sharedBufferState.map.entries())) {
+    result.push({
+      id,
+      buffer: entry.view,
+      metadata: entry.metadata ?? null,
+    });
+    recordSharedBufferEvent("release", id, entry?.view?.byteLength ?? 0, entry?.metadata ?? null);
+    sharedBufferState.map.delete(id);
   }
   return result;
 };

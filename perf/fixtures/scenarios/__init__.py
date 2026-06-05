@@ -5,7 +5,9 @@ from typing import Callable
 _SCENARIO_MODULES = {
     "echo": ".echo",
     "numpy": ".numpy",
+    "numpy-matmul": ".numpy_matmul",
     "pandas": ".pandas",
+    "scipy-sgemm": ".scipy_sgemm",
     "tensor": ".tensor",
     "matplotlib": ".matplotlib",
 }

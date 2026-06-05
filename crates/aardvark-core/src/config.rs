@@ -1,14 +1,18 @@
 //! Runtime configuration options.
 
 use crate::engine::OverlayExport;
-use crate::error::Result;
+use crate::error::{PyRunnerError, Result};
 use crate::invocation::InvocationLimits;
 use crate::pyodide::PYODIDE_VERSION;
 use crate::runtime::PyRuntime;
 use crate::runtime_language::RuntimeLanguage;
+use crate::BundleManifest;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+
+pub const DEFAULT_PYODIDE_DISTRIBUTION_PROFILE: &str = "default";
 
 /// Controls how the runtime loads and captures Pyodide snapshots.
 #[derive(Clone)]
@@ -213,7 +217,7 @@ impl fmt::Debug for WarmState {
     }
 }
 
-/// Configuration applied when constructing [`PyRuntime`][crate::PyRuntime] or pool members.
+/// Configuration applied when constructing [`PyRuntime`] or pool members.
 #[derive(Debug, Clone)]
 pub struct PyRuntimeConfig {
     /// Bundled Pyodide version string (usually derived from build-time assets).
@@ -224,6 +228,14 @@ pub struct PyRuntimeConfig {
     /// core Pyodide assets and package wheels from this distribution. This is the
     /// preferred production contract.
     pub pyodide_dist_dir: Option<PathBuf>,
+    /// Active distribution profile selected for this runtime.
+    ///
+    /// Profiles are host-defined labels such as `default`, `blas`, or
+    /// `ndarray-fast`. The selected profile is applied before the Pyodide
+    /// isolate is created.
+    pub pyodide_distribution_profile: Option<String>,
+    /// Host-provided registry of profile labels to staged distribution dirs.
+    pub pyodide_distribution_profiles: BTreeMap<String, PathBuf>,
     /// Default guest language selected when manifests/descriptors omit one.
     pub default_language: RuntimeLanguage,
     /// Snapshot-related configuration.
@@ -245,9 +257,17 @@ impl Default for PyRuntimeConfig {
         let default_dist_dir = std::env::var_os("AARDVARK_PYODIDE_DIST_DIR")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from);
+        let mut pyodide_distribution_profiles = pyodide_distribution_profiles_from_env();
+        if let Some(path) = default_dist_dir.as_ref() {
+            pyodide_distribution_profiles
+                .entry(DEFAULT_PYODIDE_DISTRIBUTION_PROFILE.to_string())
+                .or_insert_with(|| path.clone());
+        }
         Self {
             pyodide_version: PYODIDE_VERSION.to_owned(),
             pyodide_dist_dir: default_dist_dir,
+            pyodide_distribution_profile: None,
+            pyodide_distribution_profiles,
             default_language: RuntimeLanguage::Python,
             snapshot: SnapshotConfig::default(),
             hooks: HostHooks::default(),
@@ -279,6 +299,162 @@ impl PyRuntimeConfig {
     pub fn with_pyodide_dist_dir<P: Into<PathBuf>>(mut self, path: P) -> Self {
         self.set_pyodide_dist_dir(path);
         self
+    }
+
+    /// Registers a staged Pyodide distribution for a host-defined profile.
+    pub fn set_pyodide_distribution_profile_dir(
+        &mut self,
+        profile: impl AsRef<str>,
+        path: impl Into<PathBuf>,
+    ) -> Result<()> {
+        let profile = normalize_pyodide_distribution_profile(profile.as_ref())?;
+        self.pyodide_distribution_profiles
+            .insert(profile, path.into());
+        Ok(())
+    }
+
+    /// Returns a new configuration with a profile-to-distribution mapping.
+    pub fn with_pyodide_distribution_profile_dir(
+        mut self,
+        profile: impl AsRef<str>,
+        path: impl Into<PathBuf>,
+    ) -> Result<Self> {
+        self.set_pyodide_distribution_profile_dir(profile, path)?;
+        Ok(self)
+    }
+
+    /// Selects a registered Pyodide distribution profile for this runtime.
+    ///
+    /// This must be called before the runtime is constructed. Once a V8 isolate
+    /// exists, the Pyodide distribution cannot be swapped in-place.
+    pub fn set_pyodide_distribution_profile(&mut self, profile: impl AsRef<str>) -> Result<()> {
+        let profile = normalize_pyodide_distribution_profile(profile.as_ref())?;
+        if let Some(path) = self.pyodide_distribution_profiles.get(&profile).cloned() {
+            self.pyodide_dist_dir = Some(path);
+        } else if profile != DEFAULT_PYODIDE_DISTRIBUTION_PROFILE {
+            return Err(PyRunnerError::Validation(format!(
+                "Pyodide distribution profile '{profile}' is not registered"
+            )));
+        }
+        self.pyodide_distribution_profile = Some(profile);
+        Ok(())
+    }
+
+    /// Returns a new configuration with the active Pyodide distribution profile.
+    pub fn with_pyodide_distribution_profile(mut self, profile: impl AsRef<str>) -> Result<Self> {
+        self.set_pyodide_distribution_profile(profile)?;
+        Ok(self)
+    }
+
+    /// Applies a bundle-requested distribution profile to the configuration.
+    pub(crate) fn apply_manifest_pyodide_distribution_profile(
+        &mut self,
+        profile: Option<&str>,
+    ) -> Result<()> {
+        let Some(profile) = profile else {
+            return Ok(());
+        };
+        self.set_pyodide_distribution_profile(profile)
+    }
+
+    /// Applies bundle manifest runtime requirements that must be known before
+    /// constructing the isolate.
+    ///
+    /// Today this selects `runtime.pyodide.profile`; hosts should call this
+    /// before `PyRuntime::new` when they construct runtimes directly from ZIP
+    /// bundles rather than going through `BundlePool`.
+    pub fn apply_bundle_manifest(&mut self, manifest: Option<&BundleManifest>) -> Result<()> {
+        self.apply_manifest_pyodide_distribution_profile(
+            manifest.and_then(BundleManifest::pyodide_distribution_profile),
+        )
+    }
+}
+
+pub(crate) fn normalize_pyodide_distribution_profile(profile: &str) -> Result<String> {
+    let trimmed = profile.trim();
+    if trimmed.is_empty() {
+        return Err(PyRunnerError::Manifest(
+            "runtime.pyodide.profile cannot be empty".into(),
+        ));
+    }
+    let normalized = trimmed.to_ascii_lowercase();
+    if normalized.bytes().all(|byte| {
+        byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+    }) {
+        Ok(normalized)
+    } else {
+        Err(PyRunnerError::Manifest(format!(
+            "runtime.pyodide.profile '{trimmed}' must contain only ASCII letters, digits, '-' or '_'"
+        )))
+    }
+}
+
+fn pyodide_distribution_profiles_from_env() -> BTreeMap<String, PathBuf> {
+    let Some(raw) = std::env::var_os("AARDVARK_PYODIDE_DIST_PROFILES") else {
+        return BTreeMap::new();
+    };
+    let text = raw.to_string_lossy();
+    let mut profiles = BTreeMap::new();
+    for entry in text.split([';', ',']) {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let Some((profile, path)) = entry.split_once('=') else {
+            tracing::warn!(
+                target: "aardvark::config",
+                entry,
+                "ignoring malformed AARDVARK_PYODIDE_DIST_PROFILES entry"
+            );
+            continue;
+        };
+        match normalize_pyodide_distribution_profile(profile) {
+            Ok(profile) => {
+                let path = path.trim();
+                if !path.is_empty() {
+                    profiles.insert(profile, PathBuf::from(path));
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "aardvark::config",
+                    error = %error,
+                    "ignoring invalid Pyodide distribution profile from environment"
+                );
+            }
+        }
+    }
+    profiles
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_applies_bundle_manifest_pyodide_distribution_profile() -> Result<()> {
+        let json = format!(
+            r#"{{
+                "schemaVersion": "1.0",
+                "entrypoint": "main:run",
+                "runtime": {{
+                    "language": "python",
+                    "pyodide": {{"version": "{}", "profile": "blas"}}
+                }}
+            }}"#,
+            PYODIDE_VERSION
+        );
+        let manifest = BundleManifest::from_bytes(json.as_bytes())?;
+        let mut config = PyRuntimeConfig::default();
+        config.set_pyodide_distribution_profile_dir("blas", "/tmp/aardvark-blas-dist")?;
+        config.apply_bundle_manifest(Some(&manifest))?;
+
+        assert_eq!(config.pyodide_distribution_profile.as_deref(), Some("blas"));
+        assert_eq!(
+            config.pyodide_dist_dir.as_deref(),
+            Some(std::path::Path::new("/tmp/aardvark-blas-dist"))
+        );
+        Ok(())
     }
 }
 

@@ -67,7 +67,9 @@ flowchart TD
 
 ## Using Multiple Bundles
 
-- A pool can warm multiple runtimes with different snapshots. Hosts should size `PoolConfig::max_runtimes` based on the concurrency they need per dependency set.
+- `BundlePoolRegistry` routes each bundle/profile pair to its own warmed pool.
+  Size `PoolOptions::desired_size` and `PoolOptions::max_size` for the
+  concurrency each dependency set needs.
 - Runtimes are not multi-tenant: only one session runs at a time within an isolate. Use additional pool capacity to parallelise.
 
 ## Alternative Loader Paths

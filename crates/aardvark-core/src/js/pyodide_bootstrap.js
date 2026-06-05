@@ -1743,7 +1743,6 @@ del get_bad_entropy_flag
       `Failed to parse entropy flag address from '${result ?? "unknown"}'`
     );
   }
-  console.log("[bootstrap] entropy flag address:", value);
   entropyState.allowedEntropyAddr = value;
 }
 
@@ -1900,23 +1899,8 @@ export async function loadPyRunnerPyodide(options = {}) {
       snapshot: snapshotBytes,
       makeSnapshot,
     });
-  if (globalThis.console?.log) {
-    const preview = Object.keys(module || {}).slice(0, 20);
-    globalThis.console.log("[bootstrap] module keys:", preview);
-    globalThis.console.log(
-      "[bootstrap] module.ready typeof:",
-      typeof module.ready
-    );
-  }
   if (module?.ready && typeof module.ready.then === "function") {
-    console.log("[bootstrap] awaiting module.ready");
     await module.ready;
-    console.log("[bootstrap] module.ready resolved");
-  }
-  if (typeof module._Py_IsInitialized === "function") {
-    console.log("[bootstrap] Py_IsInitialized:", module._Py_IsInitialized());
-  } else {
-    console.log("[bootstrap] module._Py_IsInitialized unavailable");
   }
   } catch (error) {
     stderr("pyodide bootstrap failed:", error);
@@ -1940,16 +1924,6 @@ export async function loadPyRunnerPyodide(options = {}) {
   setFilesystemPolicy(Module, filesystemState.policy);
 
   api.config = api.config || {};
-  if (globalThis.console?.log) {
-    try {
-      const apiKeys = Object.keys(api).slice(0, 20);
-      globalThis.console.log("[snapshot] api keys:", apiKeys);
-      const configKeys = Object.keys(api.config || {});
-      globalThis.console.log("[snapshot] api.config keys:", configKeys);
-    } catch (_err) {
-      // ignore
-    }
-  }
   api.config.jsglobals = globalThis;
   if (snapshotBytes) {
     api.config._loadSnapshot = snapshotBytes;
@@ -2007,7 +1981,6 @@ export async function loadPyRunnerPyodide(options = {}) {
   }
 
   if ((!snapshotBytes || snapshotBytes.length === 0) && typeof module.callMain === "function") {
-    console.log("[bootstrap] invoking module.callMain([])");
     module.callMain([]);
   }
 
@@ -2049,10 +2022,8 @@ export async function loadPyRunnerPyodide(options = {}) {
       api.config = {};
     }
     api.config._snapshotDeserializer = effectiveDeserializer;
-    stderr("[bootstrap] calling finalizeBootstrap");
     publicApi =
       api.finalizeBootstrap(snapshotConfig, effectiveDeserializer) ?? publicApi;
-    stderr("[bootstrap] finalizeBootstrap done");
   }
 
   if (!publicApi && api.pyodide) {
@@ -2074,7 +2045,6 @@ export async function loadPyRunnerPyodide(options = {}) {
   }
 
   if (typeof api.initializeStreams === "function") {
-    stderr("[bootstrap] initializing streams");
     api.initializeStreams(stdin, stdout, stderr);
   }
   ensureSessionSitePackagesOnSysPath(module, publicApi);
@@ -2546,6 +2516,7 @@ export async function loadPyRunnerPyodide(options = {}) {
   const inputBufferState = {
     buffers: Object.create(null),
     metadata: Object.create(null),
+    names: [],
   };
 
   function attachBufferId(view, id) {
@@ -2618,6 +2589,127 @@ export async function loadPyRunnerPyodide(options = {}) {
     return value;
   }
 
+  function discardMetadataInput(value) {
+    if (value && typeof value.toJs === "function" && typeof value.destroy === "function") {
+      try {
+        value.destroy();
+      } catch (_err) {
+        // ignore
+      }
+    }
+    return null;
+  }
+
+  function normalizeSharedBufferMetadata(value) {
+    if (globalThis.__aardvarkSharedBufferMetadataMode === "none") {
+      return discardMetadataInput(value);
+    }
+    return normalizeMetadataInput(value);
+  }
+
+  const jsonResultBufferState = {
+    proxy: null,
+    buffer: null,
+  };
+
+  function releaseJsonResultBufferView() {
+    try {
+      jsonResultBufferState.buffer?.release?.();
+    } catch (_err) {
+      // ignore
+    }
+    jsonResultBufferState.buffer = null;
+  }
+
+  function destroyJsonResultProxy() {
+    try {
+      jsonResultBufferState.proxy?.destroy?.();
+    } catch (_err) {
+      // ignore
+    }
+    jsonResultBufferState.proxy = null;
+  }
+
+  function jsonResultBufferType(kind) {
+    if (kind === "f32-array") {
+      return "f32";
+    }
+    if (kind === "f64-array") {
+      return "f64";
+    }
+    return "u8";
+  }
+
+  function bytesViewForJsonResult(data, buffer) {
+    if (ArrayBuffer.isView(data)) {
+      const elementSize = Number(data.BYTES_PER_ELEMENT ?? 1);
+      const byteLength = Number(buffer?.nbytes ?? data.byteLength);
+      let offset = Number(buffer?.offset ?? 0) * elementSize;
+      if (!Number.isFinite(offset) || offset === 0) {
+        const inferredOffset = data.byteLength - byteLength;
+        if (inferredOffset > 0) {
+          offset = inferredOffset;
+        }
+      }
+      if (!Number.isFinite(byteLength) || byteLength < 0 || offset < 0 || offset + byteLength > data.byteLength) {
+        return null;
+      }
+      const byteOffset = data.byteOffset + offset;
+      return new Uint8Array(
+        data.buffer,
+        byteOffset,
+        byteLength
+      );
+    }
+    if (data instanceof ArrayBuffer) {
+      return new Uint8Array(data);
+    }
+    return null;
+  }
+
+  function normalizeJsonResultBufferInput(kind, value) {
+    if (value == null) {
+      throw new TypeError("JSON result buffer payload must be provided");
+    }
+    let proxy = null;
+    let buffer = null;
+    if (typeof value.getBuffer === "function") {
+      proxy = value;
+      buffer = proxy.getBuffer(jsonResultBufferType(kind));
+      try {
+        const view = bytesViewForJsonResult(buffer.data, buffer);
+        if (view == null) {
+          throw new TypeError("JSON result buffer payload must expose typed-array data");
+        }
+        return { view: view.slice(), proxy: null, buffer: null };
+      } finally {
+        buffer?.release?.();
+        proxy?.destroy?.();
+      }
+    }
+    const normalized = normalizeSharedBufferInput(value);
+    return { ...normalized, buffer: null };
+  }
+
+  globalThis.__aardvarkSetJsonResultBuffer = function (kind, data, metadata) {
+    const { view, proxy, buffer } = normalizeJsonResultBufferInput(String(kind), data);
+    releaseJsonResultBufferView();
+    destroyJsonResultProxy();
+    jsonResultBufferState.buffer = buffer ?? null;
+    jsonResultBufferState.proxy = proxy ?? null;
+    globalThis.__aardvarkJsonResultKind = String(kind);
+    globalThis.__aardvarkJsonResultValue = view;
+    globalThis.__aardvarkJsonResultMetadata = normalizeMetadataInput(metadata);
+  };
+
+  globalThis.__aardvarkClearJsonResultBuffer = function () {
+    releaseJsonResultBufferView();
+    destroyJsonResultProxy();
+    globalThis.__aardvarkJsonResultKind = null;
+    globalThis.__aardvarkJsonResultValue = null;
+    globalThis.__aardvarkJsonResultMetadata = null;
+  };
+
   globalThis.__aardvarkAcquireOutputBuffer = function (bufferId, size, metadata) {
     requireCapability("rawctx_buffers");
     const length = Number(size);
@@ -2637,7 +2729,7 @@ export async function loadPyRunnerPyodide(options = {}) {
       : new ArrayBuffer(byteLength);
     const view = new Uint8Array(backing);
     attachBufferId(view, assigned);
-    const metaObject = normalizeMetadataInput(metadata);
+    const metaObject = normalizeSharedBufferMetadata(metadata);
     sharedBufferState.map.set(assigned, {
       view,
       proxy: null,
@@ -2656,7 +2748,7 @@ export async function loadPyRunnerPyodide(options = {}) {
   globalThis.__aardvarkPublishBuffer = function (bufferId, data, metadata) {
     requireCapability("rawctx_buffers");
     const explicitId = bufferId != null && bufferId !== "" ? String(bufferId) : null;
-    const metaObject = normalizeMetadataInput(metadata);
+    const metaObject = normalizeSharedBufferMetadata(metadata);
 
     let candidateId = null;
     if (data && typeof data === "object" && Object.prototype.hasOwnProperty.call(data, "__aardvarkBufferId")) {
@@ -2717,6 +2809,25 @@ globalThis.__aardvarkCollectSharedBuffers = function () {
     return result;
   };
 
+globalThis.__aardvarkDrainSharedBuffers = function () {
+    requireCapability("rawctx_buffers");
+    const result = [];
+    for (const [id, entry] of Array.from(sharedBufferState.map.entries())) {
+      result.push({
+        id,
+        buffer: entry.view,
+        metadata: entry.metadata ?? null,
+      });
+      try {
+        entry.proxy?.destroy?.();
+      } catch (error) {
+        console.warn("[buffers] failed to destroy proxy for", id, error);
+      }
+      sharedBufferState.map.delete(id);
+    }
+    return result;
+  };
+
 globalThis.__aardvarkReleaseSharedBuffers = function (ids) {
     requireCapability("rawctx_buffers");
     const pending = Array.isArray(ids)
@@ -2745,10 +2856,16 @@ globalThis.__aardvarkResetSharedBuffers = function () {
     requireCapability("rawctx_buffers");
     const buffers = Object.create(null);
     const metadata = Object.create(null);
+    const names = [];
     inputBufferState.buffers = buffers;
     inputBufferState.metadata = metadata;
+    inputBufferState.names = names;
     globalThis.__aardvarkInputBuffers = buffers;
     globalThis.__aardvarkInputMetadata = metadata;
+    globalThis.__aardvarkInputBufferNames = names;
+    globalThis.__aardvarkRawctxInputsAvailable = false;
+    globalThis.__aardvarkRawctxInputViewMode = null;
+    globalThis.__aardvarkSharedBufferMetadataMode = "full";
   };
 
 globalThis.__aardvarkRegisterInputBuffer = function (name, buffer, metadata) {
@@ -2764,6 +2881,12 @@ globalThis.__aardvarkRegisterInputBuffer = function (name, buffer, metadata) {
     }
     if (!globalThis.__aardvarkInputMetadata) {
       globalThis.__aardvarkInputMetadata = inputBufferState.metadata;
+    }
+    if (!globalThis.__aardvarkInputBufferNames) {
+      globalThis.__aardvarkInputBufferNames = inputBufferState.names;
+    }
+    if (!Object.prototype.hasOwnProperty.call(inputBufferState.buffers, name)) {
+      inputBufferState.names.push(name);
     }
     globalThis.__aardvarkInputBuffers[name] = buffer;
     if (metadata === undefined) {
@@ -3265,18 +3388,6 @@ globalThis.__aardvarkRegisterInputBuffer = function (name, buffer, metadata) {
           nativeLog(`[snapshot] hiwire ${i}: ${text}`);
         } catch (err) {
           nativeLog(`[snapshot] hiwire read failed ${i}: ${String(err)}`);
-          break;
-        }
-      }
-    } else if (globalThis.console?.log) {
-      for (let i = 0; i < 10; i += 1) {
-        try {
-          const value =
-            module.__hiwire_get?.(i) ??
-            module.__pyodide?._module?.__hiwire_get?.(i);
-          globalThis.console.log("[snapshot] hiwire", i, value);
-        } catch (err) {
-          globalThis.console.log("[snapshot] hiwire read failed", i, err);
           break;
         }
       }

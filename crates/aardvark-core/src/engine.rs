@@ -1,7 +1,7 @@
 //! Lightweight V8 runtime utilities.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::env;
 use std::ffi::OsStr;
@@ -14,7 +14,7 @@ use crate::asset_store::{Asset, AssetStore};
 use crate::bundle::Bundle;
 use crate::error::{PyRunnerError, Result};
 use bytes::Bytes;
-use once_cell::sync::{Lazy, OnceCell};
+use once_cell::sync::OnceCell;
 use parking_lot::RwLock;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -27,7 +27,676 @@ use v8::{
 };
 use walkdir::WalkDir;
 static V8_PLATFORM: OnceCell<v8::SharedRef<v8::Platform>> = OnceCell::new();
-static PACKAGE_ROOT: Lazy<RwLock<Option<PathBuf>>> = Lazy::new(|| RwLock::new(None));
+
+const JSON_RESULT_BUFFER_HELPER: &str = r#"
+(() => {
+  const state = { proxy: null, buffer: null };
+  function releaseBuffer() {
+    try {
+      state.buffer?.release?.();
+    } catch (_err) {
+      // ignore
+    }
+    state.buffer = null;
+  }
+  function destroyProxy() {
+    try {
+      state.proxy?.destroy?.();
+    } catch (_err) {
+      // ignore
+    }
+    state.proxy = null;
+  }
+  function resultBufferType(kind) {
+    if (kind === "f32-array") {
+      return "f32";
+    }
+    if (kind === "f64-array") {
+      return "f64";
+    }
+    return "u8";
+  }
+  function bytesViewFor(data, buffer) {
+    if (ArrayBuffer.isView(data)) {
+      const elementSize = Number(data.BYTES_PER_ELEMENT ?? 1);
+      const byteLength = Number(buffer?.nbytes ?? data.byteLength);
+      let offset = Number(buffer?.offset ?? 0) * elementSize;
+      if (!Number.isFinite(offset) || offset === 0) {
+        const inferredOffset = data.byteLength - byteLength;
+        if (inferredOffset > 0) {
+          offset = inferredOffset;
+        }
+      }
+      if (!Number.isFinite(byteLength) || byteLength < 0 || offset < 0 || offset + byteLength > data.byteLength) {
+        return null;
+      }
+      const byteOffset = data.byteOffset + offset;
+      return new Uint8Array(data.buffer, byteOffset, byteLength);
+    }
+    if (data instanceof ArrayBuffer) {
+      return new Uint8Array(data);
+    }
+    return null;
+  }
+  function normalizeBytesLike(value, kind) {
+    if (value == null) {
+      throw new TypeError("JSON result buffer payload must be provided");
+    }
+    let proxy = null;
+    let buffer = null;
+    let candidate = value;
+    if (candidate && typeof candidate.getBuffer === "function") {
+      proxy = candidate;
+      buffer = proxy.getBuffer(resultBufferType(kind));
+      try {
+        const view = bytesViewFor(buffer.data, buffer);
+        if (view == null) {
+          throw new TypeError("JSON result buffer payload must expose typed-array data");
+        }
+        return { view: view.slice(), proxy: null, buffer: null };
+      } finally {
+        buffer?.release?.();
+        proxy?.destroy?.();
+      }
+    }
+    if (candidate && typeof candidate.toJs === "function") {
+      proxy = candidate;
+      candidate = proxy.toJs({ create_proxies: false });
+    }
+    if (candidate instanceof Uint8Array) {
+      return { view: candidate, proxy, buffer };
+    }
+    if (ArrayBuffer.isView(candidate)) {
+      return {
+        view: new Uint8Array(
+          candidate.buffer,
+          candidate.byteOffset ?? 0,
+          candidate.byteLength ?? candidate.length ?? 0
+        ),
+        proxy,
+        buffer,
+      };
+    }
+    if (candidate instanceof ArrayBuffer) {
+      return { view: new Uint8Array(candidate), proxy, buffer };
+    }
+    throw new TypeError("JSON result buffer payload must be bytes-like");
+  }
+  function normalizeMetadata(value) {
+    if (value == null) {
+      return null;
+    }
+    if (value && typeof value.toJs === "function") {
+      const proxy = value;
+      try {
+        const converted = proxy.toJs({ create_proxies: false });
+        proxy.destroy?.();
+        return converted ?? null;
+      } catch (error) {
+        proxy.destroy?.();
+        throw error;
+      }
+    }
+    return value;
+  }
+  globalThis.__aardvarkSetJsonResultBuffer = function setJsonResultBuffer(kind, data, metadata) {
+    const { view, proxy, buffer } = normalizeBytesLike(data, String(kind));
+    releaseBuffer();
+    destroyProxy();
+    state.buffer = buffer ?? null;
+    state.proxy = proxy ?? null;
+    globalThis.__aardvarkJsonResultKind = String(kind);
+    globalThis.__aardvarkJsonResultValue = view;
+    globalThis.__aardvarkJsonResultMetadata = normalizeMetadata(metadata);
+  };
+  globalThis.__aardvarkClearJsonResultBuffer = function clearJsonResultBuffer() {
+    releaseBuffer();
+    destroyProxy();
+    globalThis.__aardvarkJsonResultKind = null;
+    globalThis.__aardvarkJsonResultValue = null;
+    globalThis.__aardvarkJsonResultMetadata = null;
+  };
+})();
+"#;
+
+const PYTHON_ENTRYPOINT_HELPER: &str = r#"
+import builtins, importlib, io, json, sys, traceback
+from pathlib import Path
+from js import globalThis as __aardvark_js
+try:
+    from pyodide.ffi import to_memoryview as __aardvark_to_memoryview
+except ImportError:
+    __aardvark_to_memoryview = None
+
+app = Path('/app')
+if str(app) not in sys.path:
+    sys.path.insert(0, str(app))
+
+if '__aardvark_entrypoint_cache' not in globals():
+    __aardvark_entrypoint_cache = {}
+
+if '__aardvark_publish_buffer' not in globals():
+    def __aardvark_publish_buffer(buffer_id, data, metadata=None, _js=__aardvark_js):
+        return _js.__aardvarkPublishBuffer(buffer_id, data, metadata)
+
+if not hasattr(builtins, "__aardvark_publish_buffer"):
+    builtins.__aardvark_publish_buffer = __aardvark_publish_buffer
+
+if '__aardvark_acquire_output_buffer' not in globals():
+    def __aardvark_acquire_output_buffer(
+        size,
+        *,
+        id=None,
+        metadata=None,
+        _js=__aardvark_js,
+        _to_memoryview=__aardvark_to_memoryview,
+    ):
+        if size is None:
+            raise ValueError("size is required")
+        length = int(size)
+        if length < 0:
+            raise ValueError("size must be non-negative")
+        view = _js.__aardvarkAcquireOutputBuffer(id, length, metadata)
+        py_view = None
+        if hasattr(view, "to_memoryview"):
+            try:
+                py_view = view.to_memoryview()
+            except TypeError:
+                py_view = None
+        if py_view is None and _to_memoryview is not None:
+            try:
+                py_view = _to_memoryview(view)
+            except TypeError:
+                py_view = None
+        if py_view is None and hasattr(view, "to_py"):
+            py_view = view.to_py()
+        if py_view is None:
+            py_view = view
+        if isinstance(py_view, memoryview):
+            return py_view
+        return memoryview(py_view)
+
+def __aardvark_clear_rawctx_inputs(_builtins=builtins):
+    if hasattr(_builtins, "__aardvark_rawctx_inputs"):
+        delattr(_builtins, "__aardvark_rawctx_inputs")
+
+def __aardvark_set_empty_rawctx_inputs(_builtins=builtins):
+    _builtins.__aardvark_rawctx_inputs = {}
+
+def __aardvark_view_to_memoryview(
+    _view,
+    _to_memoryview=__aardvark_to_memoryview,
+):
+    _memory = None
+    if hasattr(_view, "to_memoryview"):
+        try:
+            _memory = _view.to_memoryview()
+        except TypeError:
+            _memory = None
+    if _memory is None and _to_memoryview is not None:
+        try:
+            _memory = _to_memoryview(_view)
+        except TypeError:
+            _memory = None
+    if _memory is None:
+        if hasattr(_view, "to_py"):
+            _candidate = _view.to_py()
+        else:
+            _candidate = _view
+        try:
+            _memory = memoryview(_candidate)
+        except TypeError:
+            _memory = memoryview(bytearray(_candidate))
+    return _memory
+
+def __aardvark_materialize_rawctx_inputs(
+    _builtins=builtins,
+    _js=__aardvark_js,
+    _to_memoryview=__aardvark_to_memoryview,
+    _view_to_memoryview=__aardvark_view_to_memoryview,
+):
+    __aardvark_rawctx_inputs = {}
+    if hasattr(_js, "__aardvarkInputBuffers"):
+        _names = None
+        if hasattr(_js, "__aardvarkInputBufferNames"):
+            try:
+                _names = list(_js.__aardvarkInputBufferNames.to_py())
+            except Exception:
+                _names = None
+        if _names is None:
+            _buffers = _js.__aardvarkInputBuffers.to_py()
+            _meta_source = {}
+            if hasattr(_js, "__aardvarkInputMetadata"):
+                try:
+                    _meta_source = _js.__aardvarkInputMetadata.to_py()
+                except Exception:
+                    _meta_source = {}
+            for _name, _view in _buffers.items():
+                _memory = _view_to_memoryview(_view, _to_memoryview)
+                _meta = None
+                if isinstance(_meta_source, dict):
+                    _meta = _meta_source.get(_name)
+                    if hasattr(_meta, "to_py"):
+                        _meta = _meta.to_py()
+                __aardvark_rawctx_inputs[_name] = {"data": _memory, "metadata": _meta}
+        else:
+            _buffers = _js.__aardvarkInputBuffers
+            _meta_source = getattr(_js, "__aardvarkInputMetadata", None)
+            _reflect_get = _js.Reflect.get
+            for _name in _names:
+                _view = _reflect_get(_buffers, _name)
+                _memory = _view_to_memoryview(_view, _to_memoryview)
+                _meta = None
+                if _meta_source is not None:
+                    try:
+                        _meta = _reflect_get(_meta_source, _name)
+                        if hasattr(_meta, "to_py"):
+                            _meta = _meta.to_py()
+                    except Exception:
+                        _meta = None
+                __aardvark_rawctx_inputs[_name] = {"data": _memory, "metadata": _meta}
+    _builtins.__aardvark_rawctx_inputs = __aardvark_rawctx_inputs
+
+def __aardvark_materialize_rawctx_flat_inputs(
+    _builtins=builtins,
+    _js=__aardvark_js,
+    _to_memoryview=__aardvark_to_memoryview,
+    _view_to_memoryview=__aardvark_view_to_memoryview,
+):
+    __aardvark_rawctx_inputs = {}
+    if hasattr(_js, "__aardvarkInputBuffers"):
+        _names = None
+        if hasattr(_js, "__aardvarkInputBufferNames"):
+            try:
+                _names = list(_js.__aardvarkInputBufferNames.to_py())
+            except Exception:
+                _names = None
+        if _names is None:
+            _buffers = _js.__aardvarkInputBuffers.to_py()
+            for _name, _view in _buffers.items():
+                __aardvark_rawctx_inputs[_name] = _view_to_memoryview(
+                    _view,
+                    _to_memoryview,
+                )
+        else:
+            _buffers = _js.__aardvarkInputBuffers
+            _reflect_get = _js.Reflect.get
+            for _name in _names:
+                _view = _reflect_get(_buffers, _name)
+                __aardvark_rawctx_inputs[_name] = _view_to_memoryview(
+                    _view,
+                    _to_memoryview,
+                )
+    _builtins.__aardvark_rawctx_inputs = __aardvark_rawctx_inputs
+
+def __aardvark_set_json_input_from_f32_buffer(
+    _builtins=builtins,
+    _js=__aardvark_js,
+    _to_memoryview=__aardvark_to_memoryview,
+):
+    _view = _js.__aardvarkJsonInputBuffer
+    _memory = None
+    if hasattr(_view, "to_memoryview"):
+        try:
+            _memory = _view.to_memoryview()
+        except TypeError:
+            _memory = None
+    if _memory is None and _to_memoryview is not None:
+        try:
+            _memory = _to_memoryview(_view)
+        except TypeError:
+            _memory = None
+    if _memory is None:
+        if hasattr(_view, "to_py"):
+            _candidate = _view.to_py()
+        else:
+            _candidate = _view
+        try:
+            _memory = memoryview(_candidate)
+        except TypeError:
+            _memory = memoryview(bytearray(_candidate))
+    if getattr(_memory, "format", None) != "f":
+        _memory = _memory.cast("f")
+    _builtins.__aardvark_input = _memory
+
+def __aardvark_set_json_input_from_utf8_buffer(
+    _builtins=builtins,
+    _js=__aardvark_js,
+    _to_memoryview=__aardvark_to_memoryview,
+):
+    _view = _js.__aardvarkJsonInputBuffer
+    _memory = None
+    if hasattr(_view, "to_memoryview"):
+        try:
+            _memory = _view.to_memoryview()
+        except TypeError:
+            _memory = None
+    if _memory is None and _to_memoryview is not None:
+        try:
+            _memory = _to_memoryview(_view)
+        except TypeError:
+            _memory = None
+    if _memory is None:
+        if hasattr(_view, "to_py"):
+            _candidate = _view.to_py()
+        else:
+            _candidate = _view
+        try:
+            _memory = memoryview(_candidate)
+        except TypeError:
+            _memory = memoryview(bytearray(_candidate))
+    if getattr(_memory, "format", None) not in ("B", "b", "c"):
+        _memory = _memory.cast("B")
+    _builtins.__aardvark_input = _memory.tobytes().decode("utf-8")
+
+def __aardvark_set_json_input_from_bytes_buffer(
+    _builtins=builtins,
+    _js=__aardvark_js,
+    _to_memoryview=__aardvark_to_memoryview,
+):
+    _view = _js.__aardvarkJsonInputBuffer
+    _memory = None
+    if hasattr(_view, "to_memoryview"):
+        try:
+            _memory = _view.to_memoryview()
+        except TypeError:
+            _memory = None
+    if _memory is None and _to_memoryview is not None:
+        try:
+            _memory = _to_memoryview(_view)
+        except TypeError:
+            _memory = None
+    if _memory is None:
+        if hasattr(_view, "to_py"):
+            _candidate = _view.to_py()
+        else:
+            _candidate = _view
+        try:
+            _memory = memoryview(_candidate)
+        except TypeError:
+            _memory = memoryview(bytearray(_candidate))
+    if getattr(_memory, "format", None) not in ("B", "b", "c"):
+        _memory = _memory.cast("B")
+    _builtins.__aardvark_input = _memory.tobytes()
+
+def __aardvark_prepare_pending_inputs(
+    _builtins=builtins,
+    _json=json,
+    _js=__aardvark_js,
+):
+    _mode = getattr(_js, "__aardvarkJsonInputMode", None)
+    if hasattr(_mode, "to_py"):
+        _mode = _mode.to_py()
+    if _mode == "json":
+        _encoded = _js.__aardvarkJsonInputEncoded
+        if hasattr(_encoded, "to_py"):
+            _encoded = _encoded.to_py()
+        else:
+            _encoded = str(_encoded)
+        _builtins.__aardvark_input = _json.loads(_encoded)
+    elif _mode == "f32":
+        __aardvark_set_json_input_from_f32_buffer()
+    elif _mode == "utf8":
+        __aardvark_set_json_input_from_utf8_buffer()
+    elif _mode == "bytes":
+        __aardvark_set_json_input_from_bytes_buffer()
+    elif _mode == "single_i64_object":
+        _key = _js.__aardvarkJsonInputKey
+        if hasattr(_key, "to_py"):
+            _key = _key.to_py()
+        else:
+            _key = str(_key)
+        _value = _js.__aardvarkJsonInputI64
+        if hasattr(_value, "to_py"):
+            _value = _value.to_py()
+        _builtins.__aardvark_input = {_key: int(_value)}
+    elif _mode == "none":
+        if hasattr(_builtins, "__aardvark_input"):
+            delattr(_builtins, "__aardvark_input")
+
+    _rawctx_available = getattr(_js, "__aardvarkRawctxInputsAvailable", False)
+    if hasattr(_rawctx_available, "to_py"):
+        _rawctx_available = _rawctx_available.to_py()
+    if _rawctx_available == "empty":
+        __aardvark_set_empty_rawctx_inputs()
+    elif _rawctx_available:
+        _rawctx_input_mode = getattr(_js, "__aardvarkRawctxInputViewMode", None)
+        if hasattr(_rawctx_input_mode, "to_py"):
+            _rawctx_input_mode = _rawctx_input_mode.to_py()
+        if _rawctx_input_mode == "flat":
+            __aardvark_materialize_rawctx_flat_inputs()
+        else:
+            __aardvark_materialize_rawctx_inputs()
+
+def __aardvark_try_json_buffer_result(
+    value,
+    _js=__aardvark_js,
+):
+    if not hasattr(_js, "__aardvarkSetJsonResultBuffer"):
+        return None
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        try:
+            _view = value if isinstance(value, memoryview) else memoryview(value)
+            if getattr(_view, "format", None) not in ("B", "b", "c"):
+                _view = _view.cast("B")
+            _size = int(getattr(_view, "nbytes", len(_view)))
+        except Exception:
+            return None
+        if _size < 4096:
+            return None
+        try:
+            _js.__aardvarkSetJsonResultBuffer(
+                "bytes",
+                _view,
+                {"dtype": "bytes", "length": _size},
+            )
+            return "bytes"
+        except Exception:
+            return None
+    _dtype = getattr(value, "dtype", None)
+    _size = getattr(value, "size", None)
+    if _dtype is None or _size is None:
+        return None
+    try:
+        _size = int(_size)
+    except Exception:
+        return None
+    if _size < 4096:
+        return None
+    _dtype_name = str(_dtype)
+    if _dtype_name == "float32":
+        _kind = "f32-array"
+    elif _dtype_name == "float64":
+        _kind = "f64-array"
+    else:
+        return None
+    try:
+        _view = value
+        if hasattr(_view, "ravel"):
+            _view = _view.ravel()
+        if hasattr(_view, "flags") and not bool(getattr(_view.flags, "c_contiguous", False)):
+            return None
+        _js.__aardvarkSetJsonResultBuffer(
+            _kind,
+            memoryview(_view),
+            {"dtype": _dtype_name, "length": _size},
+        )
+        return _kind
+    except Exception:
+        return None
+
+def __aardvark_resolve_entrypoint(
+    entrypoint,
+    _cache=__aardvark_entrypoint_cache,
+    _importlib=importlib,
+):
+    if entrypoint in _cache:
+        return _cache[entrypoint]
+    module_name, sep, func_name = entrypoint.partition(':')
+    if not module_name:
+        raise ValueError('entrypoint must specify a module')
+    module = _importlib.import_module(module_name)
+    if sep:
+        target = getattr(module, func_name)
+    elif hasattr(module, 'main'):
+        target = module.main
+    else:
+        target = None
+    _cache[entrypoint] = target
+    return target
+
+def __aardvark_call_target(
+    target,
+    include_text_result=True,
+    capture_stdio=True,
+    _builtins=builtins,
+    _io=io,
+    _json=json,
+    _js=__aardvark_js,
+    _sys=sys,
+    _traceback=traceback,
+):
+    _stdout = _io.StringIO() if capture_stdio else None
+    _stderr = _io.StringIO() if capture_stdio else None
+    _old_out = _old_err = None
+    value = None
+    completed = False
+    exc_type = None
+    exc_value = None
+    exc_traceback = None
+    try:
+        if capture_stdio:
+            _old_out, _old_err = _sys.stdout, _sys.stderr
+            _sys.stdout = _stdout
+            _sys.stderr = _stderr
+        __aardvark_prepare_pending_inputs()
+        value = target() if target is not None else None
+        completed = True
+    except Exception as exc:
+        exc_type = exc.__class__.__name__
+        exc_value = repr(exc)
+        exc_traceback = _traceback.format_exc()
+    finally:
+        if capture_stdio:
+            _sys.stdout = _old_out
+            _sys.stderr = _old_err
+        try:
+            if hasattr(_builtins, '__aardvark_input'):
+                delattr(_builtins, '__aardvark_input')
+            __aardvark_clear_rawctx_inputs()
+            _js.__aardvarkJsonInputMode = None
+            _js.__aardvarkJsonInputBuffer = None
+            _js.__aardvarkJsonInputEncoded = None
+            _js.__aardvarkRawctxInputsAvailable = False
+            _js.__aardvarkRawctxInputViewMode = None
+            _js.__aardvarkSharedBufferMetadataMode = "full"
+        except Exception:
+            pass
+    if completed and exc_type is None and not include_text_result and not capture_stdio:
+        if isinstance(value, str) and len(value) >= 4096:
+            _js.__aardvarkJsonResultKind = "string"
+            _js.__aardvarkJsonResultValue = value
+            return "__aardvark_json_side_channel__:string"
+        _side_channel = __aardvark_try_json_buffer_result(value)
+        if _side_channel is not None:
+            return "__aardvark_json_side_channel__:" + _side_channel
+    payload = {
+        'stdout': _stdout.getvalue() if capture_stdio else '',
+        'stderr': _stderr.getvalue() if capture_stdio else '',
+        'result': None,
+        'json': None,
+        'json_ready': False,
+        'exception_type': exc_type,
+        'exception_value': exc_value,
+        'traceback': exc_traceback,
+    }
+    if completed and exc_type is None:
+        if include_text_result and (value is None or isinstance(value, (str, int, float, bool))):
+            payload['result'] = repr(value)
+        if not include_text_result and isinstance(value, str) and len(value) >= 4096:
+            _js.__aardvarkJsonResultKind = "string"
+            _js.__aardvarkJsonResultValue = value
+            payload['json_ready'] = True
+            payload['json_side_channel'] = "string"
+            return _json.dumps(payload)
+        if not include_text_result:
+            _side_channel = __aardvark_try_json_buffer_result(value)
+            if _side_channel is not None:
+                payload['json_ready'] = True
+                payload['json_side_channel'] = _side_channel
+                return _json.dumps(payload)
+        payload['json'] = value
+        payload['json_ready'] = True
+        try:
+            return _json.dumps(payload)
+        except (TypeError, ValueError):
+            payload['json'] = None
+            payload['json_ready'] = False
+            payload['result'] = repr(value)
+    return _json.dumps(payload)
+
+def __aardvark_call_entrypoint(
+    entrypoint,
+    include_text_result=True,
+    capture_stdio=True,
+    _resolve=__aardvark_resolve_entrypoint,
+    _call_target=__aardvark_call_target,
+):
+    return _call_target(_resolve(entrypoint), include_text_result, capture_stdio)
+
+def __aardvark_call_target_shared_buffer_only(
+    target,
+    _builtins=builtins,
+    _json=json,
+    _js=__aardvark_js,
+    _traceback=traceback,
+):
+    exc_type = None
+    exc_value = None
+    exc_traceback = None
+    try:
+        __aardvark_prepare_pending_inputs()
+        if target is not None:
+            target()
+        return "__aardvark_shared_buffers_ok__"
+    except Exception as exc:
+        exc_type = exc.__class__.__name__
+        exc_value = repr(exc)
+        exc_traceback = _traceback.format_exc()
+    finally:
+        try:
+            if hasattr(_builtins, '__aardvark_input'):
+                delattr(_builtins, '__aardvark_input')
+            __aardvark_clear_rawctx_inputs()
+            _js.__aardvarkJsonInputMode = None
+            _js.__aardvarkJsonInputBuffer = None
+            _js.__aardvarkJsonInputEncoded = None
+            _js.__aardvarkRawctxInputsAvailable = False
+            _js.__aardvarkRawctxInputViewMode = None
+            _js.__aardvarkSharedBufferMetadataMode = "full"
+        except Exception:
+            pass
+    return _json.dumps({
+        'stdout': '',
+        'stderr': '',
+        'result': None,
+        'json': None,
+        'json_ready': False,
+        'exception_type': exc_type,
+        'exception_value': exc_value,
+        'traceback': exc_traceback,
+    })
+
+def __aardvark_call_entrypoint_shared_buffer_only(
+    entrypoint,
+    _resolve=__aardvark_resolve_entrypoint,
+    _call_target=__aardvark_call_target_shared_buffer_only,
+):
+    return _call_target(_resolve(entrypoint))
+"#;
+
+const PYTHON_SHARED_BUFFER_ONLY_SUCCESS: &str = "__aardvark_shared_buffers_ok__";
+const PYTHON_JSON_SIDE_CHANNEL_PREFIX: &str = "__aardvark_json_side_channel__:";
 
 #[derive(Debug, Clone)]
 struct HostPattern {
@@ -104,6 +773,13 @@ impl NetworkPolicy {
         }
         NetworkDecision::Denied(NetworkDenyReason::HostNotAllowed)
     }
+}
+
+#[derive(Copy, Clone, Debug)]
+enum PythonEntryBridge {
+    Script,
+    CachedCallable,
+    CachedCallableSharedBufferOnly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,29 +887,6 @@ pub struct OverlayExport {
     pub blobs: Vec<OverlayBlob>,
 }
 
-fn package_root_dir() -> Option<PathBuf> {
-    PACKAGE_ROOT.read().as_ref().cloned()
-}
-
-pub(crate) fn set_package_root_override(path: Option<PathBuf>) {
-    let normalized = path.map(normalize_package_root);
-    {
-        let mut guard = PACKAGE_ROOT.write();
-        *guard = normalized.clone();
-    }
-    match normalized {
-        Some(ref path) => tracing::debug!(
-            target = "aardvark::packages",
-            path = %path.display(),
-            "package root override set"
-        ),
-        None => tracing::debug!(
-            target = "aardvark::packages",
-            "cleared package root override"
-        ),
-    }
-}
-
 fn normalize_package_root(path: PathBuf) -> PathBuf {
     if path.is_relative() {
         if let Ok(cwd) = env::current_dir() {
@@ -243,13 +896,7 @@ fn normalize_package_root(path: PathBuf) -> PathBuf {
     path
 }
 
-#[cfg(test)]
-pub(crate) fn reset_package_root_for_tests() {
-    *PACKAGE_ROOT.write() = None;
-}
-
-fn resolve_local_package_path(url: &str) -> Option<PathBuf> {
-    let root = package_root_dir()?;
+fn resolve_local_package_path(root: &Path, url: &str) -> Option<PathBuf> {
     let scheme_split = url.find("://").map(|idx| idx + 3).unwrap_or(0);
     let remainder = &url[scheme_split..];
     let path_part = remainder.split_once('/').map_or("", |(_, rest)| rest);
@@ -302,7 +949,7 @@ fn resolve_local_package_path(url: &str) -> Option<PathBuf> {
         }
     }
     if let Some(file_name) = as_path.file_name() {
-        if let Some(found) = walk_for_file(&root, file_name) {
+        if let Some(found) = walk_for_file(root, file_name) {
             tracing::debug!(
                 target = "aardvark::packages",
                 path = %found.display(),
@@ -425,14 +1072,43 @@ pub struct JsRuntime {
     context_state: Rc<RuntimeContext>,
 }
 
+struct IsolateEntryGuard {
+    isolate: *const v8::Isolate,
+}
+
+impl IsolateEntryGuard {
+    fn enter(isolate: &v8::OwnedIsolate) -> Self {
+        // rusty_v8 enters an OwnedIsolate at creation time, but the current
+        // isolate on this thread is the most recently entered one. Pools keep
+        // multiple isolates alive, so every operation must temporarily re-enter
+        // the isolate it is about to touch.
+        unsafe {
+            isolate.enter();
+        }
+        Self {
+            isolate: &**isolate as *const v8::Isolate,
+        }
+    }
+}
+
+impl Drop for IsolateEntryGuard {
+    fn drop(&mut self) {
+        unsafe {
+            (&*self.isolate).exit();
+        }
+    }
+}
+
 struct RuntimeContext {
     assets: AssetStore,
     modules: RefCell<HashMap<String, v8::Global<Module>>>,
     module_by_hash: RefCell<HashMap<i32, String>>,
     module_namespaces: RefCell<HashMap<String, v8::Global<Object>>>,
+    installed_rawctx_specs: RefCell<HashSet<String>>,
     pyodide_instance: RefCell<Option<v8::Global<Object>>>,
     stdout_log: RefCell<String>,
     stderr_log: RefCell<String>,
+    package_root: RwLock<Option<PathBuf>>,
     network_policy: RwLock<NetworkPolicy>,
     network_contacts: RwLock<Vec<NetworkContactRecord>>,
     network_denied: RwLock<Vec<NetworkDeniedRecord>>,
@@ -470,8 +1146,10 @@ impl JsRuntime {
 
     /// Reinitializes the isolate in place, keeping the outer runtime alive.
     pub fn reset(&mut self) -> Result<()> {
+        let package_root = self.context_state.package_root();
         // Drop the previous context state so any module caches or globals are released.
         let new_state = Rc::new(RuntimeContext::new());
+        new_state.set_package_root(package_root);
         self.context_state = new_state.clone();
         self.isolate.set_slot(new_state);
 
@@ -485,6 +1163,11 @@ impl JsRuntime {
         };
         self.context = global;
         self.install_polyfills()
+    }
+
+    /// Configures the local Pyodide package root for this runtime.
+    pub(crate) fn set_package_root(&self, path: Option<PathBuf>) {
+        self.context_state.set_package_root(path);
     }
 
     /// Configures the network allowlist for subsequent native fetches.
@@ -520,6 +1203,166 @@ impl JsRuntime {
     /// Consumes filesystem violations captured during the invocation.
     pub fn drain_filesystem_violations(&self) -> Vec<FilesystemViolationRecord> {
         self.context_state.take_filesystem_violations()
+    }
+
+    pub(crate) fn is_rawctx_auto_wrapper_installed(&self, spec_key: &str) -> bool {
+        self.context_state
+            .installed_rawctx_specs
+            .borrow()
+            .contains(spec_key)
+    }
+
+    pub(crate) fn mark_rawctx_auto_wrapper_installed(&self, spec_key: impl Into<String>) {
+        self.context_state
+            .installed_rawctx_specs
+            .borrow_mut()
+            .insert(spec_key.into());
+    }
+
+    pub(crate) fn clear_rawctx_auto_wrapper_cache(&self) {
+        self.context_state
+            .installed_rawctx_specs
+            .borrow_mut()
+            .clear();
+    }
+
+    pub fn set_python_json_f32_input(&mut self, bytes: Vec<u8>) -> Result<()> {
+        self.with_context(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let backing = v8::ArrayBuffer::new_backing_store_from_vec(bytes);
+            let shared = backing.make_shared();
+            let byte_len = shared.byte_length();
+            let array_buffer = v8::ArrayBuffer::with_backing_store(scope, &shared);
+            let typed = Uint8Array::new(scope, array_buffer, 0, byte_len).ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON f32 input buffer".into())
+            })?;
+            let key = v8::String::new(scope, "__aardvarkJsonInputBuffer").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input buffer key".into())
+            })?;
+            global.set(scope, key.into(), typed.into());
+            let mode_key = v8::String::new(scope, "__aardvarkJsonInputMode").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input mode key".into())
+            })?;
+            let mode_value = v8::String::new(scope, "f32").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input mode value".into())
+            })?;
+            global.set(scope, mode_key.into(), mode_value.into());
+            Ok(())
+        })
+    }
+
+    pub fn set_python_json_utf8_input(&mut self, bytes: Vec<u8>) -> Result<()> {
+        self.with_context(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let backing = v8::ArrayBuffer::new_backing_store_from_vec(bytes);
+            let shared = backing.make_shared();
+            let byte_len = shared.byte_length();
+            let array_buffer = v8::ArrayBuffer::with_backing_store(scope, &shared);
+            let typed = Uint8Array::new(scope, array_buffer, 0, byte_len).ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON utf8 input buffer".into())
+            })?;
+            let key = v8::String::new(scope, "__aardvarkJsonInputBuffer").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input buffer key".into())
+            })?;
+            global.set(scope, key.into(), typed.into());
+            let mode_key = v8::String::new(scope, "__aardvarkJsonInputMode").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input mode key".into())
+            })?;
+            let mode_value = v8::String::new(scope, "utf8").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input mode value".into())
+            })?;
+            global.set(scope, mode_key.into(), mode_value.into());
+            Ok(())
+        })
+    }
+
+    pub fn set_python_json_bytes_input(&mut self, bytes: Vec<u8>) -> Result<()> {
+        self.with_context(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let backing = v8::ArrayBuffer::new_backing_store_from_vec(bytes);
+            let shared = backing.make_shared();
+            let byte_len = shared.byte_length();
+            let array_buffer = v8::ArrayBuffer::with_backing_store(scope, &shared);
+            let typed = Uint8Array::new(scope, array_buffer, 0, byte_len).ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON bytes input buffer".into())
+            })?;
+            let key = v8::String::new(scope, "__aardvarkJsonInputBuffer").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input buffer key".into())
+            })?;
+            global.set(scope, key.into(), typed.into());
+            let mode_key = v8::String::new(scope, "__aardvarkJsonInputMode").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input mode key".into())
+            })?;
+            let mode_value = v8::String::new(scope, "bytes").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input mode value".into())
+            })?;
+            global.set(scope, mode_key.into(), mode_value.into());
+            Ok(())
+        })
+    }
+
+    pub fn set_python_json_encoded_input(&mut self, encoded: String) -> Result<()> {
+        self.with_context(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let key = v8::String::new(scope, "__aardvarkJsonInputEncoded").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON encoded input key".into())
+            })?;
+            let value = v8::String::new(scope, &encoded).ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON encoded input".into())
+            })?;
+            global.set(scope, key.into(), value.into());
+            let mode_key = v8::String::new(scope, "__aardvarkJsonInputMode").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input mode key".into())
+            })?;
+            let mode_value = v8::String::new(scope, "json").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input mode value".into())
+            })?;
+            global.set(scope, mode_key.into(), mode_value.into());
+            Ok(())
+        })
+    }
+
+    pub fn set_python_json_single_i64_object_input(&mut self, key: &str, value: i64) -> Result<()> {
+        self.with_context(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let key_name = v8::String::new(scope, "__aardvarkJsonInputKey").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input key name".into())
+            })?;
+            let key_value = v8::String::new(scope, key).ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input object key".into())
+            })?;
+            global.set(scope, key_name.into(), key_value.into());
+            let value_key = v8::String::new(scope, "__aardvarkJsonInputI64").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON i64 input key".into())
+            })?;
+            global.set(
+                scope,
+                value_key.into(),
+                v8::Number::new(scope, value as f64).into(),
+            );
+            let mode_key = v8::String::new(scope, "__aardvarkJsonInputMode").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input mode key".into())
+            })?;
+            let mode_value = v8::String::new(scope, "single_i64_object").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input mode value".into())
+            })?;
+            global.set(scope, mode_key.into(), mode_value.into());
+            Ok(())
+        })
+    }
+
+    pub fn clear_python_json_input(&mut self) -> Result<()> {
+        self.with_context(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let mode_key = v8::String::new(scope, "__aardvarkJsonInputMode").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input mode key".into())
+            })?;
+            let mode_value = v8::String::new(scope, "none").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JSON input mode value".into())
+            })?;
+            global.set(scope, mode_key.into(), mode_value.into());
+            Ok(())
+        })
     }
 
     /// Applies filesystem mode and quota before executing user code.
@@ -865,13 +1708,7 @@ impl JsRuntime {
 
         let shared_buffers = self.with_context(|scope, _| -> Result<Vec<SharedBuffer>> {
             let global = scope.get_current_context().global(scope);
-            let buffers = collect_shared_buffers(scope, global)?;
-            if !buffers.is_empty() {
-                let release_ids: Vec<String> =
-                    buffers.iter().map(|buffer| buffer.id.clone()).collect();
-                release_shared_buffers(scope, global, &release_ids)?;
-            }
-            Ok(buffers)
+            drain_shared_buffers(scope, global)
         })?;
         execution.shared_buffers = shared_buffers;
 
@@ -1062,6 +1899,7 @@ impl JsRuntime {
     where
         F: for<'a> FnOnce(&mut PinScope<'a, '_>, Local<'a, v8::Context>) -> Result<R>,
     {
+        let _entry = IsolateEntryGuard::enter(&self.isolate);
         let context_global = self.context.clone();
         v8::scope!(let isolate_scope, &mut self.isolate);
         let context = v8::Local::new(isolate_scope, context_global);
@@ -1089,6 +1927,11 @@ impl JsRuntime {
         self.context_state
             .assets
             .insert_bytes(name, Arc::<[u8]>::from(bytes.into_boxed_slice()));
+    }
+
+    /// Registers a binary asset backed by a shared immutable buffer.
+    pub fn insert_binary_asset_shared(&self, name: &str, bytes: Arc<[u8]>) {
+        self.context_state.assets.insert_bytes(name, bytes);
     }
 
     /// Loads the Pyodide runtime by calling the embedded loader module.
@@ -1515,6 +2358,7 @@ impl JsRuntime {
 
     /// Mounts bundle files into the Pyodide virtual filesystem at the given root directory.
     pub fn mount_bundle(&mut self, bundle: &Bundle, root: &str) -> Result<()> {
+        self.clear_rawctx_auto_wrapper_cache();
         let ctx_state = self.context_state.clone();
         let root_owned = root.to_owned();
         self.with_context(|scope, _| {
@@ -1550,11 +2394,9 @@ impl JsRuntime {
 
             let global = scope.get_current_context().global(scope);
             let mount_fn_key = v8::String::new(scope, "__pyRunnerMountFiles").unwrap();
-            let mount_fn_value = global
-                .get(scope, mount_fn_key.into())
-                .ok_or_else(|| {
-                    PyRunnerError::Execution("__pyRunnerMountFiles is not defined".into())
-                })?;
+            let mount_fn_value = global.get(scope, mount_fn_key.into()).ok_or_else(|| {
+                PyRunnerError::Execution("__pyRunnerMountFiles is not defined".into())
+            })?;
             let mount_fn = Local::<Function>::try_from(mount_fn_value).map_err(|_| {
                 PyRunnerError::Execution("__pyRunnerMountFiles is not a function".into())
             })?;
@@ -1562,8 +2404,21 @@ impl JsRuntime {
                 PyRunnerError::Execution("failed to allocate mount root string".into())
             })?;
             mount_fn
-                .call(scope, global.into(), &[pyodide.into(), files.into(), root_value.into()])
+                .call(
+                    scope,
+                    global.into(),
+                    &[pyodide.into(), files.into(), root_value.into()],
+                )
                 .ok_or_else(|| PyRunnerError::Execution("mount files call failed".into()))?;
+
+            exec_script(
+                scope,
+                "aardvark_json_result_buffer_helper.js",
+                JSON_RESULT_BUFFER_HELPER,
+            )
+            .map_err(|err| {
+                PyRunnerError::Execution(format!("installing JSON result helper failed: {err}"))
+            })?;
 
             let run_key = v8::String::new(scope, "runPython").unwrap();
             let run_value = pyodide.get(scope, run_key.into()).ok_or_else(|| {
@@ -1572,12 +2427,14 @@ impl JsRuntime {
             let run_fn = Local::<Function>::try_from(run_value).map_err(|_| {
                 PyRunnerError::Execution("pyodide.runPython is not a function".into())
             })?;
-            let script = v8::String::new(
-                scope,
-                "import sys\nfrom pathlib import Path\napp = Path('/app')\nif str(app) not in sys.path:\n    sys.path.insert(0, str(app))\n",
-            )
-            .ok_or_else(|| PyRunnerError::Execution("failed to allocate sys.path script".into()))?;
-            let _ = run_fn.call(scope, pyodide.into(), &[script.into()]);
+            let script = v8::String::new(scope, PYTHON_ENTRYPOINT_HELPER).ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate sys.path script".into())
+            })?;
+            run_fn
+                .call(scope, pyodide.into(), &[script.into()])
+                .ok_or_else(|| {
+                    PyRunnerError::Execution("installing Python entrypoint helper failed".into())
+                })?;
 
             Ok(())
         })?;
@@ -1586,14 +2443,73 @@ impl JsRuntime {
 
     /// Executes the specified Python module/function entrypoint, capturing stdout and stderr.
     pub fn run_python_entrypoint(&mut self, entrypoint: &str) -> Result<ExecutionOutput> {
+        self.run_python_entrypoint_with_stdio_capture(entrypoint, true)
+    }
+
+    pub(crate) fn run_python_entrypoint_with_stdio_capture(
+        &mut self,
+        entrypoint: &str,
+        capture_stdio: bool,
+    ) -> Result<ExecutionOutput> {
+        self.run_python_entrypoint_inner(
+            entrypoint,
+            true,
+            capture_stdio,
+            PythonEntryBridge::Script,
+            true,
+        )
+    }
+
+    pub(crate) fn run_python_json_entrypoint_with_stdio_capture(
+        &mut self,
+        entrypoint: &str,
+        capture_stdio: bool,
+    ) -> Result<ExecutionOutput> {
+        self.run_python_entrypoint_inner(
+            entrypoint,
+            false,
+            capture_stdio,
+            PythonEntryBridge::CachedCallable,
+            false,
+        )
+    }
+
+    pub(crate) fn run_python_rawctx_entrypoint_with_stdio_capture(
+        &mut self,
+        entrypoint: &str,
+        capture_stdio: bool,
+    ) -> Result<ExecutionOutput> {
+        self.run_python_entrypoint_inner(
+            entrypoint,
+            false,
+            capture_stdio,
+            PythonEntryBridge::CachedCallable,
+            true,
+        )
+    }
+
+    pub(crate) fn run_python_rawctx_entrypoint_shared_buffer_only(
+        &mut self,
+        entrypoint: &str,
+    ) -> Result<ExecutionOutput> {
+        self.run_python_entrypoint_inner(
+            entrypoint,
+            false,
+            false,
+            PythonEntryBridge::CachedCallableSharedBufferOnly,
+            true,
+        )
+    }
+
+    fn run_python_entrypoint_inner(
+        &mut self,
+        entrypoint: &str,
+        include_text_result: bool,
+        capture_stdio: bool,
+        bridge: PythonEntryBridge,
+        collect_output_buffers: bool,
+    ) -> Result<ExecutionOutput> {
         let ctx_state = self.context_state.clone();
-        let entry_literal = serde_json::to_string(entrypoint).map_err(|err| {
-            PyRunnerError::Execution(format!("failed to encode entrypoint: {err}"))
-        })?;
-        let script = format!(
-            "import io, sys, importlib, json, traceback\nfrom js import globalThis as __aardvark_js\nif '__aardvark_publish_buffer' not in globals():\n    def __aardvark_publish_buffer(buffer_id, data, metadata=None):\n        return __aardvark_js.__aardvarkPublishBuffer(buffer_id, data, metadata)\nentrypoint = {entry}\n_stdout = io.StringIO()\n_stderr = io.StringIO()\n_old_out, _old_err = sys.stdout, sys.stderr\nresult_repr = None\nexc_type = None\nexc_value = None\nexc_traceback = None\ntry:\n    sys.stdout = _stdout\n    sys.stderr = _stderr\n    module_name, sep, func_name = entrypoint.partition(':')\n    if not module_name:\n        raise ValueError('entrypoint must specify a module')\n    module = importlib.import_module(module_name)\n    if sep:\n        target = getattr(module, func_name)\n        value = target()\n    elif hasattr(module, 'main'):\n        value = module.main()\n    else:\n        value = None\n    result_repr = repr(value)\nexcept Exception as exc:  # noqa: BLE001\n    exc_type = exc.__class__.__name__\n    exc_value = repr(exc)\n    exc_traceback = traceback.format_exc()\nfinally:\n    sys.stdout = _old_out\n    sys.stderr = _old_err\njson.dumps({{\"stdout\": _stdout.getvalue(), \"stderr\": _stderr.getvalue(), \"result\": result_repr, \"exception_type\": exc_type, \"exception_value\": exc_value, \"traceback\": exc_traceback}})\n",
-            entry = entry_literal
-        );
 
         self.with_context(|scope, _| {
             let pyodide = ctx_state
@@ -1612,35 +2528,100 @@ impl JsRuntime {
                     let _ = reset_fn.call(scope, global.into(), &[]);
                 }
             }
-            let run_key = v8::String::new(scope, "runPython").unwrap();
-            let run_value = pyodide.get(scope, run_key.into()).ok_or_else(|| {
-                PyRunnerError::Execution("pyodide.runPython is not available".into())
-            })?;
-            let run_fn = Local::<Function>::try_from(run_value).map_err(|_| {
-                PyRunnerError::Execution("pyodide.runPython is not a function".into())
-            })?;
-            let script_value = v8::String::new(scope, &script).ok_or_else(|| {
-                PyRunnerError::Execution("failed to allocate execution script".into())
-            })?;
-            let result_value = run_fn
-                .call(scope, pyodide.into(), &[script_value.into()])
-                .ok_or_else(|| PyRunnerError::Execution("running entrypoint failed".into()))?;
-            let json_str = result_value.to_rust_string_lossy(scope);
-            let parsed: PythonCallResult = serde_json::from_str(&json_str).map_err(|err| {
-                PyRunnerError::Execution(format!("failed to parse execution output: {err}"))
-            })?;
-            let mut execution: ExecutionOutput = parsed.into();
-            let shared_buffers = collect_shared_buffers(scope, global)?;
-            if !shared_buffers.is_empty() {
-                let release_ids: Vec<String> = shared_buffers
-                    .iter()
-                    .map(|buffer| buffer.id.clone())
-                    .collect();
-                release_shared_buffers(scope, global, &release_ids)?;
+
+            let json_str = match bridge {
+                PythonEntryBridge::CachedCallable => {
+                    if let Some(output) = run_python_entrypoint_callable(
+                        scope,
+                        pyodide,
+                        global,
+                        entrypoint,
+                        include_text_result,
+                        capture_stdio,
+                        true,
+                    )? {
+                        Some(output)
+                    } else {
+                        let fallback_script = python_entrypoint_fallback_script(
+                            entrypoint,
+                            include_text_result,
+                            capture_stdio,
+                        )?;
+                        run_python_entrypoint_script(scope, pyodide, &fallback_script)?
+                    }
+                }
+                PythonEntryBridge::Script => {
+                    let fallback_script = python_entrypoint_fallback_script(
+                        entrypoint,
+                        include_text_result,
+                        capture_stdio,
+                    )?;
+                    run_python_entrypoint_script(scope, pyodide, &fallback_script)?
+                }
+                PythonEntryBridge::CachedCallableSharedBufferOnly => {
+                    if let Some(output) = run_python_entrypoint_shared_buffer_only_callable(
+                        scope, pyodide, global, entrypoint,
+                    )? {
+                        Some(output)
+                    } else {
+                        let fallback_script =
+                            python_entrypoint_shared_buffer_only_fallback_script(entrypoint)?;
+                        run_python_entrypoint_script(scope, pyodide, &fallback_script)?
+                    }
+                }
             }
-            execution.shared_buffers = shared_buffers;
+            .ok_or_else(|| PyRunnerError::Execution("running entrypoint failed".into()))?;
+            let mut execution =
+                if matches!(bridge, PythonEntryBridge::CachedCallableSharedBufferOnly)
+                    && json_str == PYTHON_SHARED_BUFFER_ONLY_SUCCESS
+                {
+                    ExecutionOutput::success_without_payload()
+                } else if let Some(kind) = json_str.strip_prefix(PYTHON_JSON_SIDE_CHANNEL_PREFIX) {
+                    let mut execution = ExecutionOutput::success_without_payload();
+                    match take_json_result_side_channel(scope, global, kind)? {
+                        JsonSideChannelPayload::Json(json) => {
+                            execution.json = Some(json);
+                        }
+                        JsonSideChannelPayload::SharedBuffer(buffer) => {
+                            execution.shared_buffers.push(buffer);
+                        }
+                    }
+                    execution
+                } else {
+                    let mut parsed: PythonCallResult =
+                        serde_json::from_str(&json_str).map_err(|err| {
+                            PyRunnerError::Execution(format!(
+                                "failed to parse execution output: {err}"
+                            ))
+                        })?;
+                    let side_channel = if let Some(kind) = parsed.json_side_channel.as_deref() {
+                        Some(take_json_result_side_channel(scope, global, kind)?)
+                    } else {
+                        None
+                    };
+                    if let Some(JsonSideChannelPayload::Json(json)) = side_channel.as_ref() {
+                        parsed.json = json.clone();
+                        parsed.json_ready = true;
+                    }
+                    let mut execution: ExecutionOutput = parsed.into();
+                    if let Some(JsonSideChannelPayload::SharedBuffer(buffer)) = side_channel {
+                        execution.shared_buffers.push(buffer);
+                    }
+                    execution
+                };
+            if collect_output_buffers {
+                execution.shared_buffers = drain_shared_buffers(scope, global)?;
+            }
             Ok(execution)
         })
+    }
+
+    /// Resolves and caches a Python entrypoint without invoking user code.
+    pub fn prewarm_python_entrypoint(&mut self, entrypoint: &str) -> Result<()> {
+        let entry_literal = serde_json::to_string(entrypoint).map_err(|err| {
+            PyRunnerError::Execution(format!("failed to encode entrypoint: {err}"))
+        })?;
+        self.run_python_snippet(&format!("__aardvark_resolve_entrypoint({entry_literal})"))
     }
 
     /// Executes an arbitrary Python snippet inside the active Pyodide context.
@@ -1713,6 +2694,291 @@ fn populate_execution_output(
 
         Ok(())
     })
+}
+
+fn run_python_entrypoint_script<'a>(
+    scope: &mut PinScope<'a, '_>,
+    pyodide: Local<'a, Object>,
+    script: &str,
+) -> Result<Option<String>> {
+    v8::tc_scope!(let try_catch, scope);
+    let Some(run_key) = v8::String::new(try_catch, "runPython") else {
+        return Ok(None);
+    };
+    let Some(run_value) = pyodide.get(try_catch, run_key.into()) else {
+        return Ok(None);
+    };
+    let Ok(run_fn) = Local::<Function>::try_from(run_value) else {
+        return Ok(None);
+    };
+    let Some(script_value) = v8::String::new(try_catch, script) else {
+        return Ok(None);
+    };
+    let Some(result) = run_fn.call(try_catch, pyodide.into(), &[script_value.into()]) else {
+        let message = try_catch
+            .exception()
+            .and_then(|value| value.to_string(try_catch))
+            .map(|s| s.to_rust_string_lossy(try_catch))
+            .unwrap_or_else(|| "unknown exception".to_owned());
+        let message = try_catch
+            .stack_trace()
+            .and_then(|value| value.to_string(try_catch))
+            .map(|s| format!("{message}\n{}", s.to_rust_string_lossy(try_catch)))
+            .unwrap_or(message);
+        return Err(PyRunnerError::Execution(format!(
+            "python entrypoint script failed: {message}"
+        )));
+    };
+    Ok(result
+        .to_string(try_catch)
+        .map(|string| string.to_rust_string_lossy(try_catch)))
+}
+
+fn run_python_entrypoint_callable<'a>(
+    scope: &mut PinScope<'a, '_>,
+    pyodide: Local<'a, Object>,
+    global: Local<'a, Object>,
+    entrypoint: &str,
+    include_text_result: bool,
+    capture_stdio: bool,
+    prefer_cached: bool,
+) -> Result<Option<String>> {
+    v8::tc_scope!(let try_catch, scope);
+    macro_rules! try_catch_message {
+        () => {{
+            let message = try_catch
+                .exception()
+                .and_then(|value| value.to_string(try_catch))
+                .map(|s| s.to_rust_string_lossy(try_catch))
+                .unwrap_or_else(|| "unknown exception".to_owned());
+            try_catch
+                .stack_trace()
+                .and_then(|value| value.to_string(try_catch))
+                .map(|s| format!("{message}\n{}", s.to_rust_string_lossy(try_catch)))
+                .unwrap_or(message)
+        }};
+    }
+    macro_rules! call_entrypoint_callable {
+        ($callable_fn:expr) => {{
+            'call: {
+                let Some(entry_value) = v8::String::new(try_catch, entrypoint) else {
+                    break 'call Ok(None);
+                };
+                let include_value = v8::Boolean::new(try_catch, include_text_result);
+                let capture_stdio_value = v8::Boolean::new(try_catch, capture_stdio);
+                let Some(result) = $callable_fn.call(
+                    try_catch,
+                    v8::undefined(try_catch).into(),
+                    &[
+                        entry_value.into(),
+                        include_value.into(),
+                        capture_stdio_value.into(),
+                    ],
+                ) else {
+                    let message = try_catch_message!();
+                    break 'call Err(PyRunnerError::Execution(format!(
+                        "python entrypoint callable failed: {message}"
+                    )));
+                };
+                break 'call Ok(result
+                    .to_string(try_catch)
+                    .map(|string| string.to_rust_string_lossy(try_catch)));
+            }
+        }};
+    }
+
+    let cache_key = if prefer_cached {
+        let Some(key) = v8::String::new(try_catch, "__aardvarkCallEntrypoint") else {
+            return Ok(None);
+        };
+        Some(key)
+    } else {
+        None
+    };
+    if let Some(cache_key) = cache_key {
+        if let Some(cached_value) = global.get(try_catch, cache_key.into()) {
+            if let Ok(cached_fn) = Local::<Function>::try_from(cached_value) {
+                let output: Result<Option<String>> = call_entrypoint_callable!(cached_fn);
+                return output;
+            }
+        }
+    }
+
+    let Some(globals_key) = v8::String::new(try_catch, "globals") else {
+        return Ok(None);
+    };
+    let Some(globals_value) = pyodide.get(try_catch, globals_key.into()) else {
+        return Ok(None);
+    };
+    let Ok(globals) = Local::<Object>::try_from(globals_value) else {
+        return Ok(None);
+    };
+    let Some(get_key) = v8::String::new(try_catch, "get") else {
+        return Ok(None);
+    };
+    let Some(get_value) = globals.get(try_catch, get_key.into()) else {
+        return Ok(None);
+    };
+    let Ok(get_fn) = Local::<Function>::try_from(get_value) else {
+        return Ok(None);
+    };
+    let Some(helper_key) = v8::String::new(try_catch, "__aardvark_call_entrypoint") else {
+        return Ok(None);
+    };
+    let Some(callable_value) = get_fn.call(try_catch, globals.into(), &[helper_key.into()]) else {
+        let message = try_catch
+            .exception()
+            .and_then(|value| value.to_string(try_catch))
+            .map(|s| s.to_rust_string_lossy(try_catch))
+            .unwrap_or_else(|| "unknown exception".to_owned());
+        let message = try_catch
+            .stack_trace()
+            .and_then(|value| value.to_string(try_catch))
+            .map(|s| format!("{message}\n{}", s.to_rust_string_lossy(try_catch)))
+            .unwrap_or(message);
+        return Err(PyRunnerError::Execution(format!(
+            "python entrypoint helper lookup failed: {message}"
+        )));
+    };
+    let Ok(callable_fn) = Local::<Function>::try_from(callable_value) else {
+        return Ok(None);
+    };
+    let output: Result<Option<String>> = call_entrypoint_callable!(callable_fn);
+    if let Some(cache_key) = cache_key {
+        global.set(try_catch, cache_key.into(), callable_value);
+    } else {
+        destroy_pyproxy_value(try_catch, callable_value);
+    }
+    output
+}
+
+fn run_python_entrypoint_shared_buffer_only_callable<'a>(
+    scope: &mut PinScope<'a, '_>,
+    pyodide: Local<'a, Object>,
+    global: Local<'a, Object>,
+    entrypoint: &str,
+) -> Result<Option<String>> {
+    v8::tc_scope!(let try_catch, scope);
+    macro_rules! try_catch_message {
+        () => {{
+            let message = try_catch
+                .exception()
+                .and_then(|value| value.to_string(try_catch))
+                .map(|s| s.to_rust_string_lossy(try_catch))
+                .unwrap_or_else(|| "unknown exception".to_owned());
+            try_catch
+                .stack_trace()
+                .and_then(|value| value.to_string(try_catch))
+                .map(|s| format!("{message}\n{}", s.to_rust_string_lossy(try_catch)))
+                .unwrap_or(message)
+        }};
+    }
+    macro_rules! call_entrypoint_callable {
+        ($callable_fn:expr) => {{
+            'call: {
+                let Some(entry_value) = v8::String::new(try_catch, entrypoint) else {
+                    break 'call Ok(None);
+                };
+                let Some(result) = $callable_fn.call(
+                    try_catch,
+                    v8::undefined(try_catch).into(),
+                    &[entry_value.into()],
+                ) else {
+                    let message = try_catch_message!();
+                    break 'call Err(PyRunnerError::Execution(format!(
+                        "python shared-buffer entrypoint callable failed: {message}"
+                    )));
+                };
+                break 'call Ok(result
+                    .to_string(try_catch)
+                    .map(|string| string.to_rust_string_lossy(try_catch)));
+            }
+        }};
+    }
+
+    let Some(cache_key) = v8::String::new(try_catch, "__aardvarkCallSharedBufferEntrypoint") else {
+        return Ok(None);
+    };
+    if let Some(cached_value) = global.get(try_catch, cache_key.into()) {
+        if let Ok(cached_fn) = Local::<Function>::try_from(cached_value) {
+            let output: Result<Option<String>> = call_entrypoint_callable!(cached_fn);
+            return output;
+        }
+    }
+
+    let Some(globals_key) = v8::String::new(try_catch, "globals") else {
+        return Ok(None);
+    };
+    let Some(globals_value) = pyodide.get(try_catch, globals_key.into()) else {
+        return Ok(None);
+    };
+    let Ok(globals) = Local::<Object>::try_from(globals_value) else {
+        return Ok(None);
+    };
+    let Some(get_key) = v8::String::new(try_catch, "get") else {
+        return Ok(None);
+    };
+    let Some(get_value) = globals.get(try_catch, get_key.into()) else {
+        return Ok(None);
+    };
+    let Ok(get_fn) = Local::<Function>::try_from(get_value) else {
+        return Ok(None);
+    };
+    let Some(helper_key) =
+        v8::String::new(try_catch, "__aardvark_call_entrypoint_shared_buffer_only")
+    else {
+        return Ok(None);
+    };
+    let Some(callable_value) = get_fn.call(try_catch, globals.into(), &[helper_key.into()]) else {
+        let message = try_catch_message!();
+        return Err(PyRunnerError::Execution(format!(
+            "python shared-buffer entrypoint helper lookup failed: {message}"
+        )));
+    };
+    let Ok(callable_fn) = Local::<Function>::try_from(callable_value) else {
+        return Ok(None);
+    };
+    let output: Result<Option<String>> = call_entrypoint_callable!(callable_fn);
+    global.set(try_catch, cache_key.into(), callable_value);
+    output
+}
+
+fn python_entrypoint_fallback_script(
+    entrypoint: &str,
+    include_text_result: bool,
+    capture_stdio: bool,
+) -> Result<String> {
+    let entry_literal = serde_json::to_string(entrypoint)
+        .map_err(|err| PyRunnerError::Execution(format!("failed to encode entrypoint: {err}")))?;
+    Ok(format!(
+        "__aardvark_call_entrypoint({entry_literal}, {include_text_result}, {capture_stdio})",
+        include_text_result = if include_text_result { "True" } else { "False" },
+        capture_stdio = if capture_stdio { "True" } else { "False" }
+    ))
+}
+
+fn python_entrypoint_shared_buffer_only_fallback_script(entrypoint: &str) -> Result<String> {
+    let entry_literal = serde_json::to_string(entrypoint)
+        .map_err(|err| PyRunnerError::Execution(format!("failed to encode entrypoint: {err}")))?;
+    Ok(format!(
+        "__aardvark_call_entrypoint_shared_buffer_only({entry_literal})"
+    ))
+}
+
+fn destroy_pyproxy_value<'a>(scope: &mut PinScope<'a, '_>, value: Local<'a, Value>) {
+    let Ok(object) = Local::<Object>::try_from(value) else {
+        return;
+    };
+    let Some(destroy_key) = v8::String::new(scope, "destroy") else {
+        return;
+    };
+    let Some(destroy_value) = object.get(scope, destroy_key.into()) else {
+        return;
+    };
+    let Ok(destroy_fn) = Local::<Function>::try_from(destroy_value) else {
+        return;
+    };
+    let _ = destroy_fn.call(scope, object.into(), &[]);
 }
 
 fn exec_script(
@@ -1985,7 +3251,13 @@ fn native_fetch_callback(
         return;
     }
 
-    if let Some(local_path) = resolve_local_package_path(&url) {
+    let context_state = scope.get_slot::<Rc<RuntimeContext>>().cloned();
+    let local_package_path = context_state
+        .as_ref()
+        .and_then(|state| state.package_root())
+        .and_then(|root| resolve_local_package_path(&root, &url));
+
+    if let Some(local_path) = local_package_path {
         match fs::read(&local_path) {
             Ok(body) => {
                 info!(
@@ -2067,7 +3339,7 @@ fn native_fetch_callback(
         return;
     }
 
-    let Some(context_state) = scope.get_slot::<Rc<RuntimeContext>>() else {
+    let Some(context_state) = context_state else {
         rv.set(v8::undefined(scope).into());
         return;
     };
@@ -2417,9 +3689,11 @@ impl RuntimeContext {
             modules: RefCell::new(HashMap::new()),
             module_by_hash: RefCell::new(HashMap::new()),
             module_namespaces: RefCell::new(HashMap::new()),
+            installed_rawctx_specs: RefCell::new(HashSet::new()),
             pyodide_instance: RefCell::new(None),
             stdout_log: RefCell::new(String::new()),
             stderr_log: RefCell::new(String::new()),
+            package_root: RwLock::new(None),
             network_policy: RwLock::new(NetworkPolicy::default()),
             network_contacts: RwLock::new(Vec::new()),
             network_denied: RwLock::new(Vec::new()),
@@ -2430,6 +3704,29 @@ impl RuntimeContext {
     fn clear_console(&self) {
         self.stdout_log.borrow_mut().clear();
         self.stderr_log.borrow_mut().clear();
+    }
+
+    fn set_package_root(&self, path: Option<PathBuf>) {
+        let normalized = path.map(normalize_package_root);
+        {
+            let mut guard = self.package_root.write();
+            *guard = normalized.clone();
+        }
+        match normalized {
+            Some(ref path) => tracing::debug!(
+                target = "aardvark::packages",
+                path = %path.display(),
+                "runtime package root set"
+            ),
+            None => tracing::debug!(
+                target = "aardvark::packages",
+                "runtime package root cleared"
+            ),
+        }
+    }
+
+    fn package_root(&self) -> Option<PathBuf> {
+        self.package_root.read().as_ref().cloned()
     }
 
     fn append_stdout(&self, message: &str) {
@@ -2557,6 +3854,12 @@ struct PythonCallResult {
     stderr: String,
     result: Option<String>,
     #[serde(default)]
+    json: JsonValue,
+    #[serde(default)]
+    json_ready: bool,
+    #[serde(default)]
+    json_side_channel: Option<String>,
+    #[serde(default)]
     exception_type: Option<String>,
     #[serde(default)]
     exception_value: Option<String>,
@@ -2626,6 +3929,21 @@ pub struct ExecutionOutput {
     pub shared_buffers: Vec<SharedBuffer>,
 }
 
+impl ExecutionOutput {
+    fn success_without_payload() -> Self {
+        Self {
+            stdout: String::new(),
+            stderr: String::new(),
+            result: None,
+            exception_type: None,
+            exception_value: None,
+            traceback: None,
+            json: None,
+            shared_buffers: Vec::new(),
+        }
+    }
+}
+
 impl From<PythonCallResult> for ExecutionOutput {
     fn from(value: PythonCallResult) -> Self {
         Self {
@@ -2635,10 +3953,131 @@ impl From<PythonCallResult> for ExecutionOutput {
             exception_type: value.exception_type,
             exception_value: value.exception_value,
             traceback: value.traceback,
-            json: None,
+            json: value.json_ready.then_some(value.json),
             shared_buffers: Vec::new(),
         }
     }
+}
+
+fn take_json_result_side_channel<'a>(
+    scope: &mut PinScope<'a, '_>,
+    global: Local<'a, Object>,
+    kind: &str,
+) -> Result<JsonSideChannelPayload> {
+    let kind_key = v8::String::new(scope, "__aardvarkJsonResultKind").ok_or_else(|| {
+        PyRunnerError::Execution("failed to allocate JSON result kind key".into())
+    })?;
+    let value_key = v8::String::new(scope, "__aardvarkJsonResultValue").ok_or_else(|| {
+        PyRunnerError::Execution("failed to allocate JSON result value key".into())
+    })?;
+    let clear_key = v8::String::new(scope, "__aardvarkClearJsonResultBuffer").ok_or_else(|| {
+        PyRunnerError::Execution("failed to allocate JSON result clear key".into())
+    })?;
+
+    let payload = match kind {
+        "string" => {
+            let value = global.get(scope, value_key.into()).ok_or_else(|| {
+                PyRunnerError::Execution("JSON result side-channel value missing".into())
+            })?;
+            let text = value
+                .to_string(scope)
+                .ok_or_else(|| {
+                    PyRunnerError::Execution(
+                        "failed to stringify JSON result side-channel value".into(),
+                    )
+                })?
+                .to_rust_string_lossy(scope);
+            JsonSideChannelPayload::Json(JsonValue::String(text))
+        }
+        "f32-array" | "f64-array" | "bytes" => {
+            let value = global.get(scope, value_key.into()).ok_or_else(|| {
+                PyRunnerError::Execution("JSON result side-channel value missing".into())
+            })?;
+            let typed_array = Local::<Uint8Array>::try_from(value).map_err(|_| {
+                PyRunnerError::Execution("JSON numeric side-channel is not a Uint8Array".into())
+            })?;
+            let byte_len = typed_array.byte_length();
+            let array_buffer = typed_array.buffer(scope).ok_or_else(|| {
+                PyRunnerError::Execution("JSON numeric side-channel missing backing store".into())
+            })?;
+            let backing_store = array_buffer.get_backing_store();
+            let offset = typed_array.byte_offset();
+            let metadata = json_result_side_channel_metadata(scope, global, kind)?;
+            JsonSideChannelPayload::SharedBuffer(SharedBuffer {
+                id: "json-result".to_owned(),
+                length: byte_len,
+                metadata,
+                backing: Some(Arc::new(SharedBufferBacking::new(
+                    backing_store,
+                    offset,
+                    byte_len,
+                ))),
+                bytes: None,
+            })
+        }
+        other => {
+            return Err(PyRunnerError::Execution(format!(
+                "unsupported JSON result side-channel kind: {other}"
+            )))
+        }
+    };
+
+    if let Some(clear_value) = global.get(scope, clear_key.into()) {
+        if let Ok(clear_fn) = Local::<Function>::try_from(clear_value) {
+            let _ = clear_fn.call(scope, global.into(), &[]);
+        }
+    } else {
+        let null_value = v8::null(scope);
+        global.set(scope, kind_key.into(), null_value.into());
+        global.set(scope, value_key.into(), null_value.into());
+    }
+    Ok(payload)
+}
+
+enum JsonSideChannelPayload {
+    Json(JsonValue),
+    SharedBuffer(SharedBuffer),
+}
+
+fn json_result_side_channel_metadata<'a>(
+    scope: &mut PinScope<'a, '_>,
+    global: Local<'a, Object>,
+    kind: &str,
+) -> Result<Option<JsonValue>> {
+    let metadata_key = v8::String::new(scope, "__aardvarkJsonResultMetadata").ok_or_else(|| {
+        PyRunnerError::Execution("failed to allocate JSON result metadata key".into())
+    })?;
+    let mut metadata = match global.get(scope, metadata_key.into()) {
+        Some(value) if !value.is_null_or_undefined() => {
+            let json_value = v8::json::stringify(scope, value).ok_or_else(|| {
+                PyRunnerError::Execution("failed to stringify JSON result metadata".into())
+            })?;
+            let json_str = json_value.to_rust_string_lossy(scope);
+            serde_json::from_str::<JsonValue>(&json_str).map_err(|err| {
+                PyRunnerError::Execution(format!("failed to parse JSON result metadata: {err}"))
+            })?
+        }
+        _ => JsonValue::Object(serde_json::Map::new()),
+    };
+    if let JsonValue::Object(object) = &mut metadata {
+        object.insert(
+            "side_channel".to_owned(),
+            JsonValue::String(kind.to_owned()),
+        );
+        object.insert(
+            "format".to_owned(),
+            JsonValue::String(
+                match kind {
+                    "f32-array" => "f32_le",
+                    "f64-array" => "f64_le",
+                    "bytes" => "bytes",
+                    _ => kind,
+                }
+                .to_owned(),
+            ),
+        );
+    }
+    Ok(Some(metadata))
 }
 
 fn collect_shared_buffers<'a>(
@@ -2656,12 +4095,45 @@ fn collect_shared_buffers<'a>(
     let result = collect_fn
         .call(scope, global.into(), &[])
         .ok_or_else(|| PyRunnerError::Execution("collect shared buffers call failed".into()))?;
-    let Ok(array) = Local::<Array>::try_from(result) else {
-        return Ok(buffers);
+    shared_buffers_from_value(scope, result, &mut buffers)?;
+    Ok(buffers)
+}
+
+fn drain_shared_buffers<'a>(
+    scope: &mut PinScope<'a, '_>,
+    global: Local<'a, Object>,
+) -> Result<Vec<SharedBuffer>> {
+    let mut buffers = Vec::new();
+    let drain_key = v8::String::new(scope, "__aardvarkDrainSharedBuffers").unwrap();
+    if let Some(drain_value) = global.get(scope, drain_key.into()) {
+        if let Ok(drain_fn) = Local::<Function>::try_from(drain_value) {
+            let result = drain_fn.call(scope, global.into(), &[]).ok_or_else(|| {
+                PyRunnerError::Execution("drain shared buffers call failed".into())
+            })?;
+            shared_buffers_from_value(scope, result, &mut buffers)?;
+            return Ok(buffers);
+        }
+    }
+
+    let buffers = collect_shared_buffers(scope, global)?;
+    if !buffers.is_empty() {
+        let release_ids: Vec<String> = buffers.iter().map(|buffer| buffer.id.clone()).collect();
+        release_shared_buffers(scope, global, &release_ids)?;
+    }
+    Ok(buffers)
+}
+
+fn shared_buffers_from_value<'a>(
+    scope: &mut PinScope<'a, '_>,
+    value: Local<'a, Value>,
+    buffers: &mut Vec<SharedBuffer>,
+) -> Result<()> {
+    let Ok(array) = Local::<Array>::try_from(value) else {
+        return Ok(());
     };
     let length = array.length();
     if length == 0 {
-        return Ok(buffers);
+        return Ok(());
     }
 
     let id_key = v8::String::new(scope, "id").unwrap();
@@ -2724,7 +4196,7 @@ fn collect_shared_buffers<'a>(
         });
     }
 
-    Ok(buffers)
+    Ok(())
 }
 
 fn release_shared_buffers<'a>(
@@ -2761,21 +4233,61 @@ fn release_shared_buffers<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::tempdir;
 
-    #[test]
-    fn package_root_override_sets_local_distribution_root() {
-        reset_package_root_for_tests();
-        let temp = tempdir().expect("create tempdir");
-        let cache_dir = temp.path().join("cache");
-        fs::create_dir(&cache_dir).expect("create cache dir");
+    mod runtime_local_package_root {
+        use super::*;
+        use std::fs;
+        use tempfile::tempdir;
 
-        set_package_root_override(Some(cache_dir.clone()));
-        let resolved = package_root_dir().expect("package root available");
-        assert_eq!(resolved, cache_dir);
+        #[test]
+        fn sets_local_distribution_root() {
+            let temp = tempdir().expect("create tempdir");
+            let cache_dir = temp.path().join("cache");
+            fs::create_dir(&cache_dir).expect("create cache dir");
 
-        reset_package_root_for_tests();
+            let runtime = JsRuntime::new().expect("create runtime");
+            runtime.set_package_root(Some(cache_dir.clone()));
+            let resolved = runtime
+                .context_state
+                .package_root()
+                .expect("package root available");
+            assert_eq!(resolved, cache_dir);
+        }
+
+        #[test]
+        fn native_fetch_uses_runtime_local_package_root() {
+            let temp = tempdir().expect("create tempdir");
+            let first_root = temp.path().join("first");
+            let second_root = temp.path().join("second");
+            fs::create_dir(&first_root).expect("create first root");
+            fs::create_dir(&second_root).expect("create second root");
+            let package_name = "numpy-2.2.5-cp313-cp313-pyemscripten_2025_0_wasm32.whl";
+            fs::write(first_root.join(package_name), [11_u8]).expect("write first package");
+            fs::write(second_root.join(package_name), [22_u8]).expect("write second package");
+
+            assert_runtime_fetches_package_byte(&first_root, package_name, 11);
+            assert_runtime_fetches_package_byte(&second_root, package_name, 22);
+            assert_runtime_fetches_package_byte(&first_root, package_name, 11);
+        }
+
+        fn assert_runtime_fetches_package_byte(root: &Path, package_name: &str, expected: u8) {
+            let mut runtime = JsRuntime::new().expect("create runtime");
+            runtime.set_package_root(Some(root.to_path_buf()));
+            let source = format!(
+                r#"
+const response = globalThis.__pyRunnerNativeFetch("https://cdn.jsdelivr.net/pyodide/v0.29.4/full/{package_name}");
+if (!response || response.status !== 200 || !response.body) {{
+  throw new Error("expected native package fetch response");
+}}
+if (response.body[0] !== {expected}) {{
+  throw new Error(`expected package byte {expected}, got ${{response.body[0]}}`);
+}}
+"#
+            );
+            runtime
+                .execute_script("runtime-package-root-fetch-test.js", &source)
+                .expect("runtime-local package fetch should resolve");
+        }
     }
 
     #[test]

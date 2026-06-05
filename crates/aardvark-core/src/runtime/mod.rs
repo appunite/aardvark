@@ -5,7 +5,9 @@ mod python;
 
 use crate::bundle::{Bundle, BundleFingerprint};
 use crate::bundle_manifest::{BundleManifest, ManifestFilesystemMode, ManifestFilesystemResources};
-use crate::config::{PyRuntimeConfig, ResetPolicy, WarmState};
+use crate::config::{
+    PyRuntimeConfig, ResetPolicy, WarmState, DEFAULT_PYODIDE_DISTRIBUTION_PROFILE,
+};
 use crate::engine::{ExecutionOutput, FilesystemModeConfig, JsRuntime};
 use crate::error::{PyRunnerError, Result};
 use crate::invocation::{InvocationDescriptor, InvocationLimits};
@@ -121,10 +123,18 @@ struct CollectedDiagnostics {
     rss_kib_after: Option<u64>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct CurrentBundleState {
     fingerprint: BundleFingerprint,
     language: RuntimeLanguage,
+    pyodide_preload_imports: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeCleanupMode {
+    Full,
+    SharedBuffersOnly,
+    None,
 }
 
 impl AardvarkRuntime {
@@ -141,6 +151,17 @@ impl AardvarkRuntime {
             environment_ready: false,
             current_bundle: None,
         })
+    }
+
+    /// Creates a runtime configured for a specific bundle.
+    ///
+    /// This applies manifest requirements that must be known before isolate
+    /// creation, such as `runtime.pyodide.profile`, then delegates to
+    /// [`AardvarkRuntime::new`].
+    pub fn new_for_bundle(mut config: PyRuntimeConfig, bundle: &Bundle) -> Result<Self> {
+        let manifest = bundle.manifest()?;
+        config.apply_bundle_manifest(manifest.as_ref())?;
+        Self::new(config)
     }
 
     /// Prepares a session from a bundle and entrypoint string using default limits.
@@ -183,6 +204,7 @@ impl AardvarkRuntime {
         descriptor_override: Option<InvocationDescriptor>,
     ) -> Result<(PySession, Option<BundleManifest>)> {
         let manifest = bundle.manifest()?;
+        self.validate_manifest_pyodide_profile(manifest.as_ref())?;
         let entrypoint = manifest
             .as_ref()
             .map(|m| m.entrypoint().to_owned())
@@ -254,6 +276,26 @@ impl AardvarkRuntime {
         Ok((session, manifest))
     }
 
+    fn validate_manifest_pyodide_profile(&self, manifest: Option<&BundleManifest>) -> Result<()> {
+        let Some(requested_profile) =
+            manifest.and_then(BundleManifest::pyodide_distribution_profile)
+        else {
+            return Ok(());
+        };
+        let active_profile = self
+            .config
+            .pyodide_distribution_profile
+            .as_deref()
+            .unwrap_or(DEFAULT_PYODIDE_DISTRIBUTION_PROFILE);
+        if requested_profile == active_profile {
+            return Ok(());
+        }
+
+        Err(PyRunnerError::Validation(format!(
+            "bundle manifest requests Pyodide distribution profile '{requested_profile}', but runtime was created with profile '{active_profile}'; construct the runtime with PyRuntime::new_for_bundle or select the profile before PyRuntime::new"
+        )))
+    }
+
     fn prepare_session_core(
         &mut self,
         bundle: Bundle,
@@ -304,6 +346,10 @@ impl AardvarkRuntime {
         self.current_bundle = Some(CurrentBundleState {
             fingerprint,
             language,
+            pyodide_preload_imports: manifest
+                .as_ref()
+                .map(|manifest| manifest.pyodide_preload_imports().to_vec())
+                .unwrap_or_default(),
         });
 
         Ok((session, manifest, bundle_changed))
@@ -311,6 +357,7 @@ impl AardvarkRuntime {
 
     /// Captures a warm state (snapshot + overlay) after packages are loaded.
     pub fn capture_warm_state(&mut self) -> Result<WarmState> {
+        self.preload_current_bundle_imports()?;
         if let Some(hook) = self.config.hooks.before_warm_snapshot.clone() {
             hook(self)?;
         }
@@ -337,6 +384,27 @@ impl AardvarkRuntime {
         Ok(state)
     }
 
+    fn preload_current_bundle_imports(&mut self) -> Result<()> {
+        let Some(state) = self.current_bundle.as_ref() else {
+            return Ok(());
+        };
+        if state.language != RuntimeLanguage::Python || state.pyodide_preload_imports.is_empty() {
+            return Ok(());
+        }
+        let imports = state.pyodide_preload_imports.clone();
+        for module in imports {
+            let literal = serde_json::to_string(module.as_str()).map_err(|err| {
+                PyRunnerError::Execution(format!(
+                    "failed to encode Pyodide preload import '{module}': {err}"
+                ))
+            })?;
+            self.engine_mut()
+                .js_mut()
+                .run_python_snippet(&format!("__import__({literal})"))?;
+        }
+        Ok(())
+    }
+
     /// Runs a prepared session using the default invocation strategy for the selected language.
     pub fn run_session(&mut self, session: &PySession) -> Result<ExecutionOutcome> {
         let language = session
@@ -360,6 +428,15 @@ impl AardvarkRuntime {
         &mut self,
         session: &PySession,
         strategy: &mut S,
+    ) -> Result<ExecutionOutcome> {
+        self.run_session_with_strategy_and_cleanup(session, strategy, RuntimeCleanupMode::Full)
+    }
+
+    pub(crate) fn run_session_with_strategy_and_cleanup<S: PyInvocationStrategy>(
+        &mut self,
+        session: &PySession,
+        strategy: &mut S,
+        cleanup_mode: RuntimeCleanupMode,
     ) -> Result<ExecutionOutcome> {
         let descriptor = session.descriptor();
         let language = descriptor.language.unwrap_or(self.config.default_language);
@@ -507,6 +584,7 @@ impl AardvarkRuntime {
                     diagnostics,
                 ),
                 cleanup_entrypoint,
+                cleanup_mode,
             );
         }
         if let Some(limit_ms) = limits.cpu_ms {
@@ -533,6 +611,7 @@ impl AardvarkRuntime {
                             diagnostics,
                         ),
                         cleanup_entrypoint,
+                        cleanup_mode,
                     );
                 } else {
                     info!(
@@ -569,6 +648,7 @@ impl AardvarkRuntime {
                         diagnostics,
                     ),
                     cleanup_entrypoint,
+                    cleanup_mode,
                 );
             }
         }
@@ -619,7 +699,7 @@ impl AardvarkRuntime {
         }
 
         let cleanup_start = Instant::now();
-        let mut outcome = self.finish_with_cleanup(outcome, cleanup_entrypoint)?;
+        let mut outcome = self.finish_with_cleanup(outcome, cleanup_entrypoint, cleanup_mode)?;
         let cleanup_duration = cleanup_start.elapsed();
         outcome.diagnostics.cleanup_ms = Some(cleanup_duration.as_millis() as u64);
         if outcome.diagnostics.prepare_ms.is_none() {
@@ -1013,24 +1093,48 @@ impl AardvarkRuntime {
         &mut self,
         outcome: ExecutionOutcome,
         cleanup_entrypoint: Option<&str>,
+        cleanup_mode: RuntimeCleanupMode,
     ) -> Result<ExecutionOutcome> {
-        if let Some(module) = cleanup_entrypoint.and_then(module_from_entrypoint) {
-            self.cleanup_python_module(module);
+        if matches!(cleanup_mode, RuntimeCleanupMode::Full) {
+            if let Some(module) = cleanup_entrypoint.and_then(module_from_entrypoint) {
+                self.cleanup_python_module(module);
+            }
+            self.engine_mut().js_mut().clear_rawctx_auto_wrapper_cache();
         }
-        if let Err(err) = self.engine_mut().js_mut().reset_shared_buffers() {
-            warn!(
-                target: "aardvark::sandbox",
-                runtime_id = self.runtime_id_str(),
-                error = %err,
-                "reset shared buffers failed"
-            );
+
+        let shared_buffers_already_drained = matches!(
+            (cleanup_mode, outcome.payload()),
+            (
+                RuntimeCleanupMode::SharedBuffersOnly,
+                Some(ResultPayload::SharedBuffers(_))
+            )
+        );
+
+        if matches!(cleanup_mode, RuntimeCleanupMode::Full)
+            || (matches!(cleanup_mode, RuntimeCleanupMode::SharedBuffersOnly)
+                && !shared_buffers_already_drained)
+        {
+            if let Err(err) = self.engine_mut().js_mut().reset_shared_buffers() {
+                warn!(
+                    target: "aardvark::sandbox",
+                    runtime_id = self.runtime_id_str(),
+                    error = %err,
+                    "reset shared buffers failed"
+                );
+            }
         }
-        self.cleanup_filesystem();
+
+        if matches!(cleanup_mode, RuntimeCleanupMode::Full) {
+            self.cleanup_filesystem();
+        }
+
         Ok(outcome)
     }
 
     fn cleanup_python_module(&mut self, module: &str) {
-        let script = format!("import gc, sys\nsys.modules.pop({module:?}, None)\ngc.collect()\n");
+        let script = format!(
+            "import sys\nglobals().pop('__aardvark_rawctx_installed_spec_key', None)\n_cache = globals().get('__aardvark_entrypoint_cache')\nif isinstance(_cache, dict):\n    for _key in list(_cache):\n        if _key.partition(':')[0] == {module:?}:\n            _cache.pop(_key, None)\nsys.modules.pop({module:?}, None)\n"
+        );
         if let Err(err) = self.engine_mut().js_mut().run_python_snippet(&script) {
             warn!(
                 target: "aardvark::runtime",

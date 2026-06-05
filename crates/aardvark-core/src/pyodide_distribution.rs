@@ -16,12 +16,17 @@ pub const DISTRIBUTION_MANIFEST: &str = "aardvark-pyodide-dist.json";
 
 static VERIFIED_EXTERNAL_DISTRIBUTIONS: Lazy<Mutex<BTreeSet<String>>> =
     Lazy::new(|| Mutex::new(BTreeSet::new()));
+static EXTERNAL_TEXT_ASSET_CACHE: Lazy<Mutex<BTreeMap<String, Arc<str>>>> =
+    Lazy::new(|| Mutex::new(BTreeMap::new()));
+static EXTERNAL_BINARY_ASSET_CACHE: Lazy<Mutex<BTreeMap<String, Arc<[u8]>>>> =
+    Lazy::new(|| Mutex::new(BTreeMap::new()));
 
 #[derive(Clone, Debug)]
 pub struct PyodideDistribution {
     source: DistributionSource,
     manifest: PyodideDistributionManifest,
     package_root: Option<PathBuf>,
+    external_cache_key: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -42,9 +47,53 @@ pub struct PyodideDistributionManifest {
     pub python: PythonCompatibility,
     pub lockfile: LockfileManifest,
     pub package_root: Option<String>,
+    #[serde(default, skip_serializing_if = "DistributionFeatures::is_empty")]
+    pub features: DistributionFeatures,
     #[serde(default)]
     pub files: BTreeMap<String, String>,
     pub compatibility_fingerprint: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistributionFeatures {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub packages: BTreeMap<String, PackageFeatures>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub wasm_simd: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub openblas: bool,
+}
+
+impl DistributionFeatures {
+    pub fn is_empty(&self) -> bool {
+        self.packages.is_empty() && !self.wasm_simd && !self.openblas
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageFeatures {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub wasm_simd: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub openblas: bool,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub wasm_modules: u32,
+}
+
+impl PackageFeatures {
+    pub fn is_empty(&self) -> bool {
+        !self.wasm_simd && !self.openblas && self.wasm_modules == 0
+    }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -117,7 +166,7 @@ impl PyodideDistribution {
         })?;
         verify_manifest_identity(&manifest)?;
         verify_manifest_fingerprint(&manifest)?;
-        verify_external_files(&root, &manifest)?;
+        let external_cache_key = verify_external_files(&root, &manifest)?;
         let package_root = manifest
             .package_root
             .as_deref()
@@ -127,6 +176,7 @@ impl PyodideDistribution {
             source: DistributionSource::External { root },
             manifest,
             package_root,
+            external_cache_key: Some(external_cache_key),
         })
     }
 
@@ -143,6 +193,7 @@ impl PyodideDistribution {
             source: DistributionSource::Embedded,
             manifest,
             package_root: None,
+            external_cache_key: None,
         })
     }
 
@@ -161,32 +212,26 @@ impl PyodideDistribution {
     pub fn read_text_asset(&self, name: &str) -> Result<Arc<str>> {
         match &self.source {
             DistributionSource::Embedded => embedded_text_asset(name).map(Arc::<str>::from),
-            DistributionSource::External { root } => {
-                let path = root.join(name);
-                let text = fs::read_to_string(&path).map_err(|err| {
-                    PyRunnerError::Init(format!(
-                        "failed to read Pyodide text asset {}: {err}",
-                        path.display()
-                    ))
-                })?;
-                Ok(Arc::<str>::from(text))
-            }
+            DistributionSource::External { root } => read_external_text_asset(
+                root,
+                self.external_cache_key
+                    .as_deref()
+                    .expect("external distribution should have a cache key"),
+                name,
+            ),
         }
     }
 
     pub fn read_binary_asset(&self, name: &str) -> Result<Arc<[u8]>> {
         match &self.source {
             DistributionSource::Embedded => embedded_binary_asset(name).map(Arc::<[u8]>::from),
-            DistributionSource::External { root } => {
-                let path = root.join(name);
-                let bytes = fs::read(&path).map_err(|err| {
-                    PyRunnerError::Init(format!(
-                        "failed to read Pyodide binary asset {}: {err}",
-                        path.display()
-                    ))
-                })?;
-                Ok(Arc::<[u8]>::from(bytes.into_boxed_slice()))
-            }
+            DistributionSource::External { root } => read_external_binary_asset(
+                root,
+                self.external_cache_key
+                    .as_deref()
+                    .expect("external distribution should have a cache key"),
+                name,
+            ),
         }
     }
 }
@@ -238,7 +283,7 @@ fn verify_manifest_fingerprint(manifest: &PyodideDistributionManifest) -> Result
     Ok(())
 }
 
-fn verify_external_files(root: &Path, manifest: &PyodideDistributionManifest) -> Result<()> {
+fn verify_external_files(root: &Path, manifest: &PyodideDistributionManifest) -> Result<String> {
     let cache_key = external_verification_cache_key(root, manifest);
     if VERIFIED_EXTERNAL_DISTRIBUTIONS.lock().contains(&cache_key) {
         tracing::debug!(
@@ -247,7 +292,7 @@ fn verify_external_files(root: &Path, manifest: &PyodideDistributionManifest) ->
             fingerprint = %manifest.compatibility_fingerprint,
             "using cached Pyodide distribution verification"
         );
-        return Ok(());
+        return Ok(cache_key);
     }
     for (rel, expected) in &manifest.files {
         let path = root.join(rel);
@@ -261,8 +306,10 @@ fn verify_external_files(root: &Path, manifest: &PyodideDistributionManifest) ->
             )));
         }
     }
-    VERIFIED_EXTERNAL_DISTRIBUTIONS.lock().insert(cache_key);
-    Ok(())
+    VERIFIED_EXTERNAL_DISTRIBUTIONS
+        .lock()
+        .insert(cache_key.clone());
+    Ok(cache_key)
 }
 
 fn external_verification_cache_key(root: &Path, manifest: &PyodideDistributionManifest) -> String {
@@ -278,6 +325,56 @@ fn external_verification_cache_key(root: &Path, manifest: &PyodideDistributionMa
         hasher.update(b"\0");
     }
     hasher.finalize().encode_hex::<String>()
+}
+
+fn external_asset_cache_key(distribution_key: &str, name: &str) -> String {
+    let mut key = String::with_capacity(distribution_key.len() + name.len() + 1);
+    key.push_str(distribution_key);
+    key.push('\0');
+    key.push_str(name);
+    key
+}
+
+fn read_external_text_asset(root: &Path, distribution_key: &str, name: &str) -> Result<Arc<str>> {
+    let cache_key = external_asset_cache_key(distribution_key, name);
+    if let Some(cached) = EXTERNAL_TEXT_ASSET_CACHE.lock().get(&cache_key).cloned() {
+        return Ok(cached);
+    }
+
+    let path = root.join(name);
+    let text = fs::read_to_string(&path).map_err(|err| {
+        PyRunnerError::Init(format!(
+            "failed to read Pyodide text asset {}: {err}",
+            path.display()
+        ))
+    })?;
+    let text = Arc::<str>::from(text);
+    let mut cache = EXTERNAL_TEXT_ASSET_CACHE.lock();
+    let cached = cache.entry(cache_key).or_insert_with(|| text.clone());
+    Ok(cached.clone())
+}
+
+fn read_external_binary_asset(
+    root: &Path,
+    distribution_key: &str,
+    name: &str,
+) -> Result<Arc<[u8]>> {
+    let cache_key = external_asset_cache_key(distribution_key, name);
+    if let Some(cached) = EXTERNAL_BINARY_ASSET_CACHE.lock().get(&cache_key).cloned() {
+        return Ok(cached);
+    }
+
+    let path = root.join(name);
+    let bytes = fs::read(&path).map_err(|err| {
+        PyRunnerError::Init(format!(
+            "failed to read Pyodide binary asset {}: {err}",
+            path.display()
+        ))
+    })?;
+    let bytes = Arc::<[u8]>::from(bytes.into_boxed_slice());
+    let mut cache = EXTERNAL_BINARY_ASSET_CACHE.lock();
+    let cached = cache.entry(cache_key).or_insert_with(|| bytes.clone());
+    Ok(cached.clone())
 }
 
 fn sha256_file(path: &Path) -> Result<String> {

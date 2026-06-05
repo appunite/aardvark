@@ -22,8 +22,8 @@
 //! use aardvark_core::{Bundle, PyRuntime, PyRuntimeConfig};
 //!
 //! fn invoke(bytes: &[u8]) -> anyhow::Result<()> {
-//!     let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
 //!     let bundle = Bundle::from_zip_bytes(bytes)?;
+//!     let mut runtime = PyRuntime::new_for_bundle(PyRuntimeConfig::default(), &bundle)?;
 //!     let (session, _manifest) = runtime.prepare_session_with_manifest(bundle)?;
 //!     let outcome = runtime.run_session(&session)?;
 //!     if let Some(payload) = outcome.payload() {
@@ -68,7 +68,9 @@ pub use bundle_manifest::{
     MANIFEST_BASENAME as BUNDLE_MANIFEST_BASENAME, MANIFEST_SCHEMA as BUNDLE_MANIFEST_SCHEMA,
     MANIFEST_SCHEMA_VERSION as BUNDLE_MANIFEST_SCHEMA_VERSION,
 };
-pub use config::{HostHooks, PyRuntimeConfig, WarmHook, WarmState};
+pub use config::{
+    HostHooks, PyRuntimeConfig, WarmHook, WarmState, DEFAULT_PYODIDE_DISTRIBUTION_PROFILE,
+};
 pub use engine::{ExecutionOutput, OverlayBlob, OverlayExport};
 pub use error::{PyRunnerError, Result};
 pub use host::{
@@ -79,15 +81,17 @@ pub use outcome::{
     Diagnostics, ExecutionOutcome, FailureKind, OutcomeStatus, ResultPayload, SharedBufferHandle,
 };
 pub use persistent::{
-    BundleArtifact, BundleHandle, BundlePool, CleanupMode, HandlerSession, InlinePythonOptions,
-    IsolateConfig, PoolOptions, PoolStats, PythonIsolate, QueueMode,
+    BundleArtifact, BundleHandle, BundlePool, BundlePoolKey, BundlePoolRegistry, CleanupMode,
+    HandlerSession, InlinePythonOptions, IsolateConfig, PoolOptions, PoolStats,
+    PreparedBundleHandler, PythonIsolate, QueueMode, WarmedBundleHost, WarmedBundleHostOptions,
+    WarmedBundleHostRegistry, WarmedBundleHostRegistryOptions, WarmedBundleHostWarmup,
 };
 pub use pool::{PoolConfig, PyRuntimePool};
 pub use runtime::PyRuntime;
 pub use runtime_language::RuntimeLanguage;
 pub use session::PySession;
 pub use strategy::{
-    DefaultInvocationStrategy, JavaScriptInvocationStrategy, JsonInvocationStrategy,
+    DefaultInvocationStrategy, JavaScriptInvocationStrategy, JsonInput, JsonInvocationStrategy,
     PyInvocationStrategy, RawCtxBindingBuilder, RawCtxInput, RawCtxInvocationStrategy,
     RawCtxMetadata, RawCtxPublishBuilder, RawCtxTableColumnBuilder, RawCtxTableSpec,
     RawCtxTableSpecBuilder,

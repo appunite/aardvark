@@ -22,6 +22,20 @@ Descriptor `FieldDescriptor.metadata` can request built-in decoders:
 
 The default decoder passes raw bytes. Available decoders include `utf8`, `json`, numeric conversions, and RawCtx helpers for zero-copy buffers.
 
+The JSON invocation strategy does not pass `--json-input` as a positional
+argument to Python handlers. It exposes the decoded payload as
+`builtins.__aardvark_input` for the duration of the call:
+
+```python
+import builtins
+
+def handler():
+    event = getattr(builtins, "__aardvark_input", {})
+    return {"count": len(event.get("records", []))}
+```
+
+Use descriptor inputs when you want the runtime to call `handler(*args)`.
+
 ## Returning outputs
 
 Outputs mirror inputs: metadata influences post-processing. If no decoder/transform is specified, returning native Python objects is fine:
@@ -90,6 +104,7 @@ For zero-copy outputs, allocate buffers via `builtins.__aardvark_output_buffer(s
 ## Testing handlers locally
 
 - Use the CLI to load your bundle: `cargo run -p aardvark-cli -- --bundle my_bundle.zip --entrypoint main:main`.
+- Use `--execution-backend warmed-host` to smoke the warmed Pyodide/V8 host path through the CLI. This backend uses manifest packages and does not support explicit `--package`, `--snapshot`, or `--write-snapshot` overrides; use the default direct backend for those one-shot options.
 - Provide `--descriptor` when testing descriptor-only bundles.
 - For unit tests, load the same module under CPython and invoke the handler with representative payloads. Ensure any [Pyodide](https://pyodide.org/)-specific APIs are guarded behind runtime checks.
 

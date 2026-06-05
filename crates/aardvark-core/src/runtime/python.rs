@@ -30,7 +30,7 @@ impl PythonEngine {
     pub fn new(config: &PyRuntimeConfig) -> Result<Self> {
         let js = JsRuntime::new()?;
         let distribution = PyodideDistribution::resolve(config)?;
-        crate::engine::set_package_root_override(distribution.package_root());
+        js.set_package_root(distribution.package_root());
         let warm_state = config.warm_state.clone();
         let snapshot_bytes = load_snapshot_bytes(config, distribution.compatibility_fingerprint())?;
         let mut engine = Self {
@@ -64,12 +64,9 @@ impl PythonEngine {
 
     fn register_core_assets(&self) -> Result<()> {
         let js = &self.js;
-        js.insert_binary_asset_owned(
+        js.insert_binary_asset_shared(
             "pyodide.asm.wasm",
-            self.distribution
-                .read_binary_asset("pyodide.asm.wasm")?
-                .as_ref()
-                .to_vec(),
+            self.distribution.read_binary_asset("pyodide.asm.wasm")?,
         );
         js.insert_text_asset(
             "pyodide.asm.js",
@@ -106,15 +103,15 @@ impl PythonEngine {
             "pyodide.js",
             self.distribution.read_text_asset("pyodide.js")?,
         );
-        js.insert_binary_asset_owned(
+        js.insert_binary_asset_shared(
             "python_stdlib.zip",
-            self.distribution
-                .read_binary_asset("python_stdlib.zip")?
-                .as_ref()
-                .to_vec(),
+            self.distribution.read_binary_asset("python_stdlib.zip")?,
         );
         let lockfile = self.distribution.read_text_asset("pyodide-lock.json")?;
-        let metadata = package_metadata::package_metadata_from_lockfile(&lockfile);
+        let metadata = package_metadata::package_metadata_from_lockfile_keyed(
+            &lockfile,
+            self.distribution.manifest().lockfile.sha256.clone(),
+        );
         js.insert_text_asset("pyodide-lock.json", metadata.json_text);
         js.insert_binary_asset_owned("pyodide-lock.capnp", metadata.capnp_bytes);
         js.insert_text_asset(

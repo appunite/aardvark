@@ -177,14 +177,14 @@ Need to change concurrency after startup? Call `pool.set_desired_size(new_size)`
 
 ### Still need the raw runtime?
 
-`PyRuntime` remains available for hosts that prefer to manage bundles and resets manually. The legacy example is below for completeness:
+`PyRuntime` remains available for hosts that prefer to manage bundles and resets manually. When a bundle has a manifest, construct the runtime from the bundle so profile requirements such as `runtime.pyodide.profile` are applied before the Pyodide isolate starts:
 
 ```rust
 use aardvark_core::{Bundle, PyRuntime, PyRuntimeConfig};
 
 fn execute_with_runtime(bytes: &[u8]) -> anyhow::Result<()> {
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
     let bundle = Bundle::from_zip_bytes(bytes)?;
+    let mut runtime = PyRuntime::new_for_bundle(PyRuntimeConfig::default(), &bundle)?;
     let (session, _manifest) = runtime.prepare_session_with_manifest(bundle)?;
     let outcome = runtime.run_session(&session)?;
     println!("status: {:?}", outcome.status);
@@ -200,13 +200,14 @@ Capture a fully-initialised [Pyodide](https://pyodide.org/) instance (including 
 use aardvark_core::{Bundle, PyRuntime, PyRuntimeConfig};
 
 fn build_warm_state(bytes: &[u8]) -> anyhow::Result<(PyRuntimeConfig, Bundle)> {
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
     let bundle = Bundle::from_zip_bytes(bytes)?;
+    let mut config = PyRuntimeConfig::default();
+    config.apply_bundle_manifest(bundle.manifest()?.as_ref())?;
+    let mut runtime = PyRuntime::new(config.clone())?;
     let (_session, _manifest) = runtime.prepare_session_with_manifest(bundle.clone())?;
     // Optional: run warm-up imports or pre-populate globals here.
     let warm = runtime.capture_warm_state()?;
 
-    let mut config = PyRuntimeConfig::default();
     config.warm_state = Some(warm);
     Ok((config, bundle))
 }

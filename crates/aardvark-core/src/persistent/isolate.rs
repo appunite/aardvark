@@ -2,40 +2,36 @@ use std::sync::Arc;
 
 use crate::bundle::BundleFingerprint;
 use crate::config::PyRuntimeConfig;
-use crate::error::Result;
+use crate::error::{PyRunnerError, Result};
 use crate::invocation::InvocationDescriptor;
 use crate::persistent::{BundleArtifact, InlinePythonOptions};
-use crate::runtime::PyRuntime;
+use crate::runtime::{PyRuntime, RuntimeCleanupMode};
 use crate::runtime_language::RuntimeLanguage;
+use crate::session::PySession;
 use crate::strategy::{
-    DefaultInvocationStrategy, JsonInvocationStrategy, PyInvocationStrategy, RawCtxInput,
-    RawCtxInvocationStrategy,
+    rawctx_spec_json_for_descriptor, DefaultInvocationStrategy, JsonInput, JsonInvocationStrategy,
+    PyInvocationStrategy, RawCtxInput, RawCtxInvocationStrategy,
 };
+use once_cell::sync::OnceCell;
 use serde_json::Value as JsonValue;
 
 /// Cleanup behaviour applied after each invocation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CleanupMode {
+    /// Remove loaded Python modules, clear shared buffers, and reset scratch files.
     #[default]
     Full,
+    /// Keep Python modules hot and clear only transient shared buffers.
     SharedBuffersOnly,
+    /// Keep all isolate state after each invocation.
     None,
 }
 
 /// Configuration applied when constructing a [`PythonIsolate`].
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct IsolateConfig {
     pub runtime: PyRuntimeConfig,
     pub cleanup: CleanupMode,
-}
-
-impl Default for IsolateConfig {
-    fn default() -> Self {
-        Self {
-            runtime: PyRuntimeConfig::default(),
-            cleanup: CleanupMode::Full,
-        }
-    }
 }
 
 /// Handle referencing a loaded bundle artifact.
@@ -58,10 +54,13 @@ impl BundleHandle {
     /// Builds a handler session using an optional descriptor override.
     pub fn prepare_handler(&self, descriptor: Option<InvocationDescriptor>) -> HandlerSession {
         let mut descriptor = descriptor.unwrap_or_else(|| self.artifact.default_descriptor());
-        descriptor.language = descriptor.language.or(Some(self.artifact.language()));
+        self.artifact
+            .apply_manifest_descriptor_defaults(&mut descriptor);
         HandlerSession {
             artifact: self.artifact.clone(),
             descriptor,
+            rawctx_spec_json: OnceCell::new(),
+            prepared_session: OnceCell::new(),
         }
     }
 
@@ -74,6 +73,8 @@ impl BundleHandle {
 pub struct HandlerSession {
     artifact: Arc<BundleArtifact>,
     descriptor: InvocationDescriptor,
+    rawctx_spec_json: OnceCell<Option<Arc<String>>>,
+    prepared_session: OnceCell<Arc<PySession>>,
 }
 
 impl HandlerSession {
@@ -84,6 +85,8 @@ impl HandlerSession {
 
     /// Provides mutable access to the underlying descriptor for fine-grained changes.
     pub fn descriptor_mut(&mut self) -> &mut InvocationDescriptor {
+        let _ = self.rawctx_spec_json.take();
+        let _ = self.prepared_session.take();
         &mut self.descriptor
     }
 
@@ -100,6 +103,16 @@ impl HandlerSession {
         input: Option<JsonValue>,
     ) -> Result<crate::ExecutionOutcome> {
         let mut strategy = JsonInvocationStrategy::new(input);
+        isolate.invoke_with_strategy(self, &mut strategy)
+    }
+
+    /// Executes the handler using a prepared JSON adapter input.
+    pub fn invoke_json_input(
+        &self,
+        isolate: &mut PythonIsolate,
+        input: Option<JsonInput>,
+    ) -> Result<crate::ExecutionOutcome> {
+        let mut strategy = JsonInvocationStrategy::with_input(input);
         isolate.invoke_with_strategy(self, &mut strategy)
     }
 
@@ -127,6 +140,13 @@ impl HandlerSession {
 
     pub(crate) fn descriptor_cloned(&self) -> InvocationDescriptor {
         self.descriptor.clone()
+    }
+
+    pub(crate) fn rawctx_spec_json(&self) -> Result<Option<Arc<String>>> {
+        Ok(self
+            .rawctx_spec_json
+            .get_or_try_init(|| rawctx_spec_json_for_descriptor(&self.descriptor))?
+            .clone())
     }
 }
 
@@ -156,7 +176,8 @@ impl PythonIsolate {
             self.current_artifact = Some(handle.artifact().clone());
             return Ok(());
         }
-        self.loaded_fingerprint = None;
+        self.materialise_bundle(handle.artifact())?;
+        self.loaded_fingerprint = Some(fingerprint);
         self.current_artifact = Some(handle.artifact().clone());
         Ok(())
     }
@@ -168,18 +189,75 @@ impl PythonIsolate {
         strategy: &mut S,
     ) -> Result<crate::ExecutionOutcome> {
         self.ensure_artifact(handler.artifact())?;
+        let session = self.prepare_handler_session(handler)?;
+        self.runtime.run_session_with_strategy_and_cleanup(
+            session.as_ref(),
+            strategy,
+            self.cleanup.into(),
+        )
+    }
+
+    /// Prepares handler-specific caches without executing the user handler.
+    pub fn prewarm_handler(&mut self, handler: &HandlerSession) -> Result<()> {
+        self.ensure_artifact(handler.artifact())?;
+        let session = self.prepare_handler_session(handler)?;
+        let language = session
+            .descriptor()
+            .language
+            .unwrap_or_else(|| self.runtime_language().unwrap_or(RuntimeLanguage::Python));
+        if language == RuntimeLanguage::Python {
+            let entrypoint = session.entrypoint().to_owned();
+            self.runtime
+                .js_runtime()
+                .prewarm_python_entrypoint(&entrypoint)?;
+            RawCtxInvocationStrategy::prewarm_python_handler(&session, self.runtime.js_runtime())?;
+        }
+        Ok(())
+    }
+
+    fn prepare_handler_session(
+        &mut self,
+        handler: &HandlerSession,
+    ) -> Result<Arc<crate::session::PySession>> {
         let bundle = handler.artifact().bundle();
-        let descriptor = handler.descriptor_cloned();
+        let mut descriptor = handler.descriptor_cloned();
+        let language = descriptor
+            .language
+            .unwrap_or_else(|| handler.artifact().language());
+        descriptor.language = Some(language);
+
+        if language == RuntimeLanguage::Python
+            && self.loaded_fingerprint == Some(handler.artifact().fingerprint())
+        {
+            // BundlePool has already materialised this artifact. For Python hot calls,
+            // keep package/policy/descriptor publication in load/prewarm and build the
+            // handler session once from the prepared descriptor.
+            return Ok(handler
+                .prepared_session
+                .get_or_try_init(|| {
+                    descriptor
+                        .validate()
+                        .map_err(|err| PyRunnerError::Descriptor(err.to_string()))?;
+                    let rawctx_spec_json = handler.rawctx_spec_json()?;
+                    Ok(Arc::new(PySession::new_with_rawctx_spec_json(
+                        bundle,
+                        descriptor,
+                        rawctx_spec_json,
+                    )))
+                })?
+                .clone());
+        }
+
         if handler.artifact().manifest().is_some() {
             let (session, _) = self
                 .runtime
                 .prepare_session_with_manifest_and_descriptor(bundle, descriptor)?;
-            self.runtime.run_session_with_strategy(&session, strategy)
+            Ok(Arc::new(session))
         } else {
             let session = self
                 .runtime
                 .prepare_session_with_descriptor(bundle, descriptor)?;
-            self.runtime.run_session_with_strategy(&session, strategy)
+            Ok(Arc::new(session))
         }
     }
 
@@ -249,5 +327,15 @@ impl PythonIsolate {
             .runtime
             .prepare_session_with_manifest_and_descriptor(bundle, descriptor)?;
         self.runtime.run_session(&session)
+    }
+}
+
+impl From<CleanupMode> for RuntimeCleanupMode {
+    fn from(value: CleanupMode) -> Self {
+        match value {
+            CleanupMode::Full => RuntimeCleanupMode::Full,
+            CleanupMode::SharedBuffersOnly => RuntimeCleanupMode::SharedBuffersOnly,
+            CleanupMode::None => RuntimeCleanupMode::None,
+        }
     }
 }

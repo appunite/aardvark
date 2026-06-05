@@ -13,7 +13,7 @@ pub fn loader_mjs() -> &'static str {
     include_str!(concat!(env!("OUT_DIR"), "/pyodide/pyodide.mjs"))
 }
 
-/// Returns the legacy asm.js shim (used by Pyodide's loader).
+/// Returns the asm.js shim required by Pyodide's loader.
 pub fn pyodide_asm_js() -> &'static str {
     include_str!(concat!(env!("OUT_DIR"), "/pyodide/pyodide.asm.js"))
 }

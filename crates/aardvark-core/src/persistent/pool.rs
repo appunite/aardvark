@@ -1,14 +1,15 @@
 use crate::bundle::BundleFingerprint;
 use crate::error::{PyRunnerError, Result};
+use crate::invocation::InvocationDescriptor;
 use crate::persistent::{
     BundleArtifact, BundleHandle, HandlerSession, IsolateConfig, PythonIsolate,
 };
-use crate::strategy::RawCtxInput;
+use crate::strategy::{JsonInput, RawCtxInput};
 use hdrhistogram::Histogram;
 use parking_lot::{Condvar, Mutex};
 use serde_json::Value as JsonValue;
 use std::cmp::Reverse;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -35,7 +36,7 @@ pub type IsolateId = u64;
 pub struct PoolOptions {
     /// Baseline isolate options (Pyodide version, warm snapshot hooks, etc.).
     pub isolate: IsolateConfig,
-    /// Preferred number of isolates to keep hot.
+    /// Preferred number of isolates to keep hot. Use zero for lazy pools.
     pub desired_size: usize,
     /// Upper bound on isolates that may be spawned when demand spikes.
     pub max_size: usize,
@@ -71,11 +72,6 @@ impl Default for PoolOptions {
 
 impl PoolOptions {
     fn validate(&self) -> Result<()> {
-        if self.desired_size == 0 {
-            return Err(PyRunnerError::Validation(
-                "pool desired_size must be at least 1".to_string(),
-            ));
-        }
         if self.max_size == 0 {
             return Err(PyRunnerError::Validation(
                 "pool max_size must be at least 1".to_string(),
@@ -200,10 +196,72 @@ pub struct BundlePool {
     inner: Arc<BundlePoolInner>,
 }
 
+/// Stable key used by [`BundlePoolRegistry`] for warmed bundle pools.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct BundlePoolKey {
+    fingerprint: BundleFingerprint,
+    pyodide_distribution_profile: Option<String>,
+}
+
+impl BundlePoolKey {
+    /// Builds a registry key from a normalised bundle artifact.
+    pub fn from_artifact(artifact: &BundleArtifact) -> Self {
+        Self {
+            fingerprint: artifact.fingerprint(),
+            pyodide_distribution_profile: artifact
+                .pyodide_distribution_profile()
+                .map(str::to_owned),
+        }
+    }
+
+    /// Returns the bundle fingerprint component of the key.
+    pub fn fingerprint(&self) -> BundleFingerprint {
+        self.fingerprint
+    }
+
+    /// Returns the manifest-requested Pyodide distribution profile, if any.
+    pub fn pyodide_distribution_profile(&self) -> Option<&str> {
+        self.pyodide_distribution_profile.as_deref()
+    }
+}
+
+/// Host-side registry that routes bundles to profile-aware warmed pools.
+#[derive(Clone)]
+pub struct BundlePoolRegistry {
+    inner: Arc<BundlePoolRegistryInner>,
+}
+
+/// Prepared pool/handler pair returned by [`BundlePoolRegistry`].
+#[derive(Clone)]
+pub struct PreparedBundleHandler {
+    pool: BundlePool,
+    handler: Arc<HandlerSession>,
+}
+
+struct BundlePoolRegistryInner {
+    options: PoolOptions,
+    artifacts: Mutex<HashMap<[u8; 32], Arc<BundleArtifact>>>,
+    pools: Mutex<HashMap<BundlePoolKey, RegistryPoolSlot>>,
+    handlers: Mutex<HashMap<BundleHandlerKey, PreparedBundleHandler>>,
+    condvar: Condvar,
+}
+
+enum RegistryPoolSlot {
+    Creating,
+    Ready(BundlePool),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct BundleHandlerKey {
+    pool: BundlePoolKey,
+    descriptor: String,
+}
+
 struct BundlePoolInner {
     artifact: Arc<BundleArtifact>,
     options: Mutex<PoolOptions>,
     state: Mutex<PoolState>,
+    prewarmed_handlers: Mutex<Vec<InvocationDescriptor>>,
     condvar: Condvar,
     stats: Arc<PoolStatsTracker>,
     metrics: Arc<PoolSharedMetrics>,
@@ -489,6 +547,253 @@ impl PoolState {
     }
 }
 
+impl BundlePoolRegistry {
+    /// Creates a registry using `options` as the template for every pool it creates.
+    ///
+    /// Bundle manifest requirements, including `runtime.pyodide.profile`, are
+    /// still applied by `BundlePool::from_artifact` before any isolate starts.
+    #[allow(clippy::arc_with_non_send_sync)]
+    pub fn new(options: PoolOptions) -> Result<Self> {
+        options.validate()?;
+        Ok(Self {
+            inner: Arc::new(BundlePoolRegistryInner {
+                options,
+                artifacts: Mutex::new(HashMap::new()),
+                pools: Mutex::new(HashMap::new()),
+                handlers: Mutex::new(HashMap::new()),
+                condvar: Condvar::new(),
+            }),
+        })
+    }
+
+    /// Parses bundle bytes and returns the corresponding warmed pool.
+    pub fn pool_for_bytes(&self, bytes: impl AsRef<[u8]>) -> Result<BundlePool> {
+        let artifact = self.artifact_for_bytes(bytes)?;
+        self.pool_for_artifact(artifact)
+    }
+
+    /// Parses bundle bytes and returns a cached prepared default handler.
+    pub fn prepare_default_handler_for_bytes(
+        &self,
+        bytes: impl AsRef<[u8]>,
+    ) -> Result<PreparedBundleHandler> {
+        self.prepare_handler_for_bytes(bytes, None)
+    }
+
+    /// Parses bundle bytes and returns a cached prepared handler.
+    pub fn prepare_handler_for_bytes(
+        &self,
+        bytes: impl AsRef<[u8]>,
+        descriptor: Option<InvocationDescriptor>,
+    ) -> Result<PreparedBundleHandler> {
+        let artifact = self.artifact_for_bytes(bytes)?;
+        self.prepare_handler_for_artifact(artifact, descriptor)
+    }
+
+    /// Returns a cached prepared default handler for `artifact`.
+    pub fn prepare_default_handler_for_artifact(
+        &self,
+        artifact: Arc<BundleArtifact>,
+    ) -> Result<PreparedBundleHandler> {
+        self.prepare_handler_for_artifact(artifact, None)
+    }
+
+    /// Returns a cached prepared handler for `artifact`.
+    pub fn prepare_handler_for_artifact(
+        &self,
+        artifact: Arc<BundleArtifact>,
+        descriptor: Option<InvocationDescriptor>,
+    ) -> Result<PreparedBundleHandler> {
+        let pool_key = BundlePoolKey::from_artifact(&artifact);
+        let descriptor = handler_descriptor_for_artifact(&artifact, descriptor);
+        let handler_key = BundleHandlerKey {
+            pool: pool_key,
+            descriptor: descriptor_registry_key(&descriptor)?,
+        };
+        if let Some(prepared) = self.inner.handlers.lock().get(&handler_key).cloned() {
+            return Ok(prepared);
+        }
+
+        let pool = self.pool_for_artifact(artifact)?;
+        let handler = Arc::new(pool.prepare_handler(Some(descriptor))?);
+        let prepared = PreparedBundleHandler { pool, handler };
+        let mut handlers = self.inner.handlers.lock();
+        let prepared = handlers
+            .entry(handler_key)
+            .or_insert_with(|| prepared.clone())
+            .clone();
+        Ok(prepared)
+    }
+
+    fn artifact_for_bytes(&self, bytes: impl AsRef<[u8]>) -> Result<Arc<BundleArtifact>> {
+        let bytes = bytes.as_ref();
+        let digest = *blake3::hash(bytes).as_bytes();
+        let cached_artifact = {
+            let artifacts = self.inner.artifacts.lock();
+            artifacts.get(&digest).cloned()
+        };
+        let artifact = if let Some(artifact) = cached_artifact {
+            artifact
+        } else {
+            let parsed = BundleArtifact::from_bytes(bytes)?;
+            let mut artifacts = self.inner.artifacts.lock();
+            artifacts
+                .entry(digest)
+                .or_insert_with(|| parsed.clone())
+                .clone()
+        };
+        Ok(artifact)
+    }
+
+    /// Returns the warmed pool for `artifact`, creating it if needed.
+    ///
+    /// Concurrent callers for the same key wait for the first creation attempt
+    /// instead of booting duplicate pools. Different bundle/profile keys can
+    /// proceed independently.
+    pub fn pool_for_artifact(&self, artifact: Arc<BundleArtifact>) -> Result<BundlePool> {
+        let key = BundlePoolKey::from_artifact(&artifact);
+        loop {
+            let mut pools = self.inner.pools.lock();
+            match pools.get(&key) {
+                Some(RegistryPoolSlot::Ready(pool)) => return Ok(pool.clone()),
+                Some(RegistryPoolSlot::Creating) => {
+                    self.inner.condvar.wait(&mut pools);
+                }
+                None => {
+                    pools.insert(key.clone(), RegistryPoolSlot::Creating);
+                    drop(pools);
+
+                    let created =
+                        BundlePool::from_artifact(artifact.clone(), self.inner.options.clone());
+                    let mut pools = self.inner.pools.lock();
+                    match created {
+                        Ok(pool) => {
+                            pools.insert(key.clone(), RegistryPoolSlot::Ready(pool.clone()));
+                            self.inner.condvar.notify_all();
+                            return Ok(pool);
+                        }
+                        Err(err) => {
+                            pools.remove(&key);
+                            self.inner.condvar.notify_all();
+                            return Err(err);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Returns an already-created pool for `key`, if one is ready.
+    pub fn get(&self, key: &BundlePoolKey) -> Option<BundlePool> {
+        match self.inner.pools.lock().get(key) {
+            Some(RegistryPoolSlot::Ready(pool)) => Some(pool.clone()),
+            Some(RegistryPoolSlot::Creating) | None => None,
+        }
+    }
+
+    /// Removes a ready pool from the registry.
+    pub fn remove(&self, key: &BundlePoolKey) -> Option<BundlePool> {
+        let mut pools = self.inner.pools.lock();
+        if matches!(pools.get(key), Some(RegistryPoolSlot::Ready(_))) {
+            self.inner
+                .handlers
+                .lock()
+                .retain(|handler_key, _| handler_key.pool != *key);
+            match pools.remove(key) {
+                Some(RegistryPoolSlot::Ready(pool)) => Some(pool),
+                Some(RegistryPoolSlot::Creating) | None => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Returns the number of ready pools currently tracked by the registry.
+    pub fn pool_count(&self) -> usize {
+        self.inner
+            .pools
+            .lock()
+            .values()
+            .filter(|slot| matches!(slot, RegistryPoolSlot::Ready(_)))
+            .count()
+    }
+
+    /// Returns true when the registry has no ready pools.
+    pub fn is_empty(&self) -> bool {
+        self.pool_count() == 0
+    }
+}
+
+impl PreparedBundleHandler {
+    /// Returns the warmed pool backing this prepared handler.
+    pub fn pool(&self) -> &BundlePool {
+        &self.pool
+    }
+
+    /// Returns the cached handler session.
+    pub fn handler(&self) -> &HandlerSession {
+        self.handler.as_ref()
+    }
+
+    /// Invokes the handler using the default strategy.
+    pub fn call_default(&self) -> Result<crate::ExecutionOutcome> {
+        self.pool.call_default(self.handler())
+    }
+
+    /// Invokes the handler using JSON adapters.
+    pub fn call_json(&self, input: Option<JsonValue>) -> Result<crate::ExecutionOutcome> {
+        self.pool.call_json(self.handler(), input)
+    }
+
+    /// Invokes the handler using a prepared JSON adapter input.
+    pub fn call_json_input(&self, input: Option<JsonInput>) -> Result<crate::ExecutionOutcome> {
+        self.pool.call_json_input(self.handler(), input)
+    }
+
+    /// Invokes the handler using RawCtx adapters.
+    pub fn call_rawctx(&self, inputs: Vec<RawCtxInput>) -> Result<crate::ExecutionOutcome> {
+        self.pool.call_rawctx(self.handler(), inputs)
+    }
+
+    /// Executes a JSON warmup once on every currently-created idle isolate.
+    pub fn warm_all_json(&self, input: Option<JsonValue>) -> Result<Vec<crate::ExecutionOutcome>> {
+        self.pool.warm_all_json(self.handler(), input)
+    }
+
+    /// Executes a JSON warmup with a prepared input once on every currently-created idle isolate.
+    pub fn warm_all_json_input(
+        &self,
+        input: Option<JsonInput>,
+    ) -> Result<Vec<crate::ExecutionOutcome>> {
+        self.pool.warm_all_json_input(self.handler(), input)
+    }
+
+    /// Executes a RawCtx warmup once on every currently-created idle isolate.
+    pub fn warm_all_rawctx(
+        &self,
+        inputs: Vec<RawCtxInput>,
+    ) -> Result<Vec<crate::ExecutionOutcome>> {
+        self.pool.warm_all_rawctx(self.handler(), inputs)
+    }
+
+    /// Executes a RawCtx warmup once on every currently-created idle isolate.
+    pub fn warm_all_rawctx_with<F>(
+        &self,
+        inputs_for_isolate: F,
+    ) -> Result<Vec<crate::ExecutionOutcome>>
+    where
+        F: FnMut(usize) -> Result<Vec<RawCtxInput>>,
+    {
+        self.pool
+            .warm_all_rawctx_with(self.handler(), inputs_for_isolate)
+    }
+
+    /// Executes a default-strategy warmup once on every currently-created idle isolate.
+    pub fn warm_all_default(&self) -> Result<Vec<crate::ExecutionOutcome>> {
+        self.pool.warm_all_default(self.handler())
+    }
+}
+
 impl BundlePool {
     /// Constructs a pool from bundle bytes and options.
     pub fn from_bytes(bytes: impl AsRef<[u8]>, options: PoolOptions) -> Result<Self> {
@@ -518,11 +823,46 @@ impl BundlePool {
         BundleHandle::from_artifact(self.artifact())
     }
 
+    /// Prepares handler-specific caches on every currently-created isolate.
+    ///
+    /// This intentionally moves import resolution and adapter installation into
+    /// pool warmup so the first live request does not pay that setup cost.
+    pub fn prewarm_handler(&self, handler: &HandlerSession) -> Result<()> {
+        self.inner.prewarm_handler(handler)
+    }
+
+    /// Prepares and prewarms the bundle's default handler for hot invocation.
+    ///
+    /// Prefer this for latency-sensitive pools when startup/preload cost can be
+    /// paid before serving live requests.
+    pub fn prepare_default_handler(&self) -> Result<HandlerSession> {
+        self.prepare_handler(None)
+    }
+
+    /// Prepares and prewarms a handler using an optional descriptor override.
+    pub fn prepare_handler(
+        &self,
+        descriptor: Option<InvocationDescriptor>,
+    ) -> Result<HandlerSession> {
+        let handler = self.handle().prepare_handler(descriptor);
+        self.prewarm_handler(&handler)?;
+        Ok(handler)
+    }
+
     /// Invokes a handler using JSON adapters.
     pub fn call_json(
         &self,
         handler: &HandlerSession,
         input: Option<JsonValue>,
+    ) -> Result<crate::ExecutionOutcome> {
+        self.call_json_input(handler, input.map(JsonInput::Value))
+    }
+
+    /// Invokes a handler using a prepared JSON adapter input.
+    pub fn call_json_input(
+        &self,
+        handler: &HandlerSession,
+        input: Option<JsonInput>,
     ) -> Result<crate::ExecutionOutcome> {
         self.call_with(handler, CallInvocation::Json(input))
     }
@@ -534,6 +874,102 @@ impl BundlePool {
         inputs: Vec<RawCtxInput>,
     ) -> Result<crate::ExecutionOutcome> {
         self.call_with(handler, CallInvocation::RawCtx(inputs))
+    }
+
+    /// Executes a JSON handler during explicit startup warmup.
+    ///
+    /// This is intentionally separate from `prepare_handler`: it runs caller
+    /// code and should only be used when startup side effects are acceptable.
+    pub fn warm_json(
+        &self,
+        handler: &HandlerSession,
+        input: Option<JsonValue>,
+    ) -> Result<crate::ExecutionOutcome> {
+        self.call_json(handler, input)
+    }
+
+    /// Executes a JSON handler with a prepared input during explicit startup warmup.
+    pub fn warm_json_input(
+        &self,
+        handler: &HandlerSession,
+        input: Option<JsonInput>,
+    ) -> Result<crate::ExecutionOutcome> {
+        self.call_json_input(handler, input)
+    }
+
+    /// Executes a JSON warmup once on every currently-created idle isolate.
+    ///
+    /// The pool must be idle. This is intended for deploy-time warmup when the
+    /// host can pay representative handler execution before accepting traffic.
+    pub fn warm_all_json(
+        &self,
+        handler: &HandlerSession,
+        input: Option<JsonValue>,
+    ) -> Result<Vec<crate::ExecutionOutcome>> {
+        self.warm_all_json_input(handler, input.map(JsonInput::Value))
+    }
+
+    /// Executes a JSON warmup with a prepared input once on every currently-created idle isolate.
+    pub fn warm_all_json_input(
+        &self,
+        handler: &HandlerSession,
+        input: Option<JsonInput>,
+    ) -> Result<Vec<crate::ExecutionOutcome>> {
+        self.warm_all_with(handler, |_| Ok(CallInvocation::Json(input.clone())))
+    }
+
+    /// Executes a RawCtx handler during explicit startup warmup.
+    ///
+    /// This is intentionally separate from `prepare_handler`: it runs caller
+    /// code and should only be used when startup side effects are acceptable.
+    pub fn warm_rawctx(
+        &self,
+        handler: &HandlerSession,
+        inputs: Vec<RawCtxInput>,
+    ) -> Result<crate::ExecutionOutcome> {
+        self.call_rawctx(handler, inputs)
+    }
+
+    /// Executes a RawCtx warmup once on every currently-created idle isolate.
+    ///
+    /// Inputs are cloned for each isolate. Prefer `warm_all_rawctx_with` when
+    /// the host can cheaply build owned buffers per isolate.
+    pub fn warm_all_rawctx(
+        &self,
+        handler: &HandlerSession,
+        inputs: Vec<RawCtxInput>,
+    ) -> Result<Vec<crate::ExecutionOutcome>> {
+        self.warm_all_rawctx_with(handler, |_| Ok(inputs.clone()))
+    }
+
+    /// Executes a RawCtx warmup once on every currently-created idle isolate.
+    pub fn warm_all_rawctx_with<F>(
+        &self,
+        handler: &HandlerSession,
+        mut inputs_for_isolate: F,
+    ) -> Result<Vec<crate::ExecutionOutcome>>
+    where
+        F: FnMut(usize) -> Result<Vec<RawCtxInput>>,
+    {
+        self.warm_all_with(handler, |index| {
+            Ok(CallInvocation::RawCtx(inputs_for_isolate(index)?))
+        })
+    }
+
+    /// Executes a default-strategy handler during explicit startup warmup.
+    ///
+    /// This is intentionally separate from `prepare_handler`: it runs caller
+    /// code and should only be used when startup side effects are acceptable.
+    pub fn warm_default(&self, handler: &HandlerSession) -> Result<crate::ExecutionOutcome> {
+        self.call_default(handler)
+    }
+
+    /// Executes a default-strategy warmup once on every currently-created idle isolate.
+    pub fn warm_all_default(
+        &self,
+        handler: &HandlerSession,
+    ) -> Result<Vec<crate::ExecutionOutcome>> {
+        self.warm_all_with(handler, |_| Ok(CallInvocation::Default))
     }
 
     /// Invokes a handler using the default strategy.
@@ -568,7 +1004,9 @@ impl BundlePool {
         }
     }
 
-    /// Adjusts the maximum pool size (no-op for the single-isolate pool).
+    /// Adjusts the maximum pool size.
+    ///
+    /// It fails if any isolate that would have to be removed is busy.
     pub fn resize(&self, new_max_size: usize) -> Result<()> {
         if new_max_size == 0 {
             return Err(PyRunnerError::Validation(
@@ -592,13 +1030,9 @@ impl BundlePool {
     }
 
     /// Sets the desired steady-state isolate count.
+    ///
+    /// Setting this to zero makes the pool lazy.
     pub fn set_desired_size(&self, desired_size: usize) -> Result<()> {
-        if desired_size == 0 {
-            return Err(PyRunnerError::Validation(
-                "pool desired_size must be at least 1".to_string(),
-            ));
-        }
-
         {
             let max_size = { self.inner.options.lock().max_size };
             if desired_size > max_size {
@@ -623,7 +1057,36 @@ impl BundlePool {
         handler: &HandlerSession,
         invocation: CallInvocation,
     ) -> Result<crate::ExecutionOutcome> {
-        let (mut guard, wait_duration) = self.inner.acquire_slot()?;
+        let (guard, wait_duration) = self.inner.acquire_slot()?;
+        self.call_acquired(guard, wait_duration, handler, invocation)
+    }
+
+    fn warm_all_with<F>(
+        &self,
+        handler: &HandlerSession,
+        mut invocation_for_isolate: F,
+    ) -> Result<Vec<crate::ExecutionOutcome>>
+    where
+        F: FnMut(usize) -> Result<CallInvocation>,
+    {
+        let desired = { self.inner.options.lock().desired_size.max(1) };
+        self.inner.ensure_min_isolates(desired)?;
+        let guards = self.inner.acquire_all_idle_slots()?;
+        let mut outcomes = Vec::with_capacity(guards.len());
+        for (index, guard) in guards.into_iter().enumerate() {
+            let invocation = invocation_for_isolate(index)?;
+            outcomes.push(self.call_acquired(guard, Duration::ZERO, handler, invocation)?);
+        }
+        Ok(outcomes)
+    }
+
+    fn call_acquired(
+        &self,
+        mut guard: SlotGuard,
+        wait_duration: Duration,
+        handler: &HandlerSession,
+        invocation: CallInvocation,
+    ) -> Result<crate::ExecutionOutcome> {
         let queue_wait_ms = wait_duration.as_millis().min(u128::from(u64::MAX)) as u64;
         let rss_before = current_rss_kib();
         let context = CallContext::new(
@@ -656,7 +1119,7 @@ impl BundlePool {
             let mut isolate = guard.isolate().isolate.lock();
             match invocation {
                 CallInvocation::Default => handler.invoke(&mut isolate),
-                CallInvocation::Json(input) => handler.invoke_json(&mut isolate, input),
+                CallInvocation::Json(input) => handler.invoke_json_input(&mut isolate, input),
                 CallInvocation::RawCtx(inputs) => handler.invoke_rawctx(&mut isolate, inputs),
             }
         };
@@ -756,7 +1219,7 @@ impl Clone for BundlePool {
 
 enum CallInvocation {
     Default,
-    Json(Option<JsonValue>),
+    Json(Option<JsonInput>),
     RawCtx(Vec<RawCtxInput>),
 }
 
@@ -810,13 +1273,18 @@ impl PoolStatsTracker {
 
 impl BundlePoolInner {
     #[allow(clippy::arc_with_non_send_sync)]
-    fn new(artifact: Arc<BundleArtifact>, options: PoolOptions) -> Result<Arc<Self>> {
+    fn new(artifact: Arc<BundleArtifact>, mut options: PoolOptions) -> Result<Arc<Self>> {
         options.validate()?;
+        options
+            .isolate
+            .runtime
+            .apply_manifest_pyodide_distribution_profile(artifact.pyodide_distribution_profile())?;
         let hooks = options.lifecycle_hooks.clone().unwrap_or_default();
         let inner = Arc::new(Self {
             artifact,
             options: Mutex::new(options),
             state: Mutex::new(PoolState::new()),
+            prewarmed_handlers: Mutex::new(Vec::new()),
             condvar: Condvar::new(),
             stats: Arc::new(PoolStatsTracker::new()),
             metrics: Arc::new(PoolSharedMetrics::new()),
@@ -957,6 +1425,41 @@ impl BundlePoolInner {
         }
     }
 
+    fn prewarm_handler(&self, handler: &HandlerSession) -> Result<()> {
+        let slots: Vec<Arc<IsolateSlot>> = {
+            let state = self.state.lock();
+            state
+                .isolates
+                .iter()
+                .filter_map(|slot| slot.as_ref().cloned())
+                .collect()
+        };
+
+        for slot in slots {
+            let mut isolate = slot.isolate.lock();
+            isolate.prewarm_handler(handler)?;
+        }
+
+        self.register_prewarmed_handler(handler.descriptor())?;
+        Ok(())
+    }
+
+    fn register_prewarmed_handler(&self, descriptor: &InvocationDescriptor) -> Result<()> {
+        let key = descriptor_registry_key(descriptor)?;
+        let mut handlers = self.prewarmed_handlers.lock();
+        for existing in handlers.iter() {
+            if descriptor_registry_key(existing)? == key {
+                return Ok(());
+            }
+        }
+        handlers.push(descriptor.clone());
+        Ok(())
+    }
+
+    fn prewarmed_handler_descriptors(&self) -> Vec<InvocationDescriptor> {
+        self.prewarmed_handlers.lock().clone()
+    }
+
     fn acquire_slot(self: &Arc<Self>) -> Result<(SlotGuard, Duration)> {
         let start = Instant::now();
         loop {
@@ -1015,6 +1518,40 @@ impl BundlePoolInner {
         }
     }
 
+    fn acquire_all_idle_slots(self: &Arc<Self>) -> Result<Vec<SlotGuard>> {
+        let mut state = self.state.lock();
+        if state.shutdown {
+            return Err(PyRunnerError::PoolShuttingDown);
+        }
+        if state.creating > 0 {
+            return Err(PyRunnerError::Validation(format!(
+                "cannot warm all isolates while {} isolates are still starting",
+                state.creating
+            )));
+        }
+        let busy = state.active.saturating_sub(state.idle.len());
+        if busy > 0 {
+            return Err(PyRunnerError::Validation(format!(
+                "cannot warm all isolates while {busy} isolates are busy",
+            )));
+        }
+
+        let mut indices = std::mem::take(&mut state.idle);
+        indices.sort_unstable();
+        let mut guards = Vec::with_capacity(indices.len());
+        for index in indices {
+            let slot = state
+                .isolates
+                .get(index)
+                .and_then(|slot| slot.as_ref())
+                .expect("idle slot must exist")
+                .clone();
+            self.metrics.dec_idle();
+            guards.push(SlotGuard::new(self.clone(), index, slot));
+        }
+        Ok(guards)
+    }
+
     fn release_slot(&self, index: usize) {
         let isolate_id = {
             let mut state = self.state.lock();
@@ -1068,6 +1605,10 @@ impl BundlePoolInner {
             let mut isolate = PythonIsolate::new(options_snapshot.isolate.clone())?;
             let handle = BundleHandle::from_artifact(artifact);
             isolate.load_bundle(&handle)?;
+            for descriptor in self.prewarmed_handler_descriptors() {
+                let handler = handle.prepare_handler(Some(descriptor));
+                isolate.prewarm_handler(&handler)?;
+            }
             Ok(isolate)
         })();
 
@@ -1117,6 +1658,251 @@ impl BundlePoolInner {
     }
 }
 
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::*;
+    use crate::BUNDLE_MANIFEST_BASENAME;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use zip::write::SimpleFileOptions;
+    use zip::CompressionMethod;
+
+    fn artifact_with_pyodide_profile(profile: &str) -> Arc<BundleArtifact> {
+        BundleArtifact::from_bytes(bundle_bytes_with_pyodide_profile(
+            Some(profile),
+            b"def handler():\n    return 1\n",
+        ))
+        .unwrap()
+    }
+
+    fn bundle_bytes_with_pyodide_profile(profile: Option<&str>, code: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let cursor = std::io::Cursor::new(&mut bytes);
+            let mut writer = zip::ZipWriter::new(cursor);
+            let options =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            writer.start_file("main.py", options).unwrap();
+            writer.write_all(code).unwrap();
+            writer
+                .start_file(BUNDLE_MANIFEST_BASENAME, options)
+                .unwrap();
+            let pyodide = profile
+                .map(|profile| format!(r#", "pyodide": {{"profile": "{profile}"}}"#))
+                .unwrap_or_default();
+            writer
+                .write_all(
+                    format!(
+                        r#"{{
+                            "schemaVersion": "1.0",
+                            "entrypoint": "main:handler",
+                            "runtime": {{
+                                "language": "python"{pyodide}
+                            }}
+                        }}"#
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+            writer.finish().unwrap();
+        }
+        bytes
+    }
+
+    fn lazy_pool_options() -> PoolOptions {
+        PoolOptions {
+            desired_size: 0,
+            telemetry_interval: None,
+            ..PoolOptions::default()
+        }
+    }
+
+    #[test]
+    fn pool_applies_bundle_pyodide_distribution_profile_before_isolate_creation() -> Result<()> {
+        let artifact = artifact_with_pyodide_profile("blas");
+        let mut options = lazy_pool_options();
+        let blas_path = PathBuf::from("/tmp/aardvark-blas-dist");
+        options
+            .isolate
+            .runtime
+            .set_pyodide_distribution_profile_dir("blas", blas_path.clone())?;
+
+        let pool = BundlePool::from_artifact(artifact, options)?;
+        let options = pool.inner.options.lock();
+        assert_eq!(
+            options
+                .isolate
+                .runtime
+                .pyodide_distribution_profile
+                .as_deref(),
+            Some("blas")
+        );
+        assert_eq!(
+            options.isolate.runtime.pyodide_dist_dir.as_deref(),
+            Some(Path::new("/tmp/aardvark-blas-dist"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pool_rejects_unregistered_bundle_pyodide_distribution_profile() {
+        let artifact = artifact_with_pyodide_profile("blas");
+        let options = lazy_pool_options();
+
+        let Err(err) = BundlePool::from_artifact(artifact, options) else {
+            panic!("pool should reject unregistered profile");
+        };
+        assert!(matches!(err, PyRunnerError::Validation(_)));
+    }
+
+    #[test]
+    fn registry_reuses_pool_for_same_bundle_and_profile() -> Result<()> {
+        let bytes = bundle_bytes_with_pyodide_profile(
+            Some("blas"),
+            b"def handler():\n    return 'same-profile'\n",
+        );
+        let artifact = BundleArtifact::from_bytes(&bytes)?;
+        let mut options = lazy_pool_options();
+        options
+            .isolate
+            .runtime
+            .set_pyodide_distribution_profile_dir("blas", "/tmp/aardvark-blas-dist")?;
+        let registry = BundlePoolRegistry::new(options)?;
+        let key = BundlePoolKey::from_artifact(&artifact);
+
+        let first = registry.pool_for_artifact(artifact)?;
+        let second = registry.pool_for_bytes(&bytes)?;
+
+        assert_eq!(registry.pool_count(), 1);
+        assert!(registry.get(&key).is_some());
+        assert!(Arc::ptr_eq(&first.inner, &second.inner));
+        Ok(())
+    }
+
+    #[test]
+    fn registry_caches_artifact_for_repeated_bundle_bytes() -> Result<()> {
+        let bytes = bundle_bytes_with_pyodide_profile(
+            Some("blas"),
+            b"def handler():\n    return 'cached-artifact'\n",
+        );
+        let mut options = lazy_pool_options();
+        options
+            .isolate
+            .runtime
+            .set_pyodide_distribution_profile_dir("blas", "/tmp/aardvark-blas-dist")?;
+        let registry = BundlePoolRegistry::new(options)?;
+
+        let first = registry.pool_for_bytes(&bytes)?;
+        let second = registry.pool_for_bytes(&bytes)?;
+
+        assert_eq!(registry.inner.artifacts.lock().len(), 1);
+        assert_eq!(registry.pool_count(), 1);
+        assert!(Arc::ptr_eq(&first.inner, &second.inner));
+        Ok(())
+    }
+
+    #[test]
+    fn registry_caches_prepared_handler_for_repeated_bundle_bytes() -> Result<()> {
+        let bytes = bundle_bytes_with_pyodide_profile(
+            Some("blas"),
+            b"def handler():\n    return 'cached-handler'\n",
+        );
+        let mut options = lazy_pool_options();
+        options
+            .isolate
+            .runtime
+            .set_pyodide_distribution_profile_dir("blas", "/tmp/aardvark-blas-dist")?;
+        let registry = BundlePoolRegistry::new(options)?;
+
+        let first = registry.prepare_default_handler_for_bytes(&bytes)?;
+        let second = registry.prepare_default_handler_for_bytes(&bytes)?;
+
+        assert_eq!(registry.inner.artifacts.lock().len(), 1);
+        assert_eq!(registry.inner.handlers.lock().len(), 1);
+        assert_eq!(registry.pool_count(), 1);
+        assert!(Arc::ptr_eq(&first.pool.inner, &second.pool.inner));
+        assert!(Arc::ptr_eq(&first.handler, &second.handler));
+        Ok(())
+    }
+
+    #[test]
+    fn registry_remove_evicts_cached_prepared_handlers() -> Result<()> {
+        let bytes = bundle_bytes_with_pyodide_profile(
+            Some("blas"),
+            b"def handler():\n    return 'evict-handler'\n",
+        );
+        let artifact = BundleArtifact::from_bytes(&bytes)?;
+        let mut options = lazy_pool_options();
+        options
+            .isolate
+            .runtime
+            .set_pyodide_distribution_profile_dir("blas", "/tmp/aardvark-blas-dist")?;
+        let registry = BundlePoolRegistry::new(options)?;
+        let key = BundlePoolKey::from_artifact(&artifact);
+
+        let first = registry.prepare_default_handler_for_bytes(&bytes)?;
+        assert_eq!(registry.inner.handlers.lock().len(), 1);
+
+        assert!(registry.remove(&key).is_some());
+        assert_eq!(registry.pool_count(), 0);
+        assert_eq!(registry.inner.handlers.lock().len(), 0);
+
+        let second = registry.prepare_default_handler_for_bytes(&bytes)?;
+        assert_eq!(registry.inner.handlers.lock().len(), 1);
+        assert!(!Arc::ptr_eq(&first.pool.inner, &second.pool.inner));
+        assert!(!Arc::ptr_eq(&first.handler, &second.handler));
+        Ok(())
+    }
+
+    #[test]
+    fn registry_separates_pools_by_bundle_profile() -> Result<()> {
+        let blas = artifact_with_pyodide_profile("blas");
+        let tensor = artifact_with_pyodide_profile("tensor");
+        let mut options = lazy_pool_options();
+        options
+            .isolate
+            .runtime
+            .set_pyodide_distribution_profile_dir("blas", "/tmp/aardvark-blas-dist")?;
+        options
+            .isolate
+            .runtime
+            .set_pyodide_distribution_profile_dir("tensor", "/tmp/aardvark-tensor-dist")?;
+        let registry = BundlePoolRegistry::new(options)?;
+
+        let blas_pool = registry.pool_for_artifact(blas.clone())?;
+        let tensor_pool = registry.pool_for_artifact(tensor.clone())?;
+        let blas_key = BundlePoolKey::from_artifact(&blas);
+        let tensor_key = BundlePoolKey::from_artifact(&tensor);
+
+        assert_eq!(registry.pool_count(), 2);
+        assert_eq!(blas_key.pyodide_distribution_profile(), Some("blas"));
+        assert_eq!(tensor_key.pyodide_distribution_profile(), Some("tensor"));
+        assert!(!Arc::ptr_eq(&blas_pool.inner, &tensor_pool.inner));
+        Ok(())
+    }
+
+    #[test]
+    fn registry_drops_failed_creation_slot_for_unregistered_profile() -> Result<()> {
+        let artifact = artifact_with_pyodide_profile("blas");
+        let registry = BundlePoolRegistry::new(lazy_pool_options())?;
+
+        let Err(err) = registry.pool_for_artifact(artifact.clone()) else {
+            panic!("registry should reject unregistered profile");
+        };
+
+        assert!(matches!(err, PyRunnerError::Validation(_)));
+        assert!(registry.is_empty());
+
+        let Err(err) = registry.pool_for_artifact(artifact) else {
+            panic!("registry should retry and reject unregistered profile");
+        };
+        assert!(matches!(err, PyRunnerError::Validation(_)));
+        assert!(registry.is_empty());
+        Ok(())
+    }
+}
+
 impl Drop for BundlePoolInner {
     fn drop(&mut self) {
         {
@@ -1161,9 +1947,12 @@ fn current_rss_kib() -> Option<u64> {
 fn current_rss_kib() -> Option<u64> {
     use std::mem::MaybeUninit;
     unsafe {
+        unsafe extern "C" {
+            #[link_name = "mach_task_self_"]
+            static MACH_TASK_SELF: libc::mach_port_t;
+        }
         let mut info = MaybeUninit::<libc::mach_task_basic_info>::uninit();
-        #[allow(deprecated)]
-        let task = libc::mach_task_self();
+        let task = MACH_TASK_SELF;
         let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
         let result = libc::task_info(
             task,
@@ -1182,6 +1971,21 @@ fn current_rss_kib() -> Option<u64> {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn current_rss_kib() -> Option<u64> {
     None
+}
+
+fn descriptor_registry_key(descriptor: &InvocationDescriptor) -> Result<String> {
+    serde_json::to_string(descriptor).map_err(|err| {
+        PyRunnerError::Descriptor(format!("failed to serialize invocation descriptor: {err}"))
+    })
+}
+
+fn handler_descriptor_for_artifact(
+    artifact: &BundleArtifact,
+    descriptor: Option<InvocationDescriptor>,
+) -> InvocationDescriptor {
+    let mut descriptor = descriptor.unwrap_or_else(|| artifact.default_descriptor());
+    descriptor.language = descriptor.language.or(Some(artifact.language()));
+    descriptor
 }
 
 impl BundlePoolInner {

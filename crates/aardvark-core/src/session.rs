@@ -21,6 +21,20 @@ impl PySession {
         }
     }
 
+    pub(crate) fn new_with_rawctx_spec_json(
+        bundle: Bundle,
+        descriptor: InvocationDescriptor,
+        rawctx_spec_json: Option<Arc<String>>,
+    ) -> Self {
+        let cell = OnceCell::new();
+        let _ = cell.set(rawctx_spec_json);
+        Self {
+            bundle,
+            descriptor,
+            rawctx_spec_json: cell,
+        }
+    }
+
     /// Returns the canonical entrypoint (module:function or script) to execute.
     pub fn entrypoint(&self) -> &str {
         self.descriptor.entrypoint()
@@ -38,12 +52,9 @@ impl PySession {
 
     pub(crate) fn rawctx_spec_json<E, F>(&self, build: F) -> Result<Option<Arc<String>>, E>
     where
-        F: FnOnce() -> Result<Option<String>, E>,
+        F: FnOnce() -> Result<Option<Arc<String>>, E>,
     {
-        Ok(self
-            .rawctx_spec_json
-            .get_or_try_init(|| build().map(|value| value.map(Arc::new)))?
-            .clone())
+        Ok(self.rawctx_spec_json.get_or_try_init(build)?.clone())
     }
 
     /// Returns a simple manifest of the bundle contents.

@@ -25,6 +25,20 @@ def _load_numpy(profile: str):
     return {"size": int(path.read_text().strip())}
 
 
+def _matrix_size(profile: str) -> int:
+    if profile == "low":
+        return 64
+    if profile == "medium":
+        return 128
+    if profile == "high":
+        return 256
+    raise RuntimeError(f"unsupported matrix profile '{profile}'")
+
+
+def _load_matrix(profile: str):
+    return {"size": _matrix_size(profile)}
+
+
 def _load_pandas(profile: str):
     path = FIXTURE_DIR / f"pandas_{profile}.txt"
     return {"rows": int(path.read_text().strip())}
@@ -60,6 +74,8 @@ def build_payload(scenario: str, profile: str):
         return _load_echo(profile)
     if scenario == "numpy":
         return _load_numpy(profile)
+    if scenario in {"numpy-matmul", "scipy-sgemm"}:
+        return _load_matrix(profile)
     if scenario == "pandas":
         return _load_pandas(profile)
     if scenario == "tensor":

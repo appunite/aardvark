@@ -57,14 +57,14 @@ def _summary(rows: int):
 
 def _publish_raw(summary):
     items = sorted(summary.items())
+    metadata = {
+        "format": "i32_f64_pairs",
+        "fields": ["category", "value_mean"],
+    }
     factory = getattr(builtins, "__aardvark_output_buffer", None)
     if callable(factory):
         count = len(items)
         size = 4 + count * 12  # u32 count + repeated (i32, f64) pairs
-        metadata = {
-            "format": "i32_f64_pairs",
-            "fields": ["category", "value_mean"],
-        }
         buffer = factory(size, id="pandas-output", metadata=metadata)
         struct.pack_into("<I", buffer, 0, count)
         offset = 4
@@ -72,6 +72,17 @@ def _publish_raw(summary):
             struct.pack_into("<id", buffer, offset, int(category), float(value))
             offset += 12
         return buffer
+    publisher = getattr(builtins, "__aardvark_publish_buffer", None)
+    if callable(publisher):
+        count = len(items)
+        payload = bytearray(4 + count * 12)
+        struct.pack_into("<I", payload, 0, count)
+        offset = 4
+        for category, value in items:
+            struct.pack_into("<id", payload, offset, int(category), float(value))
+            offset += 12
+        publisher("pandas-output", payload, metadata)
+        return None
     return summary
 
 

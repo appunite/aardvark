@@ -24,8 +24,13 @@ bzip2 = "0.6"
 tar = "0.4"
 tempfile = "3.27"
 ureq = "3.3"
+wasmparser.workspace = true
+zip.workspace = true
 
 [[bin]]
 name = "aardvark-cli"
 path = "src/main.rs"
 required-features = ["runtime"]
+
+[dev-dependencies]
+wasm-encoder.workspace = true

@@ -37,7 +37,22 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "version": { "type": "string" }
+            "version": { "type": "string" },
+            "profile": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "description": "Host-defined Pyodide distribution profile, selected before isolate creation."
+            },
+            "preloadImports": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true,
+              "default": [],
+              "description": "Python module names imported immediately before warm-state snapshot capture. Use only for modules that are safe to restore from Pyodide snapshots."
+            }
           }
         }
       }
