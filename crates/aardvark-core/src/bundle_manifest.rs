@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::assets::PYODIDE_VERSION;
+use crate::config::normalize_pyodide_distribution_profile;
 use crate::error::{PyRunnerError, Result};
 use crate::runtime_language::RuntimeLanguage;
 
@@ -61,6 +62,17 @@ pub struct ManifestPyodide {
     /// Optional Pyodide version requirement.
     #[serde(default)]
     pub version: Option<String>,
+    /// Optional host-defined distribution profile, e.g. `default` or `blas`.
+    ///
+    /// The host maps this profile to a concrete staged Aardvark Pyodide
+    /// distribution before constructing a warmed isolate or pool.
+    #[serde(default)]
+    pub profile: Option<String>,
+    /// Python module names to import immediately before warm-state snapshot
+    /// capture. Use only for modules that are safe to restore from Pyodide
+    /// snapshots.
+    #[serde(default)]
+    pub preload_imports: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -164,13 +176,32 @@ impl BundleManifest {
         self.resources.as_ref()
     }
 
+    /// Returns the requested Pyodide distribution profile, if present.
+    pub fn pyodide_distribution_profile(&self) -> Option<&str> {
+        self.runtime
+            .as_ref()
+            .and_then(|runtime| runtime.pyodide.as_ref())
+            .and_then(|pyodide| pyodide.profile.as_deref())
+    }
+
+    /// Returns Pyodide module imports requested immediately before warm snapshot capture.
+    pub fn pyodide_preload_imports(&self) -> &[String] {
+        self.runtime
+            .as_ref()
+            .and_then(|runtime| runtime.pyodide.as_ref())
+            .map(|pyodide| pyodide.preload_imports.as_slice())
+            .unwrap_or(&[])
+    }
+
     fn normalize(&mut self) -> Result<()> {
-        if self.schema_version.trim() != MANIFEST_SCHEMA_VERSION {
+        let schema_version = self.schema_version.trim();
+        if schema_version != MANIFEST_SCHEMA_VERSION {
             return Err(PyRunnerError::Manifest(format!(
                 "unsupported manifest schema version '{}'; expected {}",
                 self.schema_version, MANIFEST_SCHEMA_VERSION
             )));
         }
+        self.schema_version = schema_version.to_owned();
 
         let trimmed_entrypoint = self.entrypoint.trim();
         let (module, function) = trimmed_entrypoint.split_once(':').ok_or_else(|| {
@@ -227,6 +258,31 @@ impl BundleManifest {
                             PYODIDE_VERSION
                         )));
                     }
+                }
+            }
+        }
+
+        if let Some(runtime) = &mut self.runtime {
+            if let Some(pyodide) = &mut runtime.pyodide {
+                if let Some(profile) = pyodide.profile.as_deref() {
+                    pyodide.profile = Some(normalize_pyodide_distribution_profile(profile)?);
+                }
+                if !pyodide.preload_imports.is_empty() {
+                    let mut dedup = HashSet::new();
+                    let mut normalized = Vec::with_capacity(pyodide.preload_imports.len());
+                    for module in pyodide.preload_imports.iter() {
+                        let trimmed = module.trim();
+                        if trimmed.is_empty() {
+                            return Err(PyRunnerError::Manifest(
+                                "runtime.pyodide.preloadImports entries cannot be empty".into(),
+                            ));
+                        }
+                        let lowered = trimmed.to_ascii_lowercase();
+                        if dedup.insert(lowered) {
+                            normalized.push(trimmed.to_string());
+                        }
+                    }
+                    pyodide.preload_imports = normalized;
                 }
             }
         }
@@ -334,6 +390,62 @@ mod tests {
         );
         let runtime = manifest.runtime.as_ref().expect("runtime present");
         assert_eq!(runtime.language, Some(RuntimeLanguage::Python));
+    }
+
+    #[test]
+    fn manifest_normalizes_pyodide_distribution_profile() {
+        let json = format!(
+            r#"{{
+                "schemaVersion": "1.0",
+                "entrypoint": "main:run",
+                "runtime": {{
+                    "language": "python",
+                    "pyodide": {{"version": "{}", "profile": "  BLAS_fast  "}}
+                }}
+            }}"#,
+            PYODIDE_VERSION
+        );
+
+        let manifest = BundleManifest::from_bytes(json.as_bytes()).expect("manifest parses");
+        assert_eq!(manifest.pyodide_distribution_profile(), Some("blas_fast"));
+    }
+
+    #[test]
+    fn manifest_normalizes_pyodide_preload_imports() {
+        let json = format!(
+            r#"{{
+                "schemaVersion": "1.0",
+                "entrypoint": "main:run",
+                "runtime": {{
+                    "language": "python",
+                    "pyodide": {{
+                        "version": "{}",
+                        "preloadImports": [" main ", "helpers", "MAIN"]
+                    }}
+                }}
+            }}"#,
+            PYODIDE_VERSION
+        );
+
+        let manifest = BundleManifest::from_bytes(json.as_bytes()).expect("manifest parses");
+        assert_eq!(
+            manifest.pyodide_preload_imports(),
+            &["main".to_string(), "helpers".to_string()]
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_invalid_pyodide_distribution_profile() {
+        let json = r#"{
+            "schemaVersion": "1.0",
+            "entrypoint": "main:run",
+            "runtime": {
+                "language": "python",
+                "pyodide": {"profile": "blas profile"}
+            }
+        }"#;
+        let err = BundleManifest::from_bytes(json.as_bytes()).unwrap_err();
+        assert!(matches!(err, PyRunnerError::Manifest(_)));
     }
 
     #[test]

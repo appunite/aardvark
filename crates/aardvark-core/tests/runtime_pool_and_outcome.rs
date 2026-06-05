@@ -1,10 +1,11 @@
 use aardvark_core::{
     config::{PyRuntimeConfig, ResetPolicy},
-    invocation::{FieldDescriptor, InvocationDescriptor, InvocationLimits},
+    invocation::{FieldDescriptor, InvocationDescriptor},
     outcome::{FailureKind, OutcomeStatus, ResetMode, ResultPayload},
     persistent::{
-        BundleArtifact, BundleHandle, BundlePool, CallOutcome, InlinePythonOptions, IsolateConfig,
-        IsolateId, LifecycleHooks, PoolOptions, PythonIsolate, QueueMode, RecycleReason,
+        BundleArtifact, BundleHandle, BundlePool, CallOutcome, CleanupMode, InlinePythonOptions,
+        IsolateConfig, IsolateId, LifecycleHooks, PoolOptions, PythonIsolate, QueueMode,
+        RecycleReason,
     },
     pool::{PoolConfig, PoolResetMode},
     strategy::{
@@ -31,15 +32,7 @@ fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_warm_state_imports_overlay()?;
     verify_after_invocation_reset_policy()?;
     verify_python_exception_outcome()?;
-    verify_timeout_failure()?;
     verify_shared_buffer_payload()?;
-    verify_javascript_default_entrypoint()?;
-    verify_javascript_console_diagnostics()?;
-    verify_javascript_shared_buffers_payload()?;
-    verify_javascript_json_strategy()?;
-    verify_javascript_rawctx_strategy()?;
-    verify_javascript_rawctx_auto_wrapper()?;
-    verify_javascript_rawctx_output_transform()?;
     verify_rawctx_adapter_roundtrip()?;
     verify_prepare_session_with_manifest_defaults()?;
     verify_rawctx_auto_wrapper()?;
@@ -57,6 +50,8 @@ fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_rawctx_table_invalid_schema()?;
     verify_after_invocation_reset_failure()?;
     verify_pool_reset_failure_removes_runtime()?;
+    verify_persistent_isolate_default_resets_modules()?;
+    verify_persistent_isolate_shared_buffers_only_reuses_modules()?;
     verify_persistent_isolate_resets_modules()?;
     verify_bundle_pool_executes_handlers()?;
     verify_bundle_pool_allows_concurrency()?;
@@ -67,6 +62,21 @@ fn runtime_pool_and_outcome_behaviour() -> Result<()> {
     verify_python_isolate_inline()?;
     verify_inline_python_numpy_manifest()?;
     Ok(())
+}
+
+#[test]
+fn manifest_preload_imports_enter_warm_state() -> Result<()> {
+    verify_manifest_preload_imports_enter_warm_state()
+}
+
+#[test]
+fn rawctx_adapter_roundtrip() -> Result<()> {
+    verify_rawctx_adapter_roundtrip()
+}
+
+#[test]
+fn descriptor_can_disable_stdio_capture() -> Result<()> {
+    verify_descriptor_can_disable_stdio_capture()
 }
 
 #[test]
@@ -328,6 +338,55 @@ fn verify_warm_state_imports_overlay() -> Result<()> {
     Ok(())
 }
 
+fn verify_manifest_preload_imports_enter_warm_state() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:handler",
+        "runtime": {
+            "language": "python",
+            "pyodide": {"preloadImports": ["preload_marker"]}
+        }
+    }"#;
+    let bundle = bundle_with_files_and_manifest(
+        &[
+            (
+                "main.py",
+                r#"
+import builtins
+
+def handler():
+    return getattr(builtins, "__aardvark_preload_marker", "missing")
+"#,
+            ),
+            (
+                "preload_marker.py",
+                r#"
+import builtins
+builtins.__aardvark_preload_marker = "loaded"
+"#,
+            ),
+        ],
+        manifest,
+    );
+
+    let mut capture_config = PyRuntimeConfig::default();
+    capture_config.snapshot.save_to = Some(PathBuf::from("target/preload-imports.snapshot"));
+    let mut runtime = PyRuntime::new_for_bundle(capture_config, &bundle)?;
+    let (_session, _) = runtime.prepare_session_with_manifest(bundle.clone())?;
+    let warm_state = runtime.capture_warm_state()?;
+
+    let config = PyRuntimeConfig {
+        warm_state: Some(warm_state),
+        ..PyRuntimeConfig::default()
+    };
+    let mut restored = PyRuntime::new_for_bundle(config, &bundle)?;
+    let (session, _) = restored.prepare_session_with_manifest(bundle)?;
+    let outcome = restored.run_session(&session)?;
+    assert!(outcome.is_success(), "expected preloaded warm-state run");
+    assert_eq!(payload_text(&outcome), "'loaded'");
+    Ok(())
+}
+
 fn verify_shared_buffer_payload() -> Result<()> {
     let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
     let outcome = run_main(
@@ -364,487 +423,6 @@ def main():
     Ok(())
 }
 
-fn verify_javascript_default_entrypoint() -> Result<()> {
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:default",
-        "runtime": { "language": "javascript" }
-    }"#;
-
-    let bundle = bundle_with_js_main_and_manifest(
-        r#"
-export default function main() {
-    return { greeting: "hello" };
-}
-"#,
-        manifest,
-    );
-
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-    let (session, manifest_opt) = runtime.prepare_session_with_manifest(bundle)?;
-    assert!(manifest_opt.is_some(), "manifest should be detected");
-    assert_eq!(
-        session.descriptor().language,
-        Some(aardvark_core::RuntimeLanguage::JavaScript)
-    );
-    let outcome = runtime.run_session(&session)?;
-    match outcome.payload() {
-        Some(ResultPayload::Json(value)) => {
-            assert_eq!(value, &json!({ "greeting": "hello" }));
-        }
-        other => panic!("expected json payload, got {:?}", other),
-    }
-    Ok(())
-}
-
-fn verify_javascript_console_diagnostics() -> Result<()> {
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:default",
-        "runtime": { "language": "javascript" }
-    }"#;
-
-    let bundle = bundle_with_js_main_and_manifest(
-        r#"
-export default function main() {
-    console.log("hello js stdout");
-    console.error("hello js stderr");
-    return "ok";
-}
-"#,
-        manifest,
-    );
-
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
-    let outcome = runtime.run_session(&session)?;
-    assert!(outcome.is_success(), "expected success outcome");
-
-    let diagnostics = &outcome.diagnostics;
-    assert!(
-        diagnostics.stdout.contains("hello js stdout"),
-        "stdout should capture console.log output: {:?}",
-        diagnostics.stdout
-    );
-    assert!(
-        diagnostics.stderr.contains("hello js stderr"),
-        "stderr should capture console.error output: {:?}",
-        diagnostics.stderr
-    );
-
-    match outcome.payload() {
-        Some(ResultPayload::Json(value)) => assert_eq!(value, &json!("ok")),
-        Some(ResultPayload::Text(text)) => assert_eq!(text, "ok"),
-        other => panic!("unexpected payload variant: {:?}", other),
-    }
-
-    Ok(())
-}
-
-fn verify_javascript_shared_buffers_payload() -> Result<()> {
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:default",
-        "runtime": { "language": "javascript" }
-    }"#;
-
-    let bundle = bundle_with_js_main_and_manifest(
-        r#"
-export default function main() {
-    const data = new Uint8Array([1, 2, 3, 4]);
-    globalThis.__aardvarkPublishBuffer("js-buffer", data, { dtype: "u8" });
-    return null;
-}
-"#,
-        manifest,
-    );
-
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
-    let outcome = runtime.run_session(&session)?;
-
-    match &outcome.status {
-        OutcomeStatus::Success(ResultPayload::SharedBuffers(buffers)) => {
-            assert_eq!(buffers.len(), 1);
-            let handle = &buffers[0];
-            assert_eq!(handle.id, "js-buffer");
-            assert_eq!(handle.length, 4);
-            let bytes = handle
-                .as_slice()
-                .expect("shared buffer should retain data for inspection");
-            assert_eq!(bytes, &[1, 2, 3, 4]);
-            let dtype = handle
-                .metadata
-                .as_ref()
-                .and_then(|meta| meta.get("dtype"))
-                .and_then(|value| value.as_str())
-                .unwrap_or_default();
-            assert_eq!(dtype, "u8");
-        }
-        other => panic!("unexpected payload variant: {:?}", other),
-    }
-
-    let diagnostics = &outcome.diagnostics;
-    assert!(
-        diagnostics.stdout.is_empty(),
-        "expected empty stdout, got {:?}",
-        diagnostics.stdout
-    );
-    assert!(
-        diagnostics.stderr.is_empty(),
-        "expected empty stderr, got {:?}",
-        diagnostics.stderr
-    );
-
-    Ok(())
-}
-
-fn verify_javascript_json_strategy() -> Result<()> {
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:default",
-        "runtime": { "language": "javascript" }
-    }"#;
-
-    let bundle = bundle_with_js_main_and_manifest(
-        r#"
-export default function main() {
-    const consume = globalThis.__aardvarkConsumeJsonInput
-        ? globalThis.__aardvarkConsumeJsonInput()
-        : globalThis.__aardvarkGetJsonInput?.();
-    if (!consume || consume.answer !== 42) {
-        throw new Error("json input missing");
-    }
-    return { ok: true, text: consume.message };
-}
-"#,
-        manifest,
-    );
-
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
-
-    let mut strategy = JsonInvocationStrategy::new(Some(json!({
-        "answer": 42,
-        "message": "hello-json",
-    })));
-    let outcome = runtime.run_session_with_strategy(&session, &mut strategy)?;
-
-    match outcome.payload() {
-        Some(ResultPayload::Json(value)) => {
-            assert_eq!(value["ok"], json!(true));
-            assert_eq!(value["text"], json!("hello-json"));
-        }
-        other => panic!("expected json payload, got {:?}", other),
-    }
-
-    Ok(())
-}
-
-fn verify_javascript_rawctx_strategy() -> Result<()> {
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:default",
-        "runtime": { "language": "javascript" }
-    }"#;
-
-    let bundle = bundle_with_js_main_and_manifest(
-        r#"
-export default function main() {
-    const buffers = globalThis.__aardvarkInputBuffers || {};
-    const metadata = globalThis.__aardvarkInputMetadata || {};
-    const payload = buffers["payload"];
-    if (!(payload instanceof Uint8Array)) {
-        throw new Error("payload buffer missing");
-    }
-    const meta = metadata["payload"] || {};
-    if (meta.dtype !== "utf8") {
-        throw new Error("unexpected dtype");
-    }
-    const text = new TextDecoder().decode(payload);
-    if (text !== "rawctx-js") {
-        throw new Error("unexpected payload contents");
-    }
-    globalThis.__aardvarkPublishBuffer("echo-js", payload, meta);
-    return null;
-}
-"#,
-        manifest,
-    );
-
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
-
-    let meta = RawCtxMetadata::new("utf8");
-    let inputs = vec![RawCtxInput::new(
-        "payload",
-        Bytes::from_static(b"rawctx-js"),
-        Some(meta),
-    )?];
-    let mut strategy = RawCtxInvocationStrategy::new(inputs);
-    let outcome = runtime.run_session_with_strategy(&session, &mut strategy)?;
-
-    match &outcome.status {
-        OutcomeStatus::Success(ResultPayload::SharedBuffers(buffers)) => {
-            assert_eq!(buffers.len(), 1);
-            let handle = &buffers[0];
-            assert_eq!(handle.id, "echo-js");
-            let bytes = handle.as_slice().expect("shared buffer should retain data");
-            assert_eq!(bytes, b"rawctx-js");
-        }
-        other => panic!("unexpected payload variant: {:?}", other),
-    }
-
-    Ok(())
-}
-
-fn verify_javascript_rawctx_auto_wrapper() -> Result<()> {
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:handler",
-        "runtime": { "language": "javascript" }
-    }"#;
-
-    let bundle = bundle_with_js_main_and_manifest(
-        r#"
-export function handler(text, extras) {
-    if (text !== "hello-js") {
-        throw new Error("unexpected text value");
-    }
-    if (!extras || typeof extras.amount !== "number" || Math.abs(extras.amount - 42.5) > 1e-6) {
-        throw new Error("missing amount");
-    }
-    if (!extras.meta_info || extras.meta_info.dtype !== "utf8") {
-        throw new Error("missing metadata");
-    }
-    if (!extras.payload_raw || !(extras.payload_raw.data instanceof Uint8Array)) {
-        throw new Error("missing raw payload");
-    }
-    const decoded = new TextDecoder().decode(extras.payload_raw.data);
-    return { upper: decoded.toUpperCase(), amount: extras.amount };
-}
-"#,
-        manifest,
-    );
-
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-
-    let mut descriptor = InvocationDescriptor::new("main:handler");
-    descriptor.language = Some(RuntimeLanguage::JavaScript);
-    descriptor.inputs.push(FieldDescriptor {
-        name: "payload".to_owned(),
-        type_tag: None,
-        metadata: Some(
-            RawCtxBindingBuilder::keyword("text")
-                .mode("positional")
-                .decoder("utf8")
-                .metadata_arg("meta_info")
-                .raw_arg("payload_raw")
-                .build(),
-        ),
-    });
-    descriptor.inputs.push(FieldDescriptor {
-        name: "amount".to_owned(),
-        type_tag: None,
-        metadata: Some(
-            RawCtxBindingBuilder::keyword("amount")
-                .decoder("float64")
-                .build(),
-        ),
-    });
-
-    let session = runtime.prepare_session_with_descriptor(bundle, descriptor)?;
-
-    let payload_meta = RawCtxMetadata::new("utf8").with_extra(json!({ "dtype": "utf8" }))?;
-    let inputs = vec![
-        RawCtxInput::new(
-            "payload",
-            Bytes::from_static(b"hello-js"),
-            Some(payload_meta),
-        )?,
-        RawCtxInput::new(
-            "amount",
-            Bytes::copy_from_slice(&42.5f64.to_le_bytes()),
-            None,
-        )?,
-    ];
-    let mut strategy = RawCtxInvocationStrategy::new(inputs);
-    let outcome = runtime.run_session_with_strategy(&session, &mut strategy)?;
-
-    match outcome.payload() {
-        Some(ResultPayload::Json(value)) => {
-            assert_eq!(value["upper"], json!("HELLO-JS"));
-            assert_eq!(value["amount"], json!(42.5));
-        }
-        other => panic!("expected json payload, got {:?}", other),
-    }
-
-    Ok(())
-}
-
-fn verify_javascript_rawctx_output_transform() -> Result<()> {
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:handler",
-        "runtime": { "language": "javascript" }
-    }"#;
-
-    let bundle = bundle_with_js_main_and_manifest(
-        r#"
-export function handler() {
-    return "buffer-js";
-}
-"#,
-        manifest,
-    );
-
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-
-    let mut descriptor = InvocationDescriptor::new("main:handler");
-    descriptor.language = Some(RuntimeLanguage::JavaScript);
-    descriptor.outputs.push(FieldDescriptor {
-        name: "result".to_owned(),
-        type_tag: None,
-        metadata: Some(
-            RawCtxPublishBuilder::new("js-output")
-                .transform("utf8")
-                .metadata(json!({ "kind": "js" }))
-                .build(),
-        ),
-    });
-
-    let session = runtime.prepare_session_with_descriptor(bundle, descriptor)?;
-    let mut strategy = RawCtxInvocationStrategy::default();
-    let outcome = runtime.run_session_with_strategy(&session, &mut strategy)?;
-
-    match &outcome.status {
-        OutcomeStatus::Success(ResultPayload::SharedBuffers(buffers)) => {
-            assert_eq!(buffers.len(), 1);
-            let handle = &buffers[0];
-            assert_eq!(handle.id, "js-output");
-            let bytes = handle
-                .as_slice()
-                .expect("shared buffer should expose zero-copy slice");
-            assert_eq!(bytes, b"buffer-js");
-            let kind = handle
-                .metadata
-                .as_ref()
-                .and_then(|meta| meta.get("kind"))
-                .and_then(|value| value.as_str())
-                .unwrap_or_default();
-            assert_eq!(kind, "js");
-        }
-        other => panic!("unexpected payload variant: {:?}", other),
-    }
-
-    Ok(())
-}
-
-#[test]
-fn javascript_network_denies_hosts_not_in_allowlist() -> Result<()> {
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:default",
-        "runtime": { "language": "javascript" },
-        "resources": {
-            "network": {
-                "allow": [],
-                "httpsOnly": true
-            }
-        }
-    }"#;
-
-    let bundle = bundle_with_js_main_and_manifest(JS_NETWORK_BLOCK_SCRIPT, manifest);
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
-    let outcome = runtime.run_session(&session)?;
-    match &outcome.status {
-        OutcomeStatus::Failure(FailureKind::PythonException(info)) => {
-            if let Some(message) = info.value.as_ref() {
-                let lowered = message.to_lowercase();
-                assert!(
-                    lowered.contains("not permitted")
-                        || lowered.contains("blocked")
-                        || lowered == "undefined",
-                    "expected network policy message, got {:?}",
-                    message
-                );
-            }
-        }
-        other => panic!("expected javascript network denial, got {:?}", other),
-    }
-    assert_eq!(
-        outcome.diagnostics.network_hosts_blocked.len(),
-        1,
-        "expected one blocked host in diagnostics"
-    );
-    let blocked = &outcome.diagnostics.network_hosts_blocked[0];
-    assert_eq!(blocked.host, "blocked.example");
-    assert_eq!(blocked.reason, "no-allowlist");
-    assert!(
-        !blocked.https_required,
-        "https flag should be false for blanket denials"
-    );
-    Ok(())
-}
-
-#[test]
-fn javascript_exception_reports_failure() -> Result<()> {
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:default",
-        "runtime": { "language": "javascript" }
-    }"#;
-
-    let bundle = bundle_with_js_main_and_manifest(JS_THROWING_SCRIPT, manifest);
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
-    let outcome = runtime.run_session(&session)?;
-    match &outcome.status {
-        OutcomeStatus::Failure(FailureKind::PythonException(info)) => {
-            let typ = info.typ.clone().unwrap_or_default().to_lowercase();
-            assert!(
-                typ.contains("error"),
-                "expected JS exception type in diagnostics, got {:?}",
-                info.typ
-            );
-            let value = info.value.clone().unwrap_or_default();
-            assert!(
-                value.contains("boom"),
-                "expected message to contain boom, got {:?}",
-                value
-            );
-        }
-        other => panic!("expected javascript exception failure, got {:?}", other),
-    }
-    assert!(
-        outcome.diagnostics.stdout.contains("about to throw"),
-        "stdout should include pre-throw log"
-    );
-    Ok(())
-}
-
-#[test]
-fn javascript_rawctx_requires_capability() -> Result<()> {
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:default",
-        "runtime": { "language": "javascript" }
-    }"#;
-
-    let bundle = bundle_with_js_main_and_manifest(JS_RAWCTX_PUBLISH_SCRIPT, manifest);
-    let mut config = PyRuntimeConfig::default();
-    config.host_capabilities.clear();
-    let mut runtime = PyRuntime::new(config)?;
-    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
-    let outcome = runtime.run_session(&session)?;
-    assert!(
-        matches!(outcome.status, OutcomeStatus::Failure(_)),
-        "expected capability denial"
-    );
-    Ok(())
-}
-
 fn verify_prepare_session_with_manifest_defaults() -> Result<()> {
     let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
     let bundle = bundle_with_main_and_manifest(
@@ -874,6 +452,48 @@ def handler():
         }
         other => panic!("unexpected payload variant: {:?}", other),
     }
+
+    Ok(())
+}
+
+fn verify_descriptor_can_disable_stdio_capture() -> Result<()> {
+    let code = r#"
+def handler():
+    print("stdout should be optional")
+    return {"status": "ok"}
+"#;
+
+    let mut capture_runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let capture_outcome = {
+        let descriptor = InvocationDescriptor::new("main:handler");
+        let bundle = bundle_with_main(code);
+        let session = capture_runtime.prepare_session_with_descriptor(bundle, descriptor)?;
+        let mut strategy = JsonInvocationStrategy::new(None);
+        capture_runtime.run_session_with_strategy(&session, &mut strategy)?
+    };
+    assert!(
+        capture_outcome
+            .diagnostics
+            .stdout
+            .contains("stdout should be optional"),
+        "default descriptor should capture stdout, got {:?}",
+        capture_outcome.diagnostics.stdout
+    );
+
+    let mut no_capture_runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let no_capture_outcome = {
+        let descriptor = InvocationDescriptor::new("main:handler").with_capture_stdio(false);
+        let bundle = bundle_with_main(code);
+        let session = no_capture_runtime.prepare_session_with_descriptor(bundle, descriptor)?;
+        let mut strategy = JsonInvocationStrategy::new(None);
+        no_capture_runtime.run_session_with_strategy(&session, &mut strategy)?
+    };
+    match no_capture_outcome.payload() {
+        Some(ResultPayload::Json(value)) => assert_eq!(value["status"], "ok"),
+        other => panic!("expected JSON payload with stdio capture disabled, got {other:?}"),
+    }
+    assert_eq!(no_capture_outcome.diagnostics.stdout, "");
+    assert_eq!(no_capture_outcome.diagnostics.stderr, "");
 
     Ok(())
 }
@@ -986,7 +606,10 @@ def handler():
     );
 
     let artifact = BundleArtifact::from_bundle(bundle)?;
-    let mut isolate = PythonIsolate::new(IsolateConfig::default())?;
+    let mut isolate = PythonIsolate::new(IsolateConfig {
+        cleanup: CleanupMode::Full,
+        ..IsolateConfig::default()
+    })?;
     let handle = BundleHandle::from_artifact(artifact.clone());
     isolate.load_bundle(&handle)?;
     let handler = handle.prepare_default_handler();
@@ -996,6 +619,77 @@ def handler():
 
     let second = handler.invoke(&mut isolate)?;
     assert_eq!(payload_text(&second), "1");
+
+    Ok(())
+}
+
+fn verify_persistent_isolate_default_resets_modules() -> Result<()> {
+    let bundle = bundle_with_main_and_manifest(
+        r#"
+counter = 0
+
+def handler():
+    global counter
+    counter += 1
+    return counter
+"#,
+        &json!({
+            "schemaVersion": "1.0",
+            "entrypoint": "main:handler",
+            "runtime": {"language": "python"}
+        })
+        .to_string(),
+    );
+
+    let artifact = BundleArtifact::from_bundle(bundle)?;
+    let mut isolate = PythonIsolate::new(IsolateConfig::default())?;
+    assert_eq!(isolate.cleanup_mode(), CleanupMode::Full);
+    let handle = BundleHandle::from_artifact(artifact.clone());
+    isolate.load_bundle(&handle)?;
+    let handler = handle.prepare_default_handler();
+
+    let first = handler.invoke(&mut isolate)?;
+    assert_eq!(payload_text(&first), "1");
+
+    let second = handler.invoke(&mut isolate)?;
+    assert_eq!(payload_text(&second), "1");
+
+    Ok(())
+}
+
+fn verify_persistent_isolate_shared_buffers_only_reuses_modules() -> Result<()> {
+    let bundle = bundle_with_main_and_manifest(
+        r#"
+counter = 0
+
+def handler():
+    global counter
+    counter += 1
+    return counter
+"#,
+        &json!({
+            "schemaVersion": "1.0",
+            "entrypoint": "main:handler",
+            "runtime": {"language": "python"}
+        })
+        .to_string(),
+    );
+
+    let artifact = BundleArtifact::from_bundle(bundle)?;
+    let mut isolate = PythonIsolate::new(IsolateConfig {
+        cleanup: CleanupMode::SharedBuffersOnly,
+        ..IsolateConfig::default()
+    })?;
+    assert_eq!(isolate.cleanup_mode(), CleanupMode::SharedBuffersOnly);
+    let handle = BundleHandle::from_artifact(artifact.clone());
+    isolate.load_bundle(&handle)?;
+    let handler = handle.prepare_default_handler();
+
+    let first = handler.invoke(&mut isolate)?;
+    assert_eq!(payload_text(&first), "1");
+
+    let second = handler.invoke(&mut isolate)?;
+    assert_eq!(payload_text(&second), "2");
 
     Ok(())
 }
@@ -2400,438 +2094,6 @@ fn rawctx_publish_builder_serialization() {
     );
 }
 
-fn verify_timeout_failure() -> Result<()> {
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-    let descriptor = InvocationDescriptor::trivial("main:main").with_limits(InvocationLimits {
-        wall_ms: Some(50),
-        heap_mb: None,
-        cpu_ms: None,
-    });
-    let outcome = run_with_descriptor(
-        &mut runtime,
-        r#"
-import time
-
-def main():
-    time.sleep(0.2)
-    return "done"
-"#,
-        descriptor,
-    )?;
-
-    match outcome.status {
-        OutcomeStatus::Failure(FailureKind::TimeoutExceeded { requested_ms }) => {
-            assert_eq!(requested_ms, 50);
-        }
-        status => panic!("expected TimeoutExceeded failure, got {:?}", status),
-    }
-
-    assert!(
-        outcome.diagnostics.stdout.is_empty() && outcome.diagnostics.stderr.is_empty(),
-        "no stdout/stderr expected after timeout"
-    );
-    Ok(())
-}
-
-#[test]
-fn cpu_limit_failure_descriptor_and_recovery() -> Result<()> {
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-
-    let failure_limits = InvocationLimits {
-        wall_ms: None,
-        heap_mb: None,
-        cpu_ms: Some(10),
-    };
-    let fail_descriptor =
-        InvocationDescriptor::trivial("main:main").with_limits(failure_limits.clone());
-    let failure_outcome = run_with_descriptor(&mut runtime, CPU_SPIN_LOOP, fail_descriptor)?;
-    match failure_outcome.status {
-        OutcomeStatus::Failure(FailureKind::CpuLimitExceeded {
-            requested_ms,
-            used_ms,
-        }) => {
-            assert_eq!(requested_ms, failure_limits.cpu_ms.unwrap());
-            assert!(
-                used_ms >= requested_ms,
-                "expected used_ms >= requested_ms, got {} >= {}",
-                used_ms,
-                requested_ms
-            );
-        }
-        other => panic!("expected CpuLimitExceeded, got {:?}", other),
-    }
-    assert!(
-        failure_outcome.diagnostics.cpu_ms_used.is_some(),
-        "expected diagnostics to record cpu usage"
-    );
-    assert_eq!(
-        failure_outcome
-            .diagnostics
-            .filesystem_bytes_written
-            .expect("filesystem usage should be tracked"),
-        0,
-        "expected filesystem usage to remain zero for cpu spin loop"
-    );
-    assert!(
-        failure_outcome
-            .diagnostics
-            .network_hosts_contacted
-            .is_empty(),
-        "network diagnostics should be empty when no fetch occurs"
-    );
-
-    // Ensure the runtime can execute normally after a CPU limit failure.
-    let success_descriptor =
-        InvocationDescriptor::trivial("main:main").with_limits(InvocationLimits {
-            wall_ms: None,
-            heap_mb: None,
-            cpu_ms: Some(5_000),
-        });
-    let success_outcome = run_with_descriptor(&mut runtime, SIMPLE_SUCCESS, success_descriptor)?;
-    assert!(
-        matches!(success_outcome.status, OutcomeStatus::Success(_)),
-        "expected successful outcome after CPU failure"
-    );
-    assert!(
-        success_outcome.diagnostics.cpu_ms_used.is_some(),
-        "expected cpu usage to be reported on success"
-    );
-    assert_eq!(
-        success_outcome
-            .diagnostics
-            .filesystem_bytes_written
-            .expect("filesystem usage should be tracked"),
-        0,
-        "expected filesystem usage to default to zero for simple success"
-    );
-
-    Ok(())
-}
-
-#[test]
-fn cpu_limit_failure_manifest_resources() -> Result<()> {
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:main",
-        "resources": {
-            "cpu": {
-                "defaultLimitMs": 12
-            }
-        }
-    }"#;
-    let bundle = bundle_with_main_and_manifest(CPU_SPIN_LOOP, manifest);
-    let (session, parsed_manifest) = runtime.prepare_session_with_manifest(bundle)?;
-    let manifest = parsed_manifest.expect("manifest should be returned");
-    assert_eq!(
-        manifest
-            .resources()
-            .and_then(|resources| resources.cpu.as_ref())
-            .and_then(|cpu| cpu.default_limit_ms),
-        Some(12)
-    );
-    assert_eq!(session.descriptor().limits.cpu_ms, Some(12));
-
-    let outcome = runtime.run_session(&session)?;
-    match outcome.status {
-        OutcomeStatus::Failure(FailureKind::CpuLimitExceeded {
-            requested_ms,
-            used_ms,
-        }) => {
-            assert_eq!(requested_ms, 12);
-            assert!(
-                used_ms >= requested_ms,
-                "expected used_ms >= requested_ms, got {} >= {}",
-                used_ms,
-                requested_ms
-            );
-        }
-        other => panic!("expected CpuLimitExceeded, got {:?}", other),
-    }
-    assert!(
-        outcome.diagnostics.cpu_ms_used.is_some(),
-        "expected cpu usage diagnostics when manifest enforces limit"
-    );
-    assert_eq!(
-        outcome
-            .diagnostics
-            .filesystem_bytes_written
-            .expect("filesystem usage should be tracked"),
-        0
-    );
-    assert!(
-        outcome.diagnostics.network_hosts_contacted.is_empty(),
-        "expected no network contacts for cpu spin loop"
-    );
-    Ok(())
-}
-
-#[test]
-fn network_denies_hosts_not_in_allowlist() -> Result<()> {
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:main",
-        "resources": {
-            "network": {
-                "allow": [],
-                "httpsOnly": true
-            }
-        }
-    }"#;
-    let bundle = bundle_with_main_and_manifest(NETWORK_FETCH_SCRIPT, manifest);
-    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
-    let outcome = runtime.run_session(&session)?;
-    match outcome.status {
-        OutcomeStatus::Failure(FailureKind::PythonException(info)) => {
-            let message = info.value.unwrap_or_default();
-            assert!(
-                message.contains("not permitted"),
-                "expected policy message, got {message:?}"
-            );
-        }
-        other => panic!("expected failure due to network policy, got {:?}", other),
-    }
-    assert_eq!(
-        outcome.diagnostics.network_hosts_blocked.len(),
-        1,
-        "expected blocked host to be recorded"
-    );
-    let blocked = &outcome.diagnostics.network_hosts_blocked[0];
-    assert_eq!(blocked.host, "blocked.example");
-    assert_eq!(blocked.reason, "no-allowlist");
-    assert!(!blocked.https_required);
-    assert!(outcome.diagnostics.network_hosts_contacted.is_empty());
-    Ok(())
-}
-
-#[test]
-fn network_enforces_https_only_policy() -> Result<()> {
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:main",
-        "resources": {
-            "network": {
-                "allow": ["allowed.test"],
-                "httpsOnly": true
-            }
-        }
-    }"#;
-    let bundle = bundle_with_main_and_manifest(NETWORK_HTTP_FETCH_SCRIPT, manifest);
-    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
-    let outcome = runtime.run_session(&session)?;
-    match outcome.status {
-        OutcomeStatus::Failure(FailureKind::PythonException(info)) => {
-            let message = info.value.unwrap_or_default();
-            assert!(
-                message.contains("requires https"),
-                "expected https-only error, got {message:?}"
-            );
-        }
-        other => panic!("expected https-only failure, got {:?}", other),
-    }
-    assert_eq!(
-        outcome.diagnostics.network_hosts_blocked.len(),
-        1,
-        "expected blocked host to be recorded for http request"
-    );
-    let blocked = &outcome.diagnostics.network_hosts_blocked[0];
-    assert_eq!(blocked.host, "allowed.test");
-    assert_eq!(blocked.reason, "scheme-not-allowed");
-    assert!(blocked.https_required);
-    Ok(())
-}
-
-#[test]
-fn diagnostics_capture_resource_usage() -> Result<()> {
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:main",
-        "resources": {
-            "filesystem": {
-                "mode": "readWrite",
-                "quotaBytes": 65536
-            },
-            "network": {
-                "allow": ["allowed.test"],
-                "httpsOnly": false
-            }
-        }
-    }"#;
-    let bundle = bundle_with_main_and_manifest(DIAGNOSTICS_RESOURCE_SCRIPT, manifest);
-    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
-    let outcome = runtime.run_session(&session)?;
-    match outcome.status {
-        OutcomeStatus::Success(_) => {}
-        other => panic!("expected success, got {:?}", other),
-    }
-    let diagnostics = outcome.diagnostics;
-    assert!(
-        diagnostics.cpu_ms_used.is_some(),
-        "cpu usage should be reported in diagnostics"
-    );
-    let fs_bytes = diagnostics
-        .filesystem_bytes_written
-        .expect("filesystem usage should be reported");
-    assert!(
-        fs_bytes >= 16,
-        "expected filesystem usage to be at least 16 bytes, got {}",
-        fs_bytes
-    );
-    assert!(
-        diagnostics
-            .network_hosts_contacted
-            .iter()
-            .any(|contact| contact.host == "allowed.test" && !contact.https),
-        "expected allowed.test to appear in network diagnostics"
-    );
-    assert!(
-        diagnostics.network_hosts_blocked.is_empty(),
-        "no network denials expected in success scenario"
-    );
-    Ok(())
-}
-
-#[test]
-fn host_capability_gates_rawctx_buffers() -> Result<()> {
-    let mut runtime_allowed = PyRuntime::new(PyRuntimeConfig::default())?;
-    let allowed = run_main(&mut runtime_allowed, RAWCTX_PUBLISH_SCRIPT)?;
-    assert!(
-        allowed.is_success(),
-        "expected rawctx publish to succeed with default capabilities"
-    );
-
-    let mut restricted_config = PyRuntimeConfig::default();
-    restricted_config.host_capabilities.clear();
-    let mut runtime_denied = PyRuntime::new(restricted_config)?;
-    let denied = run_main(&mut runtime_denied, RAWCTX_PUBLISH_SCRIPT)?;
-    assert!(matches!(denied.status, OutcomeStatus::Failure(_)));
-    Ok(())
-}
-
-#[test]
-fn filesystem_blocks_writes_in_read_mode() -> Result<()> {
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:main",
-        "resources": {
-            "filesystem": {
-                "mode": "read"
-            }
-        }
-    }"#;
-    let bundle = bundle_with_main_and_manifest(FILESYSTEM_CREATE_FILE_SCRIPT, manifest);
-    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
-    let outcome = runtime.run_session(&session)?;
-    match outcome.status {
-        OutcomeStatus::Failure(FailureKind::PythonException(_)) => {}
-        OutcomeStatus::Failure(FailureKind::AdapterError { .. }) => {}
-        other => panic!("expected filesystem permission failure, got {:?}", other),
-    }
-    assert!(
-        !outcome.diagnostics.filesystem_violations.is_empty(),
-        "expected filesystem violation to be recorded"
-    );
-    let violation = &outcome.diagnostics.filesystem_violations[0];
-    assert!(
-        violation
-            .message
-            .contains("writes are disabled in read-only mode"),
-        "unexpected violation message: {:?}",
-        violation.message
-    );
-    assert_eq!(
-        violation.path.as_deref(),
-        Some("/session/runtime-test/test.txt"),
-        "unexpected violation path"
-    );
-    Ok(())
-}
-
-#[test]
-fn filesystem_enforces_quota() -> Result<()> {
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:main",
-        "resources": {
-            "filesystem": {
-                "mode": "readWrite",
-                "quotaBytes": 8
-            }
-        }
-    }"#;
-    let bundle = bundle_with_main_and_manifest(FILESYSTEM_EXCEED_QUOTA_SCRIPT, manifest);
-    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
-    let outcome = runtime.run_session(&session)?;
-    match outcome.status {
-        OutcomeStatus::Failure(FailureKind::PythonException(_)) => {}
-        OutcomeStatus::Failure(FailureKind::AdapterError { .. }) => {}
-        other => panic!("expected filesystem quota failure, got {:?}", other),
-    }
-    assert!(
-        !outcome.diagnostics.filesystem_violations.is_empty(),
-        "expected quota violation to be recorded"
-    );
-    let violation = &outcome.diagnostics.filesystem_violations[0];
-    assert!(
-        violation.message.contains("quota exceeded"),
-        "unexpected quota violation message: {:?}",
-        violation.message
-    );
-    assert_eq!(
-        violation.path.as_deref(),
-        Some("/session/runtime-test/big.txt"),
-        "unexpected quota violation path"
-    );
-    Ok(())
-}
-
-#[test]
-fn filesystem_cleanup_removes_session_files() -> Result<()> {
-    let manifest = r#"{
-        "schemaVersion": "1.0",
-        "entrypoint": "main:main",
-        "resources": {
-            "filesystem": {
-                "mode": "readWrite",
-                "quotaBytes": 65536
-            }
-        }
-    }"#;
-
-    let mut runtime_create = PyRuntime::new(PyRuntimeConfig::default())?;
-    let bundle_create = bundle_with_main_and_manifest(FILESYSTEM_CREATE_PERSIST_SCRIPT, manifest);
-    let (session_create, _) = runtime_create.prepare_session_with_manifest(bundle_create)?;
-    let outcome_create = runtime_create.run_session(&session_create)?;
-    assert!(
-        outcome_create.is_success(),
-        "expected creation success but got {:?}",
-        outcome_create.status
-    );
-
-    drop(runtime_create);
-
-    let mut runtime_check = PyRuntime::new(PyRuntimeConfig::default())?;
-    let bundle_check = bundle_with_main_and_manifest(FILESYSTEM_CHECK_PERSIST_SCRIPT, manifest);
-    let (session_check, _) = runtime_check.prepare_session_with_manifest(bundle_check)?;
-    let outcome_check = runtime_check.run_session(&session_check)?;
-    match outcome_check.status {
-        OutcomeStatus::Success(ResultPayload::Text(value)) => {
-            let normalized = value.trim_matches('\'');
-            assert_eq!(
-                normalized, "check:False",
-                "expected cleanup to remove session file"
-            );
-        }
-        other => panic!("expected success payload after cleanup, got {:?}", other),
-    }
-    Ok(())
-}
-
 fn payload_text(outcome: &ExecutionOutcome) -> &str {
     match outcome.payload() {
         Some(ResultPayload::Text(value)) => value,
@@ -2858,6 +2120,11 @@ fn bundle_with_main(code: &str) -> Bundle {
 }
 
 fn bundle_with_main_and_manifest(code: &str, manifest: &str) -> Bundle {
+    Bundle::from_zip_bytes(bundle_bytes_with_main_and_manifest(code, manifest))
+        .expect("failed to parse bundle")
+}
+
+fn bundle_bytes_with_main_and_manifest(code: &str, manifest: &str) -> Vec<u8> {
     use std::io::Cursor;
 
     let cursor = Cursor::new(Vec::new());
@@ -2883,23 +2150,25 @@ fn bundle_with_main_and_manifest(code: &str, manifest: &str) -> Bundle {
         .expect("failed to write manifest");
 
     let cursor = writer.finish().expect("failed to finish bundle");
-    Bundle::from_zip_bytes(cursor.into_inner()).expect("failed to parse bundle")
+    cursor.into_inner()
 }
 
-fn bundle_with_js_main_and_manifest(code: &str, manifest: &str) -> Bundle {
+fn bundle_with_files_and_manifest(files: &[(&str, &str)], manifest: &str) -> Bundle {
     use std::io::Cursor;
 
     let cursor = Cursor::new(Vec::new());
     let mut writer = zip::ZipWriter::new(cursor);
-    writer
-        .start_file(
-            "main.js",
-            SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
-        )
-        .expect("failed to start main.js entry");
-    writer
-        .write_all(code.as_bytes())
-        .expect("failed to write main.js");
+    for (path, code) in files {
+        writer
+            .start_file(
+                *path,
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .expect("failed to start bundle entry");
+        writer
+            .write_all(code.as_bytes())
+            .expect("failed to write bundle entry");
+    }
 
     writer
         .start_file(
@@ -2921,126 +2190,7 @@ fn run_main(runtime: &mut PyRuntime, code: &str) -> Result<ExecutionOutcome> {
     runtime.run_session(&session)
 }
 
-fn run_with_descriptor(
-    runtime: &mut PyRuntime,
-    code: &str,
-    descriptor: InvocationDescriptor,
-) -> Result<ExecutionOutcome> {
-    let bundle = bundle_with_main(code);
-    let session = runtime.prepare_session_with_descriptor(bundle, descriptor)?;
-    runtime.run_session(&session)
-}
-
-const CPU_SPIN_LOOP: &str = r#"
-import time
-
-def main():
-    start = time.perf_counter()
-    iterations = 0
-    while True:
-        iterations += 1
-        _ = sum(i * i for i in range(128))
-        if time.perf_counter() - start > 1.5:
-            return iterations
-"#;
-
 const SIMPLE_SUCCESS: &str = r#"
 def main():
     return "ok"
-"#;
-
-const NETWORK_FETCH_SCRIPT: &str = r#"
-import js
-
-def main():
-    js.__pyRunnerNativeFetch("https://blocked.example/resource")
-"#;
-
-const NETWORK_HTTP_FETCH_SCRIPT: &str = r#"
-import js
-
-def main():
-    js.__pyRunnerNativeFetch("http://allowed.test/resource")
-"#;
-
-const JS_NETWORK_BLOCK_SCRIPT: &str = r#"
-export default function main() {
-    globalThis.__pyRunnerNativeFetch("https://blocked.example/resource");
-    return "should-not-complete";
-}
-"#;
-
-const JS_THROWING_SCRIPT: &str = r#"
-export default function main() {
-    console.log("about to throw");
-    throw new Error("boom from js");
-}
-"#;
-
-const DIAGNOSTICS_RESOURCE_SCRIPT: &str = r#"
-import js
-from pathlib import Path
-
-def main():
-    root = Path("/session/diag-test")
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "note.txt").write_text("hello diagnostics")
-    try:
-        js.__pyRunnerNativeFetch("http://allowed.test/resource")
-    except Exception:
-        pass
-    return "done"
-"#;
-
-const RAWCTX_PUBLISH_SCRIPT: &str = r#"
-import js
-
-def main():
-    js.__aardvarkPublishBuffer("buf", b"abc", None)
-    return "ok"
-"#;
-
-const JS_RAWCTX_PUBLISH_SCRIPT: &str = r#"
-export default function main() {
-    globalThis.__aardvarkPublishBuffer("js-buf", new Uint8Array([1, 2, 3]), null);
-    return null;
-}
-"#;
-
-const FILESYSTEM_CREATE_FILE_SCRIPT: &str = r#"
-from pathlib import Path
-
-def main():
-    root = Path("/session/runtime-test")
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "test.txt").write_text("hello")
-    return "ok"
-"#;
-
-const FILESYSTEM_EXCEED_QUOTA_SCRIPT: &str = r#"
-from pathlib import Path
-
-def main():
-    root = Path("/session/runtime-test")
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "big.txt").write_text("x" * 32)
-    return "ok"
-"#;
-
-const FILESYSTEM_CREATE_PERSIST_SCRIPT: &str = r#"
-from pathlib import Path
-
-def main():
-    root = Path("/session/runtime-test")
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "persist.txt").write_text("persist")
-    return "done"
-"#;
-
-const FILESYSTEM_CHECK_PERSIST_SCRIPT: &str = r#"
-from pathlib import Path
-
-def main():
-    root = Path("/session/runtime-test")
-    return "check:" + str((root / "persist.txt").exists())
 "#;

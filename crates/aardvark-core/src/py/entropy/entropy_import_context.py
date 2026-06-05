@@ -29,7 +29,7 @@ from .import_patch_manager import (
     register_exec_patch,
 )
 
-# Exported for snapshot backwards compatibility
+# Exported because existing snapshots may import it.
 __all__ = ["get_bad_entropy_flag"]
 
 IMPORTED_RUST_PACKAGE = False

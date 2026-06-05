@@ -15,6 +15,7 @@ pub struct BundleArtifact {
     fingerprint: BundleFingerprint,
     entrypoint: String,
     language: RuntimeLanguage,
+    pyodide_distribution_profile: Option<String>,
 }
 
 impl BundleArtifact {
@@ -26,9 +27,26 @@ impl BundleArtifact {
 
     /// Normalises an in-memory bundle and returns a shared artifact.
     pub fn from_bundle(bundle: Bundle) -> Result<Arc<Self>> {
+        Self::from_bundle_inner(bundle, None)
+    }
+
+    /// Normalises an in-memory bundle while overriding the default entrypoint.
+    ///
+    /// This is useful for host surfaces such as CLIs that accept an explicit
+    /// entrypoint flag while still preserving the bundle manifest's language and
+    /// package metadata.
+    pub fn from_bundle_with_entrypoint(
+        bundle: Bundle,
+        entrypoint: impl Into<String>,
+    ) -> Result<Arc<Self>> {
+        let descriptor = InvocationDescriptor::new(entrypoint);
+        Self::from_bundle_inner(bundle, Some(descriptor.entrypoint().to_owned()))
+    }
+
+    fn from_bundle_inner(bundle: Bundle, entrypoint_override: Option<String>) -> Result<Arc<Self>> {
         let manifest = bundle.manifest()?;
         let fingerprint = bundle.fingerprint();
-        let (language, entrypoint) = match &manifest {
+        let (language, entrypoint, pyodide_distribution_profile) = match &manifest {
             Some(manifest) => {
                 let language = manifest
                     .runtime
@@ -36,17 +54,20 @@ impl BundleArtifact {
                     .and_then(|runtime| runtime.language)
                     .unwrap_or(RuntimeLanguage::Python);
                 let entrypoint = manifest.entrypoint().to_owned();
-                (language, entrypoint)
+                let pyodide_distribution_profile =
+                    manifest.pyodide_distribution_profile().map(str::to_owned);
+                (language, entrypoint, pyodide_distribution_profile)
             }
-            None => (RuntimeLanguage::Python, "main:handler".to_string()),
+            None => (RuntimeLanguage::Python, "main:handler".to_string(), None),
         };
-
+        let entrypoint = entrypoint_override.unwrap_or(entrypoint);
         Ok(Arc::new(Self {
             bundle,
             manifest,
             fingerprint,
             entrypoint,
             language,
+            pyodide_distribution_profile,
         }))
     }
 
@@ -76,6 +97,11 @@ impl BundleArtifact {
         self.language
     }
 
+    /// Returns the bundle-requested Pyodide distribution profile, if any.
+    pub fn pyodide_distribution_profile(&self) -> Option<&str> {
+        self.pyodide_distribution_profile.as_deref()
+    }
+
     /// Returns the stable bundle fingerprint.
     pub fn fingerprint(&self) -> BundleFingerprint {
         self.fingerprint
@@ -84,8 +110,21 @@ impl BundleArtifact {
     /// Creates an invocation descriptor seeded with the default entrypoint and language.
     pub fn default_descriptor(&self) -> InvocationDescriptor {
         let mut descriptor = InvocationDescriptor::new(self.entrypoint.clone());
-        descriptor.language = Some(self.language);
+        self.apply_manifest_descriptor_defaults(&mut descriptor);
         descriptor
+    }
+
+    pub(crate) fn apply_manifest_descriptor_defaults(&self, descriptor: &mut InvocationDescriptor) {
+        descriptor.language = descriptor.language.or(Some(self.language));
+        if let Some(cpu_limit) = self
+            .manifest
+            .as_ref()
+            .and_then(BundleManifest::resources)
+            .and_then(|resources| resources.cpu.as_ref())
+            .and_then(|cpu| cpu.default_limit_ms)
+        {
+            descriptor.limits.cpu_ms = Some(cpu_limit);
+        }
     }
 }
 
@@ -97,6 +136,9 @@ mod tests {
         ManifestNetworkResources, ManifestResources,
     };
     use crate::BUNDLE_MANIFEST_BASENAME;
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    use zip::CompressionMethod;
 
     #[test]
     fn inline_artifact_embeds_manifest_and_code() -> Result<()> {
@@ -172,6 +214,62 @@ def handler():
         assert!(entries.contains(&"analytics/echo.py".to_string()));
         assert!(entries.contains(&BUNDLE_MANIFEST_BASENAME.to_string()));
 
+        Ok(())
+    }
+
+    #[test]
+    fn artifact_entrypoint_override_preserves_manifest_language() -> Result<()> {
+        let options = InlinePythonOptions {
+            entrypoint: Some("main:handler".to_string()),
+            ..InlinePythonOptions::default()
+        };
+        let (bundle, _) = options.build_bundle(
+            r#"
+def handler():
+    return "default"
+
+def custom():
+    return "override"
+"#,
+        )?;
+
+        let artifact = BundleArtifact::from_bundle_with_entrypoint(bundle, "  main:custom  ")?;
+        assert_eq!(artifact.entrypoint(), "main:custom");
+        assert_eq!(artifact.language(), RuntimeLanguage::Python);
+        assert!(artifact.manifest().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn artifact_preserves_pyodide_distribution_profile() -> Result<()> {
+        let mut bytes = Vec::new();
+        {
+            let cursor = std::io::Cursor::new(&mut bytes);
+            let mut writer = zip::ZipWriter::new(cursor);
+            let options =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            writer.start_file("main.py", options).unwrap();
+            writer.write_all(b"def handler():\n    return 1\n").unwrap();
+            writer
+                .start_file(BUNDLE_MANIFEST_BASENAME, options)
+                .unwrap();
+            writer
+                .write_all(
+                    br#"{
+                    "schemaVersion": "1.0",
+                    "entrypoint": "main:handler",
+                    "runtime": {
+                        "language": "python",
+                        "pyodide": {"profile": "BLAS"}
+                    }
+                }"#,
+                )
+                .unwrap();
+            writer.finish().unwrap();
+        }
+
+        let artifact = BundleArtifact::from_bytes(bytes)?;
+        assert_eq!(artifact.pyodide_distribution_profile(), Some("blas"));
         Ok(())
     }
 }

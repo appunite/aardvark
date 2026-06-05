@@ -15,13 +15,14 @@ use aardvark_core::pyodide::{
     PYODIDE_VERSION,
 };
 use aardvark_core::pyodide_distribution::{
-    compute_compatibility_fingerprint, LockfileManifest, PyodideDistribution,
-    PyodideDistributionManifest, PyodideDistributionVariant, PythonCompatibility, UpstreamArchive,
-    UpstreamArchives, DISTRIBUTION_MANIFEST,
+    compute_compatibility_fingerprint, DistributionFeatures, LockfileManifest, PackageFeatures,
+    PyodideDistribution, PyodideDistributionManifest, PyodideDistributionVariant,
+    PythonCompatibility, UpstreamArchive, UpstreamArchives, DISTRIBUTION_MANIFEST,
 };
 use aardvark_core::{
-    Bundle, ExecutionOutcome, FailureKind, InvocationDescriptor, JsonInvocationStrategy,
-    OutcomeStatus, OverlayBlob, OverlayExport, PyRuntime, PyRuntimeConfig, ResultPayload,
+    Bundle, BundleArtifact, CleanupMode, ExecutionOutcome, FailureKind, InvocationDescriptor,
+    IsolateConfig, JsonInvocationStrategy, OutcomeStatus, OverlayBlob, OverlayExport, PoolOptions,
+    PyRuntime, PyRuntimeConfig, ResultPayload, WarmedBundleHostOptions, WarmedBundleHostRegistry,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use bzip2::read::BzDecoder;
@@ -34,6 +35,7 @@ use tar::Archive;
 use tracing::{debug, info, info_span, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 use ureq::Agent;
+use wasmparser::{Parser as WasmParser, Payload as WasmPayload, VisitOperator, VisitSimdOperator};
 
 const DEFAULT_ENTRYPOINT: &str = "main:handler";
 
@@ -76,6 +78,26 @@ struct RunArgs {
     /// Path to JSON input the adapter should expose to Python (optional).
     #[arg(long = "json-input", value_name = "PATH")]
     json_input: Option<String>,
+
+    /// Override the bundle-requested Pyodide distribution profile.
+    #[arg(long = "pyodide-profile", value_name = "NAME")]
+    pyodide_profile: Option<String>,
+
+    /// Register a Pyodide distribution profile as NAME=PATH.
+    #[arg(long = "pyodide-profile-dir", value_name = "NAME=PATH", action = clap::ArgAction::Append)]
+    pyodide_profile_dirs: Vec<String>,
+
+    /// Execution backend to use for the run.
+    #[arg(long = "execution-backend", value_enum, default_value = "direct")]
+    execution_backend: ExecutionBackend,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
+enum ExecutionBackend {
+    /// Use the direct one-shot PyRuntime path.
+    Direct,
+    /// Use the warmed-host registry path.
+    WarmedHost,
 }
 
 /// Asset management commands.
@@ -189,9 +211,9 @@ fn main() -> Result<()> {
     }
 
     let args = RunArgs::parse_from(argv);
-    let file = File::open(&args.bundle)?;
-    let reader = BufReader::new(file);
-    let bundle = Bundle::from_reader(reader)?;
+    let bundle_bytes =
+        fs::read(&args.bundle).with_context(|| format!("failed to read bundle {}", args.bundle))?;
+    let bundle = Bundle::from_zip_bytes(&bundle_bytes)?;
 
     let mut config = PyRuntimeConfig::default();
     if let Some(path) = args.snapshot.as_deref() {
@@ -217,6 +239,19 @@ fn main() -> Result<()> {
     // Inspect bundle manifest (if present) for defaults.
     let manifest = bundle.manifest()?;
 
+    for profile_dir in &args.pyodide_profile_dirs {
+        let (profile, path) = parse_pyodide_profile_dir(profile_dir)?;
+        config.set_pyodide_distribution_profile_dir(profile, path)?;
+    }
+    let pyodide_profile = args.pyodide_profile.as_deref().or_else(|| {
+        manifest
+            .as_ref()
+            .and_then(|m| m.pyodide_distribution_profile())
+    });
+    if let Some(profile) = pyodide_profile {
+        config.set_pyodide_distribution_profile(profile)?;
+    }
+
     let mut packages = args.packages.clone();
     if packages.is_empty() {
         if let Some(m) = &manifest {
@@ -234,6 +269,10 @@ fn main() -> Result<()> {
         bail!(
             "Pyodide package loading requires AARDVARK_PYODIDE_DIST_DIR or PyRuntimeConfig::with_pyodide_dist_dir"
         );
+    }
+
+    if args.execution_backend == ExecutionBackend::WarmedHost {
+        return run_warmed_host_backend(&args, bundle_bytes, config, descriptor);
     }
 
     let mut runtime = PyRuntime::new(config)?;
@@ -685,6 +724,79 @@ fn main() -> Result<()> {
     render_outcome(&outcome)?;
 
     Ok(())
+}
+
+fn run_warmed_host_backend(
+    args: &RunArgs,
+    bundle_bytes: Vec<u8>,
+    config: PyRuntimeConfig,
+    descriptor: InvocationDescriptor,
+) -> Result<()> {
+    if args.snapshot.is_some() || args.write_snapshot.is_some() {
+        bail!(
+            "the warmed-host execution backend does not support --snapshot or --write-snapshot; use --execution-backend direct"
+        );
+    }
+    if !args.packages.is_empty() {
+        bail!(
+            "the warmed-host execution backend uses bundle manifest packages; explicit --package is only supported by --execution-backend direct"
+        );
+    }
+
+    let artifact = BundleArtifact::from_bytes(&bundle_bytes)?;
+    let registry = WarmedBundleHostRegistry::new(
+        WarmedBundleHostOptions::pooled(PoolOptions {
+            isolate: IsolateConfig {
+                runtime: config,
+                cleanup: CleanupMode::SharedBuffersOnly,
+            },
+            desired_size: 1,
+            max_size: 1,
+            telemetry_interval: None,
+            ..PoolOptions::default()
+        })
+        .with_descriptor(descriptor),
+    );
+
+    let started = Instant::now();
+    let prewarmed = registry.prewarm_artifact(artifact.clone())?;
+    let ready = registry
+        .ready_host_for_artifact(&artifact)?
+        .ok_or_else(|| {
+            anyhow!("warmed-host registry did not publish a ready host after prewarm")
+        })?;
+    if !std::sync::Arc::ptr_eq(&prewarmed, &ready) {
+        bail!("warmed-host registry returned a different ready host after prewarm");
+    }
+
+    info!(
+        backend = "warmed-host",
+        setup_ms = started.elapsed().as_secs_f64() * 1000.0,
+        "warmed host ready"
+    );
+    for entry in ready.artifact().bundle().entries() {
+        println!("{} ({} bytes)", entry.path(), entry.contents().len());
+    }
+
+    let json_payload = match args.json_input.as_deref() {
+        Some(path) => Some(load_json_input(path)?),
+        None => None,
+    };
+    let outcome = ready.call_json(json_payload)?;
+    render_outcome(&outcome)?;
+    Ok(())
+}
+
+fn parse_pyodide_profile_dir(value: &str) -> Result<(&str, &str)> {
+    let Some((profile, path)) = value.split_once('=') else {
+        bail!("--pyodide-profile-dir expects NAME=PATH, got '{value}'");
+    };
+    let profile = profile.trim();
+    let path = path.trim();
+    if profile.is_empty() || path.is_empty() {
+        bail!("--pyodide-profile-dir expects non-empty NAME=PATH, got '{value}'");
+    }
+    Ok((profile, path))
 }
 
 fn snapshot_overlay_path(path: &Path) -> PathBuf {
@@ -1819,9 +1931,9 @@ fn resolve_catalog_blob_path(
         return fallback;
     }
     if let Some(parent) = overlay_path.parent() {
-        let legacy = parent.join(overlay_blob_filename(digest));
-        if legacy.exists() {
-            return legacy;
+        let sidecar = parent.join(overlay_blob_filename(digest));
+        if sidecar.exists() {
+            return sidecar;
         }
         if let Some(entry) = blobs_obj.and_then(|map| map.get(digest)) {
             if let Some(rel) = entry.get("blob").and_then(Value::as_str) {
@@ -1910,15 +2022,16 @@ fn collect_overlay_blobs(
         let digest = tar_value
             .get("digest")
             .and_then(Value::as_str)
-            .unwrap_or("legacy");
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("overlay tar metadata missing digest"))?;
         let blob_path = overlay_blob_path(snapshot_path, digest);
         if !blob_path.exists() {
             tracing::warn!(
-            target = "aardvark::overlay",
-                    overlay.digest_miss = %digest,
-                    overlay.snapshot = %snapshot_path.display(),
-                    "legacy overlay blob missing"
-                );
+                target = "aardvark::overlay",
+                overlay.digest_miss = %digest,
+                overlay.snapshot = %snapshot_path.display(),
+                "overlay tar blob missing"
+            );
             bail!("overlay tar {} not found", blob_path.display());
         }
         let bytes = fs::read(&blob_path)
@@ -2011,12 +2124,14 @@ fn default_stage_output_dir(variant: StageVariant) -> PathBuf {
 fn verify_assets(args: AssetsVerifyArgs) -> Result<()> {
     let dist = PyodideDistribution::external(&args.path)
         .with_context(|| format!("verify distribution {}", args.path.display()))?;
+    let features = distribution_features_for_reporting(&args.path, dist.manifest())?;
     println!(
         "verified {} ({}, fingerprint {})",
         args.path.display(),
         dist.manifest().variant.as_str(),
         dist.compatibility_fingerprint()
     );
+    print_distribution_features(&features);
     Ok(())
 }
 
@@ -2206,6 +2321,7 @@ fn write_distribution_manifest(output_dir: &Path, variant: StageVariant) -> Resu
             sha256: format!("sha256:{}", sha256_file_hex(&lockfile_path)?),
         },
         package_root: Some(".".to_string()),
+        features: scan_distribution_features(output_dir, &lockfile_value)?,
         files,
         compatibility_fingerprint: String::new(),
     };
@@ -2214,6 +2330,270 @@ fn write_distribution_manifest(output_dir: &Path, variant: StageVariant) -> Resu
     fs::write(output_dir.join(DISTRIBUTION_MANIFEST), serialized)
         .context("write distribution manifest")?;
     Ok(())
+}
+
+fn distribution_features_for_reporting(
+    root: &Path,
+    manifest: &PyodideDistributionManifest,
+) -> Result<DistributionFeatures> {
+    if !manifest.features.is_empty() {
+        return Ok(manifest.features.clone());
+    }
+    let lockfile_path = root.join(&manifest.lockfile.path);
+    let lockfile_raw = fs::read_to_string(&lockfile_path)
+        .with_context(|| format!("read {}", lockfile_path.display()))?;
+    let lockfile_value: Value = serde_json::from_str(&lockfile_raw)
+        .with_context(|| format!("parse {}", lockfile_path.display()))?;
+    let package_root = manifest
+        .package_root
+        .as_deref()
+        .map(|value| root.join(value))
+        .unwrap_or_else(|| root.to_path_buf());
+    scan_distribution_features(&package_root, &lockfile_value)
+}
+
+fn print_distribution_features(features: &DistributionFeatures) {
+    let mut enabled = Vec::new();
+    if features.wasm_simd {
+        enabled.push("wasm-simd");
+    }
+    if features.openblas {
+        enabled.push("openblas");
+    }
+    if enabled.is_empty() {
+        println!("features: none detected");
+        return;
+    }
+    println!("features: {}", enabled.join(", "));
+
+    let package_count = features.packages.len();
+    let wasm_module_count: u32 = features
+        .packages
+        .values()
+        .map(|package_features| package_features.wasm_modules)
+        .sum();
+    let simd_package_count = features
+        .packages
+        .values()
+        .filter(|package_features| package_features.wasm_simd)
+        .count();
+    let openblas_package_count = features
+        .packages
+        .values()
+        .filter(|package_features| package_features.openblas)
+        .count();
+    println!(
+        "feature package summary: {package_count} packages, {wasm_module_count} wasm modules, {simd_package_count} wasm-simd packages, {openblas_package_count} openblas-linked packages"
+    );
+
+    let highlights = features
+        .packages
+        .iter()
+        .filter(|(name, package_features)| {
+            package_features.openblas
+                || matches!(
+                    name.as_str(),
+                    "numpy" | "pandas" | "scipy" | "scikit-learn" | "matplotlib" | "libopenblas"
+                )
+        })
+        .map(|(name, package_features)| {
+            format!("{name}({})", format_package_features(package_features))
+        })
+        .collect::<Vec<_>>();
+    if !highlights.is_empty() {
+        println!("feature package highlights: {}", highlights.join(", "));
+    }
+}
+
+fn format_package_features(features: &PackageFeatures) -> String {
+    let mut flags = Vec::new();
+    if features.wasm_simd {
+        flags.push("wasm-simd");
+    }
+    if features.openblas {
+        flags.push("openblas");
+    }
+    if features.wasm_modules > 0 {
+        flags.push("wasm-modules");
+    }
+    flags.join("+")
+}
+
+fn scan_distribution_features(root: &Path, lockfile: &Value) -> Result<DistributionFeatures> {
+    let mut summary = DistributionFeatures::default();
+    let packages = lockfile
+        .get("packages")
+        .and_then(Value::as_object)
+        .context("pyodide-lock.json missing packages object")?;
+
+    for (canonical, package) in packages {
+        let Some(file_name) = package.get("file_name").and_then(Value::as_str) else {
+            continue;
+        };
+        let path = root.join(file_name);
+        if !path.exists() {
+            continue;
+        }
+        let mut features = scan_package_features(&path)
+            .with_context(|| format!("scan package features for {}", path.display()))?;
+        if package_depends_on_openblas(package) {
+            features.openblas = true;
+        }
+        if features.is_empty() {
+            continue;
+        }
+        summary.wasm_simd |= features.wasm_simd;
+        summary.openblas |= features.openblas;
+        summary.packages.insert(canonical.clone(), features);
+    }
+
+    Ok(summary)
+}
+
+fn package_depends_on_openblas(package: &Value) -> bool {
+    package
+        .get("depends")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .any(|dep| canonicalize_package_name(dep) == "libopenblas")
+}
+
+fn scan_package_features(path: &Path) -> Result<PackageFeatures> {
+    let extension = path.extension().and_then(|value| value.to_str());
+    if matches!(extension, Some("whl" | "zip")) {
+        return scan_zip_package_features(path);
+    }
+
+    let mut features = PackageFeatures::default();
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    scan_binary_feature_bytes(
+        path.file_name().and_then(|name| name.to_str()),
+        &bytes,
+        &mut features,
+    )?;
+    Ok(features)
+}
+
+fn scan_zip_package_features(path: &Path) -> Result<PackageFeatures> {
+    let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut archive =
+        zip::ZipArchive::new(file).with_context(|| format!("open zip {}", path.display()))?;
+    let mut features = PackageFeatures::default();
+
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .with_context(|| format!("read zip entry {index} from {}", path.display()))?;
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().to_owned();
+        if !is_feature_scan_candidate(&name) {
+            if name.to_ascii_lowercase().contains("openblas") {
+                features.openblas = true;
+            }
+            continue;
+        }
+        let mut bytes = Vec::with_capacity(entry.size().min(8 * 1024 * 1024) as usize);
+        entry
+            .read_to_end(&mut bytes)
+            .with_context(|| format!("read zip entry {name} from {}", path.display()))?;
+        scan_binary_feature_bytes(Some(name.as_str()), &bytes, &mut features)?;
+    }
+
+    Ok(features)
+}
+
+fn is_feature_scan_candidate(name: &str) -> bool {
+    let lowered = name.to_ascii_lowercase();
+    lowered.ends_with(".so")
+        || lowered.ends_with(".wasm")
+        || lowered.ends_with(".data")
+        || lowered.contains("openblas")
+}
+
+fn scan_binary_feature_bytes(
+    name: Option<&str>,
+    bytes: &[u8],
+    features: &mut PackageFeatures,
+) -> Result<()> {
+    if name
+        .map(|value| value.to_ascii_lowercase().contains("openblas"))
+        .unwrap_or(false)
+        || contains_ascii(bytes, b"libopenblas")
+        || contains_ascii(bytes, b"openblas")
+    {
+        features.openblas = true;
+    }
+
+    if bytes.starts_with(b"\0asm") {
+        features.wasm_modules = features.wasm_modules.saturating_add(1);
+        if wasm_module_uses_simd(bytes)? {
+            features.wasm_simd = true;
+        }
+    }
+    Ok(())
+}
+
+fn wasm_module_uses_simd(bytes: &[u8]) -> Result<bool> {
+    let mut visitor = SimdDetector;
+    for payload in WasmParser::new(0).parse_all(bytes) {
+        if let WasmPayload::CodeSectionEntry(body) = payload? {
+            let reader = body.get_operators_reader()?;
+            for op in reader {
+                if visitor.visit_operator(&op?) {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+struct SimdDetector;
+
+macro_rules! non_simd_operator {
+    ($(@$proposal:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident ($($ann:tt)*))*) => {
+        $(
+            fn $visit(&mut self $($(,$arg: $argty)*)?) -> Self::Output {
+                $( $( let _ = $arg; )* )?
+                false
+            }
+        )*
+    };
+}
+
+impl<'a> VisitOperator<'a> for SimdDetector {
+    type Output = bool;
+
+    fn simd_visitor(&mut self) -> Option<&mut dyn VisitSimdOperator<'a, Output = Self::Output>> {
+        Some(self)
+    }
+
+    wasmparser::for_each_visit_operator!(non_simd_operator);
+}
+
+macro_rules! simd_operator {
+    ($(@$proposal:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident ($($ann:tt)*))*) => {
+        $(
+            fn $visit(&mut self $($(,$arg: $argty)*)?) -> Self::Output {
+                $( $( let _ = $arg; )* )?
+                true
+            }
+        )*
+    };
+}
+
+impl<'a> VisitSimdOperator<'a> for SimdDetector {
+    wasmparser::for_each_visit_simd_operator!(simd_operator);
+}
+
+fn contains_ascii(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 fn collect_distribution_file_hashes(
@@ -2546,5 +2926,89 @@ mod tests {
         assert_eq!(dynlibs[0].rel_path, "lib/libfoo.so");
         assert_eq!(dynlibs[1].location, "site");
         assert_eq!(dynlibs[1].rel_path, "pkg.libs/libbar.so");
+    }
+
+    #[test]
+    fn binary_feature_scan_detects_openblas_without_wasm() {
+        let mut features = PackageFeatures::default();
+        scan_binary_feature_bytes(Some("libopenblas.so"), b"native payload", &mut features)
+            .unwrap();
+        assert!(features.openblas);
+        assert!(!features.wasm_simd);
+        assert_eq!(features.wasm_modules, 0);
+    }
+
+    #[test]
+    fn parse_pyodide_profile_dir_requires_name_and_path() {
+        assert_eq!(
+            parse_pyodide_profile_dir(" blas = /tmp/blas ").unwrap(),
+            ("blas", "/tmp/blas")
+        );
+        assert!(parse_pyodide_profile_dir("blas").is_err());
+        assert!(parse_pyodide_profile_dir("blas=").is_err());
+        assert!(parse_pyodide_profile_dir("=/tmp/blas").is_err());
+    }
+
+    #[test]
+    fn wasm_simd_detector_requires_parsed_simd_operator() {
+        let mut scalar_features = PackageFeatures::default();
+        scan_binary_feature_bytes(
+            Some("scalar.wasm"),
+            &minimal_scalar_wasm(),
+            &mut scalar_features,
+        )
+        .unwrap();
+        assert_eq!(scalar_features.wasm_modules, 1);
+        assert!(!scalar_features.wasm_simd);
+
+        let mut simd_features = PackageFeatures::default();
+        scan_binary_feature_bytes(Some("simd.wasm"), &minimal_simd_wasm(), &mut simd_features)
+            .unwrap();
+        assert_eq!(simd_features.wasm_modules, 1);
+        assert!(simd_features.wasm_simd);
+    }
+
+    fn minimal_scalar_wasm() -> Vec<u8> {
+        use wasm_encoder::{
+            CodeSection, Function, FunctionSection, Instruction, Module, TypeSection, ValType,
+        };
+
+        let mut types = TypeSection::new();
+        types
+            .ty()
+            .function(Vec::<ValType>::new(), Vec::<ValType>::new());
+        let mut functions = FunctionSection::new();
+        functions.function(0);
+        let mut func = Function::new([]);
+        func.instruction(&Instruction::I32Const(1))
+            .instruction(&Instruction::Drop)
+            .instruction(&Instruction::End);
+        let mut code = CodeSection::new();
+        code.function(&func);
+        let mut module = Module::new();
+        module.section(&types).section(&functions).section(&code);
+        module.finish()
+    }
+
+    fn minimal_simd_wasm() -> Vec<u8> {
+        use wasm_encoder::{
+            CodeSection, Function, FunctionSection, Instruction, Module, TypeSection, ValType,
+        };
+
+        let mut types = TypeSection::new();
+        types
+            .ty()
+            .function(Vec::<ValType>::new(), Vec::<ValType>::new());
+        let mut functions = FunctionSection::new();
+        functions.function(0);
+        let mut func = Function::new([]);
+        func.instruction(&Instruction::V128Const(0))
+            .instruction(&Instruction::Drop)
+            .instruction(&Instruction::End);
+        let mut code = CodeSection::new();
+        code.function(&func);
+        let mut module = Module::new();
+        module.section(&types).section(&functions).section(&code);
+        module.finish()
     }
 }

@@ -87,4 +87,5 @@ The following telemetry gaps remain open:
 - Filesystem telemetry does not list the filenames written; only aggregate bytes and violation messages are provided.
 - There is no streaming log channel; all stdout/stderr is buffered until completion.
 
-Any host SDKs should leave room to expose additional counters in a backwards-compatible fashion.
+Host SDKs should leave room to expose additional counters without breaking
+existing consumers.

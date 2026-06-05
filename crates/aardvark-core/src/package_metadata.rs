@@ -1,8 +1,11 @@
 use crate::assets;
 use capnp::message::Builder;
 use capnp::serialize;
+use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Lockfile {
@@ -205,10 +208,28 @@ mod schema {
     }
 }
 
-pub(crate) fn package_metadata_from_lockfile(raw_json: &str) -> BuildResult {
-    build_metadata(raw_json)
+static LOCKFILE_METADATA_CACHE: Lazy<Mutex<BTreeMap<String, Arc<BuildResult>>>> =
+    Lazy::new(|| Mutex::new(BTreeMap::new()));
+
+pub(crate) fn package_metadata_from_lockfile_keyed(
+    raw_json: &str,
+    cache_key: impl Into<String>,
+) -> BuildResult {
+    let cache_key = cache_key.into();
+    if let Some(cached) = LOCKFILE_METADATA_CACHE.lock().get(&cache_key).cloned() {
+        return cached.as_ref().clone();
+    }
+
+    let built = Arc::new(build_metadata(raw_json));
+    let mut cache = LOCKFILE_METADATA_CACHE.lock();
+    cache
+        .entry(cache_key)
+        .or_insert_with(|| built.clone())
+        .as_ref()
+        .clone()
 }
 
+#[derive(Clone)]
 pub(crate) struct BuildResult {
     pub(crate) json_text: String,
     pub(crate) capnp_bytes: Vec<u8>,

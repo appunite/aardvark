@@ -16,13 +16,21 @@
 
 ```
 "runtime": {
-  "language": "javascript",
-  "pyodide": {"version": "0.29.4"}
+  "language": "python",
+  "pyodide": {
+    "version": "0.29.4",
+    "profile": "blas",
+    "preloadImports": ["main"]
+  }
 }
 ```
 
 - `language` – Optional runtime override. Accepts `"python"` (default) or `"javascript"`.
 - `pyodide.version` is optional and only valid when `language` is `"python"`. When present it must match the version bundled with the runtime.
+- `pyodide.profile` is optional and only valid when `language` is `"python"`. It is a host-defined distribution profile such as `"default"` or `"blas"`. Hosts map profiles to staged Aardvark Pyodide distribution directories before constructing a warmed isolate or `BundlePool`.
+- `pyodide.preloadImports` is optional and only valid when `language` is `"python"`. During `capture_warm_state()`, the runtime imports these modules immediately before the Pyodide snapshot is captured. Use this for pure Python app modules that are safe to restore from a Pyodide snapshot; do not use it for wasm-extension packages such as NumPy unless that exact bundle/distribution has been verified.
+
+Distribution profiles are selected before Pyodide/V8 isolate creation. They are not a per-call switch: warm states, overlays, and package caches are fingerprint-bound to the selected distribution. Use separate warmed pools for materially different profiles.
 
 > JavaScript runtime support is available as a preview: bundles run with a read-only filesystem
 > and manifest `packages` are ignored. Ship fully bundled JavaScript code; the runtime does not
@@ -61,7 +69,7 @@
   "packages": ["numpy", "pandas"],
   "runtime": {
     "language": "python",
-    "pyodide": {"version": "0.29.4"}
+    "pyodide": {"version": "0.29.4", "profile": "default"}
   },
   "resources": {
     "cpu": {"defaultLimitMs": 8000},
@@ -98,6 +106,8 @@
 
 - Entrypoints must include both module and function names separated by `:`. Whitespace is trimmed automatically.
 - Empty strings in `packages`, `network.allow`, or `hostCapabilities` cause the manifest to be rejected.
+- `runtime.pyodide.profile` is trimmed, lowercased, and must contain only ASCII letters, digits, `_`, or `-`.
+- `runtime.pyodide.preloadImports` entries are trimmed and deduplicated case-insensitively. Empty entries cause the manifest to be rejected.
 - `quotaBytes` and `defaultLimitMs` must be positive when provided.
 - Mixing [Pyodide](https://pyodide.org/) versions is not supported. Upgrade the runtime or regenerate bundles when [Pyodide](https://pyodide.org/) changes.
 - When `runtime.language` is `"javascript"`, omit `runtime.pyodide` and leave `packages` empty.
@@ -110,5 +120,6 @@
 
 ## Known gaps
 
-- Schema versioning is manual. We plan to add explicit backwards-compatibility ranges when [Pyodide](https://pyodide.org/) upgrades demand changes.
+- Schema versioning is exact today: the runtime accepts `schemaVersion: "1.0"`.
+  Future schema versions require explicit parser and validation changes.
 - There is no manifest field for describing output payloads beyond the descriptor metadata; hosts should rely on descriptors for now.

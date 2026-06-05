@@ -39,6 +39,92 @@ The `core` variant is useful for runtimes that do not need the full wheel set.
 Package loading is resolved exclusively through the verified distribution; flat
 wheel-cache directories are not a supported runtime contract.
 
+For workload-specific distributions, register profile labels and let bundle
+manifests request them through `runtime.pyodide.profile`:
+
+```rust
+use aardvark_core::{BundleArtifact, BundlePool, IsolateConfig, PoolOptions, PyRuntimeConfig};
+
+let runtime = PyRuntimeConfig::default()
+    .with_pyodide_distribution_profile_dir(
+        "blas",
+        ".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-blas",
+    )?;
+
+let artifact = BundleArtifact::from_bytes(bundle_bytes)?;
+let pool = BundlePool::from_artifact(
+    artifact,
+    PoolOptions {
+        isolate: IsolateConfig {
+            runtime,
+            ..IsolateConfig::default()
+        },
+        ..PoolOptions::default()
+    },
+)?;
+```
+
+Profile selection happens before isolate creation. For services that accept many
+ZIP bundles, use `BundlePoolRegistry` so the host automatically routes each
+bundle/profile pair to its own warmed pool:
+
+```rust
+use aardvark_core::{
+    BundlePoolRegistry, IsolateConfig, PoolOptions, PyRuntimeConfig,
+};
+
+let runtime = PyRuntimeConfig::default()
+    .with_pyodide_distribution_profile_dir(
+        "blas",
+        ".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-blas",
+    )?;
+let registry = BundlePoolRegistry::new(PoolOptions {
+    isolate: IsolateConfig {
+        runtime,
+        ..IsolateConfig::default()
+    },
+    desired_size: 2,
+    max_size: 8,
+    ..PoolOptions::default()
+})?;
+
+let prepared = registry.prepare_default_handler_for_bytes(bundle_bytes)?;
+let outcome = prepared.call_default()?;
+```
+
+The registry key includes the normalised bundle fingerprint and the
+manifest-requested Pyodide profile. That means a `default` workload and a
+`blas` workload can stay hot at the same time without asking one isolate or
+warm snapshot to switch distributions per call. `pool_for_bytes` also caches
+the normalised bundle artifact by a digest of the ZIP bytes, so repeated calls
+with the same bundle do not reparse the archive before hitting the warmed pool.
+Package roots are runtime-local, so concurrent runtimes using different staged
+Pyodide distributions do not race through a process-global package directory.
+Use `prepare_default_handler_for_bytes` or `prepare_handler_for_bytes` on hot
+request paths so the registry also caches handler sessions and avoids repeated
+handler prewarm work. For the lowest latency, call it during deploy/startup and
+retain the returned `PreparedBundleHandler`; request handlers can then call
+`prepared.call_json(...)`, `prepared.call_rawctx(...)`, or
+`prepared.call_default()` without re-hashing the ZIP bytes or touching the
+registry maps. For binary tensor-like workloads, combine the retained handler
+with owned `RawCtxInput` values so the request path stays on the direct RawCtx
+contract instead of materialising JSON.
+
+For one-shot direct runtime usage, construct the runtime from the bundle so the
+manifest profile is applied before Pyodide starts:
+
+```rust
+let bundle = aardvark_core::Bundle::from_zip_bytes(bundle_bytes)?;
+let runtime_config = PyRuntimeConfig::default()
+    .with_pyodide_distribution_profile_dir(
+        "blas",
+        ".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-blas",
+    )?;
+let mut runtime = aardvark_core::PyRuntime::new_for_bundle(runtime_config, &bundle)?;
+let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+let outcome = runtime.run_session(&session)?;
+```
+
 ## Persistent isolates (`PythonIsolate`)
 
 ```rust
@@ -69,10 +155,16 @@ fn invoke(handler: &HandlerSession, isolate: &mut PythonIsolate) -> anyhow::Resu
 }
 ```
 
+If bundle manifests can request `runtime.pyodide.profile`, prefer
+`BundlePool`/`BundlePoolRegistry` or configure `IsolateConfig.runtime` with the
+selected profile before `PythonIsolate::new`. `load_bundle` can validate the
+profile on an existing isolate, but it cannot swap the Pyodide distribution
+after the isolate has been created.
+
 Key knobs via `IsolateConfig` / `PyRuntimeConfig`:
 
 - `snapshot.load_from` / `snapshot.save_to` – warm snapshot management.
-- `cleanup` – choose between full cleanup, shared-buffer-only scrubbing, or no automatic cleanup.
+- `cleanup` – choose between full cleanup, shared-buffer-only scrubbing, or no automatic cleanup. `IsolateConfig::default()` uses full cleanup; latency-sensitive warmed hosts should opt into `CleanupMode::SharedBuffersOnly` only when retaining Python module state between calls is acceptable for that bundle/tenant boundary.
 - `budget_override` – clamp descriptor limits globally.
 - `host_capabilities` – capability allowlist applied to every call unless a manifest narrows it further.
 - `pyodide_dist_dir` – override the staged Aardvark Pyodide distribution path
@@ -152,8 +244,7 @@ fn pooled_calls(bytes: &[u8]) -> anyhow::Result<()> {
         },
     )?;
 
-    let handle = pool.handle();
-    let handler = handle.prepare_default_handler();
+    let handler = pool.prepare_default_handler()?;
 
     for _ in 0..4 {
         let outcome = pool.call_default(&handler)?;
@@ -184,6 +275,204 @@ Key `PoolOptions` knobs:
   `on_isolate_recycled` receives a `RecycleReason` so you can distinguish between normal reuse, guard-rail quarantines, scale downs, and shutdowns.
 - **Telemetry flushing** – `telemetry_interval` controls the background reporter that logs queue depth/percentiles to `tracing` (`aardvark::telemetry`). Set it to `None` to disable periodic emission if you prefer to poll stats manually.
 
+`prepare_default_handler` and `prepare_handler` prewarm handler imports and
+adapters without executing caller code. If startup is allowed to pay a real,
+side-effecting Python invocation before live traffic, call
+`warm_default`, `warm_json`, or `warm_rawctx` with a representative payload after
+preparing the handler. Warm calls go through the same pool queueing, telemetry,
+cleanup, and sandbox policy path as live calls, so only use them for idempotent
+or explicitly safe warmup inputs.
+
+For multi-isolate pools, use `warm_all_default`, `warm_all_json`, or
+`warm_all_rawctx` during deploy/startup warmup. These execute the representative
+handler once on every currently-created idle isolate after ensuring the desired
+pool size exists. On lazy pools (`desired_size = 0`) an explicit warm-all creates
+one isolate; set `desired_size` to the intended steady-state worker count first
+when every worker should be paid for before accepting traffic. The same methods
+are available on retained `PreparedBundleHandler` values returned by
+`BundlePoolRegistry`.
+
+For expensive package stacks such as NumPy, prefer staging readiness explicitly
+instead of always warming full capacity. A pool with `desired_size = 1` and
+`max_size = N` makes one fully warmed Pyodide/V8 isolate ready for live traffic
+while preserving later scale-out capacity. A lazy pool (`desired_size = 0`) plus
+an explicit retained-handler `warm_all_*` call similarly creates and warms one
+isolate. This cuts deploy-to-first-ready time when the host can tolerate a later
+request paying to create the next isolate; use eager `desired_size = N` only when
+every worker must be hot before traffic starts.
+
+For services that want the optimized startup sequence as a single host object,
+use `WarmedBundleHost`. It parses the ZIP, prepares the handler, optionally runs
+a representative warm-all call, and then exposes live `call_*` methods:
+
+```rust
+use aardvark_core::{
+    IsolateConfig, JsonInput, PoolOptions, WarmedBundleHost, WarmedBundleHostOptions,
+    WarmedBundleHostWarmup,
+};
+
+let f32_payload = bytes::Bytes::from(vec![0; 1024 * std::mem::size_of::<f32>()]);
+let warm_input = Some(JsonInput::F32LeBytes(f32_payload.clone()));
+let pool_options = PoolOptions {
+    isolate: IsolateConfig::default(),
+    desired_size: 1,
+    max_size: 1,
+    ..PoolOptions::default()
+};
+
+let host = WarmedBundleHost::from_bytes(
+    bundle_bytes,
+    WarmedBundleHostOptions::pooled(pool_options)
+        .with_warmup(WarmedBundleHostWarmup::json_input(warm_input)),
+)?;
+
+let outcome = host.call_json_input(Some(JsonInput::F32LeBytes(f32_payload)))?;
+```
+
+For long-running hosts that repeatedly see the same bundle, use
+`WarmedBundleHostRegistry` instead of building a new `WarmedBundleHost` per
+request. The registry caches the parsed artifact and the fully prepared warmed
+host for the configured descriptor/warmup template:
+
+```rust
+use aardvark_core::{
+    IsolateConfig, PoolOptions, WarmedBundleHostOptions, WarmedBundleHostRegistry,
+    WarmedBundleHostWarmup,
+};
+
+let registry = WarmedBundleHostRegistry::new(
+    WarmedBundleHostOptions::pooled(PoolOptions {
+        isolate: IsolateConfig::default(),
+        desired_size: 1,
+        max_size: 1,
+        ..PoolOptions::default()
+    })
+    .with_warmup(WarmedBundleHostWarmup::default_call()),
+);
+
+let host = registry.prewarm_bytes(&bundle_bytes)?;
+let outcome = host.call_default()?;
+
+// Later request path:
+if let Some(hot_host) = registry.ready_host_for_bytes(&bundle_bytes)? {
+    let outcome = hot_host.call_default()?;
+} else {
+    // Return a service-level not-ready/miss response instead of starting
+    // Pyodide/V8 on the live request path.
+}
+```
+
+Create separate registries for different descriptor, backend, or warmup
+contracts. The registry is intentionally a startup/live-call boundary: pay the
+Pyodide/V8 and handler warmup cost once, then route live calls to the cached
+host. Use `prewarm_many_bytes` when startup already knows the bundle set. Use
+`ready_host_for_bytes` or `ready_host_for_artifact` on request paths that must
+never trigger cold setup; use `host_for_bytes` only when cache-miss creation is
+acceptable.
+
+By default the registry is unbounded because many deploys know their bundle set
+up front. Long-running multi-tenant hosts should set cache limits:
+
+```rust
+use aardvark_core::{
+    PoolOptions, WarmedBundleHostOptions, WarmedBundleHostRegistry,
+    WarmedBundleHostRegistryOptions,
+};
+
+let registry = WarmedBundleHostRegistry::with_options(
+    WarmedBundleHostRegistryOptions::new(
+        WarmedBundleHostOptions::pooled(PoolOptions::default()),
+    )
+    .with_max_ready_hosts(128)
+    .with_max_artifacts(128),
+);
+```
+
+The ready-host cache evicts least-recently used ready hosts when the limit is
+exceeded. The artifact cache is the parse cache used by `ready_host_for_bytes`;
+if an artifact is evicted, byte-based ready checks return `None` rather than
+reparsing on the live path.
+
+Use `remove_for_bytes` or `remove_for_artifact` when a tenant, deploy, or bundle
+revision should be invalidated immediately. Use `clear` for deploy-wide or
+profile-wide invalidation. These calls only remove already-ready warmed hosts;
+they do not parse bundles or cancel an in-flight prewarm. A creation that
+started before `clear` may still return a host to its original caller, but it is
+not published into the cleared registry cache. After invalidation,
+`ready_host_for_*` returns `None` until the host explicitly prewarms that bundle
+again.
+
+Use the pooled backend when the host can spend startup time before accepting
+traffic. It keeps live calls on `BundlePool`, which has the mature queueing,
+telemetry, resize, lifecycle hook, and guard-rail quarantine behavior. If many
+workers need to be ready, set `desired_size` to the required count and prewarm at
+deploy/startup; Aardvark intentionally keeps the live product path on the pooled
+Pyodide/V8 host rather than adding an experimental channel-hop backend.
+
+For RawCtx input hot paths, prefer owned buffers:
+`RawCtxInput::from_vec("payload", bytes, metadata)`. Passing a cloned/shared
+`Bytes` is still valid, but unique ownership gives the runtime the best chance
+to transfer the allocation into V8 without an extra copy.
+
+When using the direct RawCtx contract, pass `None` for input metadata unless
+the handler reads it. Descriptor-bound RawCtx needs metadata for schema binding;
+direct handlers usually own the protocol already, so unused metadata only adds
+per-call serialisation and JS/Python conversion work.
+
+If the direct handler only needs buffer views and never reads input metadata,
+you can expose inputs as a flat `{name: memoryview}` mapping:
+
+```rust
+let descriptor = InvocationDescriptor::new("main:entrypoint")
+    .with_rawctx_flat_input_buffers(true);
+```
+
+With this enabled, Python reads
+`builtins.__aardvark_rawctx_inputs["payload"]` directly as a `memoryview`
+instead of `{"data": memoryview, "metadata": ...}`. Do not enable it for
+handlers that depend on the metadata-bearing record shape.
+
+For hot handlers that never use stdout/stderr as part of the response contract,
+you can disable stdio interception on the descriptor:
+
+```rust
+let descriptor = InvocationDescriptor::new("main:entrypoint")
+    .with_capture_stdio(false);
+```
+
+This keeps Python execution inside Pyodide/V8, but skips per-call `StringIO`
+allocation and `sys.stdout`/`sys.stderr` swapping. Diagnostics will return empty
+`stdout` and `stderr` for that invocation, so keep the default capture mode for
+script-like bundles, debugging, warnings, or any handler where printed output is
+observable host data.
+
+If output metadata is also redundant for a direct RawCtx contract, disable it on
+the same descriptor:
+
+```rust
+let descriptor = InvocationDescriptor::new("main:entrypoint")
+    .with_capture_stdio(false)
+    .with_rawctx_output_metadata(false);
+```
+
+The host still receives shared-buffer ids and bytes, but each handle has
+`metadata: None`. Use this only when ids, shapes, and formats are fixed by the
+host protocol or descriptor.
+
+When a RawCtx handler publishes all successful output through shared buffers,
+you can also skip the full JSON success envelope:
+
+```rust
+let descriptor = InvocationDescriptor::new("main:entrypoint")
+    .with_capture_stdio(false)
+    .with_rawctx_shared_buffer_only_success(true);
+```
+
+This is only for shared-buffer-only success contracts. Python still runs inside
+the Pyodide/V8 isolate, and exceptions still return structured diagnostics.
+Keep the default envelope when the host observes the handler's scalar or JSON
+return value.
+
 `PoolStats` now reports invocation counts, average queue wait, queue wait percentiles, and guard-rail counters (total quarantines, heap-triggered quarantines, RSS-triggered quarantines, and scale-down events). `ExecutionOutcome` diagnostics capture per-call queue wait, heap usage, and (on Linux and macOS) RSS snapshots so hosts can alert when an invocation runs close to the limits.
 
 ```rust
@@ -195,12 +484,16 @@ if let Some(p95) = pool_telemetry.queue_wait_p95_ms {
 metrics::counter!("aardvark.pool.quarantine.total", pool_telemetry.quarantine_events as u64);
 ```
 
-### Moving away from `PyRuntimePool`
+### Choosing Between `PyRuntimePool` and `BundlePool`
 
-`PyRuntimePool` is still available but `BundlePool` provides stricter cleanup,
-better telemetry, and host-controlled guard rails. To adopt it:
+`PyRuntimePool` pools raw runtime instances. Use it when the host owns
+descriptor construction, reset policy, and bundle/profile routing outside
+Aardvark. `BundlePool` is the bundle-aware path: it parses manifests, applies
+profile requirements before isolate creation, caches handler sessions, exposes
+queue telemetry, and enforces per-isolate guard rails. To move a bundle-serving
+host to that path:
 
-1. Replace the old `PoolConfig` construction with `PoolOptions`. Copy over the
+1. Replace `PoolConfig` construction with `PoolOptions`. Copy over the
    concurrency knobs (`max_runtimes` → `desired_size/max_size`) and reset mode
    (`PoolResetMode::InPlace` corresponds to `CleanupMode::Full`).
 2. Parse your bundle into a `BundleArtifact` once, then initialise a
@@ -214,13 +507,17 @@ better telemetry, and host-controlled guard rails. To adopt it:
    `PoolTelemetry::from(&pool.stats())` or enabling the background reporter via
    `telemetry_interval` to stream queue metrics into your tracing backend.
 
-Once hosts adopt `BundlePool`, `PyRuntimePool` can be reserved for legacy
-scenarios (custom reset flows, non-Python engines) without blocking access to
-the newer guard rails.
+Once hosts adopt `BundlePool`, keep `PyRuntimePool` only for hosts that
+intentionally manage raw runtimes directly.
 
 ## Dropping down to `PyRuntime`
 
-`PythonIsolate` and `BundlePool` wrap the original `PyRuntime`. Reach for it when you need low-level hooks (custom descriptor construction, manual resets, direct access to the JS runtime):
+`PythonIsolate` and `BundlePool` wrap the original `PyRuntime`. Reach for it
+when you need low-level hooks (custom descriptor construction, manual resets,
+direct access to the JS runtime). The descriptor-only example below bypasses
+manifest metadata; when manifest policies or `runtime.pyodide.profile` should
+apply, construct with `PyRuntime::new_for_bundle` and use
+`prepare_session_with_manifest_and_descriptor`.
 
 ```rust
 use aardvark_core::{Bundle, InvocationDescriptor, PyRuntime, PyRuntimeConfig};
@@ -250,20 +547,21 @@ fn manual(bytes: &[u8]) -> anyhow::Result<()> {
 If you want Cloudflare-style deploy-time hydration, capture a warm snapshot once and reuse it:
 
 ```rust
-use aardvark_core::{Bundle, PyRuntime, PyRuntimeConfig, WarmState};
+use aardvark_core::{Bundle, PyRuntime, PyRuntimeConfig};
 
-fn bake_warm_state(bytes: &[u8]) -> anyhow::Result<(WarmState, Bundle)> {
-    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+fn bake_warm_state(bytes: &[u8]) -> anyhow::Result<(PyRuntimeConfig, Bundle)> {
     let bundle = Bundle::from_zip_bytes(bytes)?;
+    let mut config = PyRuntimeConfig::default();
+    config.apply_bundle_manifest(bundle.manifest()?.as_ref())?;
+    let mut runtime = PyRuntime::new(config.clone())?;
     runtime.prepare_session_with_manifest(bundle.clone())?;
     // Optional: execute warm-up imports or other setup work here.
     let warm = runtime.capture_warm_state()?;
-    Ok((warm, bundle))
+    config.warm_state = Some(warm);
+    Ok((config, bundle))
 }
 
-fn host_with_warm_state(warm: WarmState) -> anyhow::Result<PyRuntime> {
-    let mut config = PyRuntimeConfig::default();
-    config.warm_state = Some(warm);
+fn host_with_warm_state(config: PyRuntimeConfig) -> anyhow::Result<PyRuntime> {
     PyRuntime::new(config)
 }
 ```
@@ -379,4 +677,4 @@ Arguments are `[iterations] [payload_len]`. The harness warms the runtime, captu
 ## Stability & Release Readiness
 
 - Neither runtime path is production hardened. Expect breaking changes to manifests, descriptors, and configuration while we iterate.
-- The manifest schema is currently versioned as `1.0` but should be treated as provisional; schema bumps may happen without backwards compatibility.
+- The manifest schema is currently versioned as `1.0` but should be treated as provisional; schema bumps may happen before the schema is declared stable.

@@ -17,6 +17,9 @@ pub struct InvocationDescriptor {
     /// Optional language override for the invocation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<RuntimeLanguage>,
+    /// Whether stdout/stderr should be intercepted and returned in diagnostics.
+    #[serde(default = "default_capture_stdio")]
+    pub capture_stdio: bool,
     /// Inputs passed positionally to the Python handler.
     #[serde(default)]
     pub inputs: Vec<FieldDescriptor>,
@@ -26,6 +29,21 @@ pub struct InvocationDescriptor {
     /// Free-form JSON for adapters that need extra parameters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<JsonValue>,
+    /// RawCtx optimization for handlers whose successful result is published
+    /// exclusively through shared buffers.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub rawctx_shared_buffer_only_success: bool,
+    /// Whether RawCtx shared-buffer output metadata should be materialized and
+    /// returned to the host.
+    #[serde(
+        default = "default_rawctx_output_metadata",
+        skip_serializing_if = "is_true"
+    )]
+    pub rawctx_output_metadata: bool,
+    /// RawCtx direct-input optimization for handlers that want
+    /// `{name: memoryview}` instead of `{name: {data, metadata}}`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub rawctx_flat_input_buffers: bool,
     /// Optional rolling window configuration for stateful invocations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowConfig>,
@@ -41,15 +59,19 @@ impl InvocationDescriptor {
         Self {
             entrypoint: sanitize_entrypoint(entrypoint),
             language: None,
+            capture_stdio: true,
             inputs: Vec::new(),
             outputs: Vec::new(),
             params: None,
+            rawctx_shared_buffer_only_success: false,
+            rawctx_output_metadata: true,
+            rawctx_flat_input_buffers: false,
             window: None,
             limits: InvocationLimits::default(),
         }
     }
 
-    /// Convenience constructor for legacy usage – only the entrypoint is provided.
+    /// Convenience constructor for entrypoint-only descriptors.
     pub fn trivial(entrypoint: impl Into<String>) -> Self {
         Self::new(entrypoint)
     }
@@ -63,6 +85,53 @@ impl InvocationDescriptor {
     pub fn with_limits(mut self, limits: InvocationLimits) -> Self {
         self.limits = limits;
         self
+    }
+
+    /// Returns a descriptor clone with stdio diagnostics capture enabled/disabled.
+    pub fn with_capture_stdio(mut self, capture_stdio: bool) -> Self {
+        self.capture_stdio = capture_stdio;
+        self
+    }
+
+    /// Whether the runtime should intercept stdout/stderr for this invocation.
+    pub fn capture_stdio(&self) -> bool {
+        self.capture_stdio
+    }
+
+    /// Returns a descriptor clone optimized for RawCtx handlers that publish
+    /// successful outputs via shared buffers and do not need a JSON success
+    /// envelope.
+    pub fn with_rawctx_shared_buffer_only_success(mut self, enabled: bool) -> Self {
+        self.rawctx_shared_buffer_only_success = enabled;
+        self
+    }
+
+    /// Whether RawCtx success can skip the full JSON execution envelope.
+    pub fn rawctx_shared_buffer_only_success(&self) -> bool {
+        self.rawctx_shared_buffer_only_success
+    }
+
+    /// Returns a descriptor clone with RawCtx output metadata enabled/disabled.
+    pub fn with_rawctx_output_metadata(mut self, enabled: bool) -> Self {
+        self.rawctx_output_metadata = enabled;
+        self
+    }
+
+    /// Whether RawCtx shared-buffer output metadata should be collected.
+    pub fn rawctx_output_metadata(&self) -> bool {
+        self.rawctx_output_metadata
+    }
+
+    /// Returns a descriptor clone with direct RawCtx inputs materialized as a
+    /// flat `{name: memoryview}` mapping.
+    pub fn with_rawctx_flat_input_buffers(mut self, enabled: bool) -> Self {
+        self.rawctx_flat_input_buffers = enabled;
+        self
+    }
+
+    /// Whether direct RawCtx inputs should be exposed as a flat buffer mapping.
+    pub fn rawctx_flat_input_buffers(&self) -> bool {
+        self.rawctx_flat_input_buffers
     }
 
     /// Ensure the descriptor is well-formed.
@@ -196,6 +265,22 @@ fn sanitize_entrypoint(entrypoint: String) -> String {
     entrypoint.trim().to_owned()
 }
 
+fn default_capture_stdio() -> bool {
+    true
+}
+
+fn default_rawctx_output_metadata() -> bool {
+    true
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
 #[cfg(test)]
 mod tests {
     use super::{FieldDescriptor, InvocationDescriptor, InvocationLimits};
@@ -245,5 +330,12 @@ mod tests {
         assert_eq!(merged.wall_ms, Some(1_000));
         assert_eq!(merged.heap_mb, Some(512));
         assert_eq!(merged.cpu_ms, Some(10_000));
+    }
+
+    #[test]
+    fn descriptor_captures_stdio_by_default() {
+        let descriptor = InvocationDescriptor::trivial("pkg:handler");
+        assert!(descriptor.capture_stdio());
+        assert!(!descriptor.with_capture_stdio(false).capture_stdio());
     }
 }

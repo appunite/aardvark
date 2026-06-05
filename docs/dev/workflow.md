@@ -70,8 +70,8 @@ Set `RUST_LOG=aardvark::telemetry=info` to verify tracing and sandbox telemetry 
 - Update `docs/api/manifest.md` and add tests under
   `crates/aardvark-core/tests/` to cover new validation paths.
 - Version the schema thoughtfully. Until 1.0, semver ranges are informally
-  enforced; once we commit to stable, update the schema version string and keep
-  old versions compatible when possible.
+  enforced; once we commit to stable, update the schema version string and
+  document migration impact explicitly.
 
 ## Telemetry and Tracing
 
@@ -79,8 +79,8 @@ Set `RUST_LOG=aardvark::telemetry=info` to verify tracing and sandbox telemetry 
   `tracing-subscriber` locally if you need to debug budget enforcement. The
   pool reporter logs queue metrics under `aardvark::telemetry`; tweak
   `PoolOptions::telemetry_interval` to manage its cadence.
-- When touching diagnostics, update `docs/architecture/telemetry.md` and keep
-  telemetry structs backwards compatible.
+- When touching diagnostics, update `docs/architecture/telemetry.md` and avoid
+  breaking existing telemetry consumers unless the migration is documented.
 
 ## Pull Request Checklist
 
