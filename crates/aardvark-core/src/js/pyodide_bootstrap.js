@@ -2503,6 +2503,9 @@ export async function loadPyRunnerPyodide(options = {}) {
     entriesProxy?.destroy?.();
     installer?.destroy?.();
     overlayState.packages.add(canonical);
+    if (pyodide.loadedPackages && packageName) {
+      pyodide.loadedPackages[packageName] = "default channel";
+    }
   }
 
   const packageBaseUrl = api.config.packageBaseUrl;
@@ -2917,6 +2920,7 @@ globalThis.__aardvarkRegisterInputBuffer = function (name, buffer, metadata) {
       if (
         meta.package_type &&
         meta.package_type !== "package" &&
+        meta.package_type !== "cpython_module" &&
         meta.package_type !== "shared_library"
       ) {
         console.warn(`[packages] skipping unsupported package type '${meta.package_type}' for ${meta.name}`);

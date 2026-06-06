@@ -84,6 +84,63 @@ fn bundle_pool_basic() -> Result<()> {
     verify_bundle_pool_executes_handlers()
 }
 
+#[test]
+fn python_async_snippet_awaits_promise() -> Result<()> {
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let bundle = bundle_with_main(SIMPLE_SUCCESS);
+    let _session = runtime.prepare_session(bundle, "main:main")?;
+
+    let output = runtime.js_runtime().run_python_async_snippet(
+        r#"
+import asyncio
+await asyncio.sleep(0)
+41 + 1
+"#,
+    )?;
+
+    assert_eq!(output.json, Some(json!(42)));
+    assert!(output.exception_type.is_none());
+    Ok(())
+}
+
+#[test]
+fn js_snippet_supports_selenium_return_and_await() -> Result<()> {
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let bundle = bundle_with_main(SIMPLE_SUCCESS);
+    let _session = runtime.prepare_session(bundle, "main:main")?;
+
+    let output = runtime.js_runtime().run_js_snippet(
+        r#"
+return await Promise.resolve([
+    41 + 1,
+    pyodide._api.isPromise(Promise.resolve()),
+]);
+"#,
+    )?;
+
+    assert_eq!(output.json, Some(json!([42, true])));
+    assert!(output.exception_type.is_none());
+    Ok(())
+}
+
+#[test]
+fn python_run_js_sees_global_pyodide() -> Result<()> {
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let bundle = bundle_with_main(SIMPLE_SUCCESS);
+    let _session = runtime.prepare_session(bundle, "main:main")?;
+
+    let output = runtime.js_runtime().run_python_async_snippet(
+        r#"
+from pyodide.code import run_js
+run_js("typeof pyodide === 'object' && pyodide.version")
+"#,
+    )?;
+
+    assert_eq!(output.json, Some(json!("0.29.4")));
+    assert!(output.exception_type.is_none());
+    Ok(())
+}
+
 fn verify_pooled_runtime_manual_reset() -> Result<()> {
     let config = PyRuntimeConfig {
         reset_policy: ResetPolicy::Manual,

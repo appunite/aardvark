@@ -2,6 +2,7 @@
 members = [
   "crates/aardvark-core",
   "crates/aardvark-cli",
+  "crates/aardvark-compat-runner",
   "integration-tests",
   "xtask",
   "perf/runner",

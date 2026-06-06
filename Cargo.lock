@@ -25,6 +25,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aardvark-compat-runner"
+version = "0.1.1"
+dependencies = [
+ "aardvark-core",
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "aardvark-core"
 version = "0.1.1"
 dependencies = [
