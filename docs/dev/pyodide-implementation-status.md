@@ -10,11 +10,16 @@ today. It is a status note, not a complete upstream conformance claim.
   `third_party/pyodide/0.29.4/`.
 - That checkout is pinned to Pyodide tag `0.29.4`, commit
   `d178a7e14644eb17dfd7bd91dc21b19078868381`.
-- Runtime assets are staged under the ignored local distribution directory:
+- Runtime assets are staged under an ignored local distribution directory whose
+  name includes the current Aardvark workspace package version:
 
 ```text
-.aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full
+.aardvark/pyodide-distributions/aardvark-<aardvark-version>-pyodide-v0.29.4-full
 ```
+
+The staging CLI and local compatibility runners derive this default path from
+the workspace package version and Pyodide version. Use `--dist-dir` only when
+testing a distribution staged somewhere else.
 
 Restage the full distribution after changing Pyodide-facing JS assets:
 

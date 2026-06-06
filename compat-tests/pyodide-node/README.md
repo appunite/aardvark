@@ -46,8 +46,14 @@ runtime JS assets such as `crates/aardvark-core/src/js/pyodide_bootstrap.js`:
 cargo run -p aardvark-cli -- assets stage --variant full --force
 python3 compat-tests/pyodide-node/run_local.py \
   --version 0.29.4 \
-  --timeout-seconds 120 \
-  --dist-dir .aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full
+  --timeout-seconds 120
+```
+
+The runner derives the default full-distribution path from the workspace package
+version and requested Pyodide version:
+
+```text
+.aardvark/pyodide-distributions/aardvark-<aardvark-version>-pyodide-v<pyodide-version>-full
 ```
 
 ## Contract
