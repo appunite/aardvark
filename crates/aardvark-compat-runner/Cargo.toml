@@ -1,0 +1,14 @@
+[package]
+name = "aardvark-compat-runner"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Local Pyodide compatibility runner for Aardvark."
+
+[dependencies]
+aardvark-core = { path = "../aardvark-core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true

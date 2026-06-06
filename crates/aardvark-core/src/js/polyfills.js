@@ -951,6 +951,26 @@ if (typeof globalThis.setTimeout !== "function") {
   let __pyRunnerTimerId = 1;
   const timeouts = new Map();
   const intervals = new Map();
+  const now = () => Date.now();
+  const normalizeDelay = (timeout) => {
+    const delay = Number(timeout ?? 0);
+    return Number.isFinite(delay) && delay > 0 ? delay : 0;
+  };
+  const nextDelay = () => {
+    let next = Infinity;
+    const current = now();
+    for (const timer of timeouts.values()) {
+      next = Math.min(next, timer.due - current);
+    }
+    for (const timer of intervals.values()) {
+      next = Math.min(next, timer.due - current);
+    }
+    if (!Number.isFinite(next)) {
+      return null;
+    }
+    return Math.max(0, next);
+  };
+  const queuePump = () => queueMicrotask(() => globalThis.__pyRunnerPumpTimers());
 
   globalThis.setTimeout = function setTimeout(handler, timeout, ...args) {
     const id = __pyRunnerTimerId++;
@@ -960,15 +980,11 @@ if (typeof globalThis.setTimeout !== "function") {
         : () => {
             __pyRunnerGlobalEval(String(handler));
           };
-    const invoke = () => {
-      if (!timeouts.has(id)) {
-        return;
-      }
-      timeouts.delete(id);
-      callable();
-    };
-    timeouts.set(id, invoke);
-    queueMicrotask(invoke);
+    const delay = normalizeDelay(timeout);
+    timeouts.set(id, { due: now() + delay, callable });
+    if (delay === 0) {
+      queuePump();
+    }
     return id;
   };
 
@@ -984,21 +1000,56 @@ if (typeof globalThis.setTimeout !== "function") {
         : () => {
             __pyRunnerGlobalEval(String(handler));
           };
-    const tick = () => {
-      if (!intervals.has(id)) {
-        return;
-      }
-      callable();
-      queueMicrotask(tick);
-    };
-    intervals.set(id, tick);
-    queueMicrotask(tick);
+    const delay = normalizeDelay(timeout);
+    intervals.set(id, { due: now() + delay, delay, callable });
+    if (delay === 0) {
+      queuePump();
+    }
     return id;
   };
 
   globalThis.clearInterval = function clearInterval(id) {
     intervals.delete(id);
   };
+
+  globalThis.__pyRunnerPumpTimers = function __pyRunnerPumpTimers() {
+    const current = now();
+    const dueTimeouts = [];
+    const dueIntervals = [];
+    for (const [id, timer] of timeouts.entries()) {
+      if (timer.due <= current) {
+        dueTimeouts.push([id, timer]);
+      }
+    }
+    for (const [id, timer] of intervals.entries()) {
+      if (timer.due <= current) {
+        dueIntervals.push([id, timer]);
+      }
+    }
+    for (const [id, timer] of dueTimeouts) {
+      if (!timeouts.has(id)) {
+        continue;
+      }
+      timeouts.delete(id);
+      timer.callable();
+    }
+    for (const [id, timer] of dueIntervals) {
+      if (!intervals.has(id)) {
+        continue;
+      }
+      timer.callable();
+      if (intervals.has(id)) {
+        timer.due = now() + timer.delay;
+        intervals.set(id, timer);
+        if (timer.delay === 0) {
+          queuePump();
+        }
+      }
+    }
+    return nextDelay();
+  };
+} else if (typeof globalThis.__pyRunnerPumpTimers !== "function") {
+  globalThis.__pyRunnerPumpTimers = () => null;
 }
 
 globalThis.__pyRunnerMountFiles = function __pyRunnerMountFiles(

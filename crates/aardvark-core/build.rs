@@ -309,7 +309,7 @@ fn apply_pyodide_replacements(source: &str) -> Result<String> {
 } from "./pyodide_builtin_wrappers.js";
 "#;
 
-    let required_replacements: [(&str, String); 11] = [
+    let required_replacements: [(&str, String); 8] = [
         (
             "var _createPyodideModule",
             format!("{PRELUDE}export const _createPyodideModule"),
@@ -328,21 +328,6 @@ fn apply_pyodide_replacements(source: &str) -> Result<String> {
         (
             "crypto.getRandomValues(",
             "getRandomValues(Module, ".into(),
-        ),
-        (
-            "eval(func)",
-            r#"(() => {throw new Error('Internal Emscripten code tried to eval, this should not happen, please file a bug report with your requirements.txt file\'s contents')})()"#
-                .into(),
-        ),
-        (
-            "eval(data)",
-            r#"(() => {throw new Error('Internal Emscripten code tried to eval, this should not happen, please file a bug report with your requirements.txt file\'s contents')})()"#
-                .into(),
-        ),
-        (
-            "eval(UTF8ToString(ptr))",
-            r#"(() => {throw new Error('Internal Emscripten code tried to eval, this should not happen, please file a bug report with your requirements.txt file\'s contents')})()"#
-                .into(),
         ),
         (
             "const API=Module.API;",

@@ -2195,7 +2195,7 @@ fn apply_pyodide_replacements(source: &str) -> Result<String> {
 } from "./pyodide_builtin_wrappers.js";
 "#;
 
-    let required_replacements: [(&str, String); 11] = [
+    let required_replacements: [(&str, String); 8] = [
         (
             "var _createPyodideModule",
             format!("{PRELUDE}export const _createPyodideModule"),
@@ -2212,21 +2212,6 @@ fn apply_pyodide_replacements(source: &str) -> Result<String> {
             "reportUndefinedSymbolsPatched(Module)".into(),
         ),
         ("crypto.getRandomValues(", "getRandomValues(Module, ".into()),
-        (
-            "eval(func)",
-            r#"(() => {throw new Error('Internal Emscripten code tried to eval, this should not happen, please file a bug report with your requirements.txt file\'s contents')})()"#
-                .into(),
-        ),
-        (
-            "eval(data)",
-            r#"(() => {throw new Error('Internal Emscripten code tried to eval, this should not happen, please file a bug report with your requirements.txt file\'s contents')})()"#
-                .into(),
-        ),
-        (
-            "eval(UTF8ToString(ptr))",
-            r#"(() => {throw new Error('Internal Emscripten code tried to eval, this should not happen, please file a bug report with your requirements.txt file\'s contents')})()"#
-                .into(),
-        ),
         (
             "const API=Module.API;",
             "const API=Module.API||(Module.API={});if(!API.runtimeEnv){API.runtimeEnv={IN_BUN:false,IN_DENO:false,IN_NODE:false,IN_SAFARI:false,IN_SHELL:false,IN_BROWSER:true,IN_BROWSER_MAIN_THREAD:true,IN_BROWSER_WEB_WORKER:false,IN_NODE_COMMONJS:false,IN_NODE_ESM:false};}"

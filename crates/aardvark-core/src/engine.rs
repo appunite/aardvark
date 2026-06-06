@@ -9,6 +9,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::asset_store::{Asset, AssetStore};
 use crate::bundle::Bundle;
@@ -1685,7 +1686,7 @@ impl JsRuntime {
 
                     match outcome {
                         PromiseOutcome::Pending => {
-                            self.isolate.perform_microtask_checkpoint();
+                            self.pump_event_loop()?;
                         }
                         PromiseOutcome::Fulfilled(value) => {
                             resolved_value = Some(value);
@@ -2001,6 +2002,11 @@ impl JsRuntime {
                                 "loadPyodide fulfilled with non-object result".into(),
                             )
                         })?;
+                        let global = scope.get_current_context().global(scope);
+                        let pyodide_key = v8::String::new(scope, "pyodide").ok_or_else(|| {
+                            PyRunnerError::Execution("failed to allocate global Pyodide key".into())
+                        })?;
+                        global.set(scope, pyodide_key.into(), obj.into());
                         ctx_state
                             .pyodide_instance
                             .replace(Some(v8::Global::new(scope, obj)));
@@ -2032,7 +2038,7 @@ impl JsRuntime {
             if done.is_some() {
                 break;
             }
-            self.isolate.perform_microtask_checkpoint();
+            self.pump_event_loop()?;
         }
 
         self.prepare_dynlibs()?;
@@ -2114,7 +2120,7 @@ impl JsRuntime {
             if done.is_some() {
                 break;
             }
-            self.isolate.perform_microtask_checkpoint();
+            self.pump_event_loop()?;
         }
 
         Ok(())
@@ -2650,6 +2656,446 @@ impl JsRuntime {
         })
     }
 
+    fn pump_event_loop(&mut self) -> Result<()> {
+        self.isolate.perform_microtask_checkpoint();
+        let next_delay_ms = self.with_context(|scope, _| -> Result<Option<u64>> {
+            v8::tc_scope!(let try_catch, scope);
+            let global = try_catch.get_current_context().global(try_catch);
+            let Some(key) = v8::String::new(try_catch, "__pyRunnerPumpTimers") else {
+                return Ok(None);
+            };
+            let Some(value) = global.get(try_catch, key.into()) else {
+                return Ok(None);
+            };
+            let Ok(pump_fn) = Local::<Function>::try_from(value) else {
+                return Ok(None);
+            };
+            let Some(result) = pump_fn.call(try_catch, global.into(), &[]) else {
+                let message = try_catch
+                    .exception()
+                    .and_then(|value| value.to_string(try_catch))
+                    .map(|s| s.to_rust_string_lossy(try_catch))
+                    .unwrap_or_else(|| "timer pump failed".to_string());
+                return Err(PyRunnerError::Execution(message));
+            };
+            if result.is_null_or_undefined() {
+                return Ok(None);
+            }
+            let Some(delay) = result.number_value(try_catch) else {
+                return Ok(None);
+            };
+            if !delay.is_finite() || delay <= 0.0 {
+                return Ok(Some(0));
+            }
+            Ok(Some(delay.ceil() as u64))
+        })?;
+        self.isolate.perform_microtask_checkpoint();
+        if let Some(delay_ms) = next_delay_ms {
+            if delay_ms > 0 {
+                std::thread::sleep(Duration::from_millis(delay_ms.min(10)));
+            }
+        }
+        Ok(())
+    }
+
+    /// Executes an arbitrary Python snippet through Pyodide's async API.
+    pub fn run_python_async_snippet(&mut self, code: &str) -> Result<ExecutionOutput> {
+        enum PromiseOutcome {
+            Pending,
+            Fulfilled(v8::Global<v8::Value>),
+            Rejected {
+                typ: String,
+                value: String,
+                stack: Option<String>,
+            },
+        }
+
+        let ctx_state = self.context_state.clone();
+        ctx_state.clear_console();
+
+        let mut promise_handle: Option<v8::Global<Promise>> = None;
+        self.with_context(|scope, _| {
+            v8::tc_scope!(let try_catch, scope);
+            let pyodide = ctx_state
+                .pyodide_local(try_catch)
+                .ok_or_else(|| PyRunnerError::Execution("Pyodide is not loaded".into()))?;
+            let run_key = v8::String::new(try_catch, "runPythonAsync").ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate runPythonAsync key".into())
+            })?;
+            let run_value = pyodide.get(try_catch, run_key.into()).ok_or_else(|| {
+                PyRunnerError::Execution("pyodide.runPythonAsync is not available".into())
+            })?;
+            let run_fn = Local::<Function>::try_from(run_value).map_err(|_| {
+                PyRunnerError::Execution("pyodide.runPythonAsync is not a function".into())
+            })?;
+            let script_value = v8::String::new(try_catch, code).ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate async python snippet".into())
+            })?;
+            let value = run_fn
+                .call(try_catch, pyodide.into(), &[script_value.into()])
+                .ok_or_else(|| {
+                    let message = try_catch
+                        .exception()
+                        .and_then(|value| value.to_string(try_catch))
+                        .map(|s| s.to_rust_string_lossy(try_catch))
+                        .unwrap_or_else(|| "unknown exception".to_owned());
+                    let message = try_catch
+                        .stack_trace()
+                        .and_then(|value| value.to_string(try_catch))
+                        .map(|s| format!("{message}\n{}", s.to_rust_string_lossy(try_catch)))
+                        .unwrap_or(message);
+                    PyRunnerError::Execution(format!("async python snippet failed: {message}"))
+                })?;
+            let promise = Local::<Promise>::try_from(value).map_err(|_| {
+                PyRunnerError::Execution("pyodide.runPythonAsync did not return a Promise".into())
+            })?;
+            promise_handle = Some(v8::Global::new(try_catch, promise));
+            Ok(())
+        })?;
+
+        let promise_global = promise_handle.ok_or_else(|| {
+            PyRunnerError::Execution("missing runPythonAsync promise handle".into())
+        })?;
+
+        let mut execution = ExecutionOutput::success_without_payload();
+        let mut resolved_value: Option<v8::Global<v8::Value>> = None;
+
+        loop {
+            let outcome = self.with_context(|scope, _| -> Result<PromiseOutcome> {
+                let promise = v8::Local::new(scope, &promise_global);
+                match promise.state() {
+                    PromiseState::Pending => Ok(PromiseOutcome::Pending),
+                    PromiseState::Fulfilled => {
+                        let value = promise.result(scope);
+                        Ok(PromiseOutcome::Fulfilled(v8::Global::new(scope, value)))
+                    }
+                    PromiseState::Rejected => {
+                        let reason = promise.result(scope);
+                        let mut typ = "PythonAsyncError".to_string();
+                        let mut message = reason
+                            .to_string(scope)
+                            .map(|s| s.to_rust_string_lossy(scope))
+                            .unwrap_or_else(|| "python async snippet rejected".into());
+                        let mut stack: Option<String> = None;
+                        if let Some(object) = reason.to_object(scope) {
+                            if let Some(name_value) = object.get(
+                                scope,
+                                v8::String::new(scope, "name")
+                                    .ok_or_else(|| {
+                                        PyRunnerError::Execution(
+                                            "failed to allocate error name string".into(),
+                                        )
+                                    })?
+                                    .into(),
+                            ) {
+                                if let Some(name_str) = name_value.to_string(scope) {
+                                    typ = name_str.to_rust_string_lossy(scope);
+                                }
+                            }
+                            if let Some(message_value) = object.get(
+                                scope,
+                                v8::String::new(scope, "message")
+                                    .ok_or_else(|| {
+                                        PyRunnerError::Execution(
+                                            "failed to allocate error message string".into(),
+                                        )
+                                    })?
+                                    .into(),
+                            ) {
+                                if let Some(msg_str) = message_value.to_string(scope) {
+                                    message = msg_str.to_rust_string_lossy(scope);
+                                }
+                            }
+                            if let Some(stack_value) = object.get(
+                                scope,
+                                v8::String::new(scope, "stack")
+                                    .ok_or_else(|| {
+                                        PyRunnerError::Execution(
+                                            "failed to allocate error stack string".into(),
+                                        )
+                                    })?
+                                    .into(),
+                            ) {
+                                if let Some(stack_str) = stack_value.to_string(scope) {
+                                    stack = Some(stack_str.to_rust_string_lossy(scope));
+                                }
+                            }
+                        }
+                        Ok(PromiseOutcome::Rejected {
+                            typ,
+                            value: message,
+                            stack,
+                        })
+                    }
+                }
+            })?;
+
+            match outcome {
+                PromiseOutcome::Pending => {
+                    self.pump_event_loop()?;
+                }
+                PromiseOutcome::Fulfilled(value) => {
+                    resolved_value = Some(value);
+                    break;
+                }
+                PromiseOutcome::Rejected { typ, value, stack } => {
+                    execution.exception_type = Some(typ);
+                    execution.exception_value = Some(value);
+                    execution.traceback = stack;
+                    break;
+                }
+            }
+        }
+
+        if let Some(value_global) = resolved_value {
+            populate_execution_output(self, value_global, &mut execution)?;
+        }
+        execution.shared_buffers = self.with_context(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            drain_shared_buffers(scope, global)
+        })?;
+        execution.stdout = ctx_state.take_stdout();
+        execution.stderr = ctx_state.take_stderr();
+        Ok(execution)
+    }
+
+    /// Executes an upstream-style Selenium JavaScript snippet in the active Pyodide context.
+    pub fn run_js_snippet(&mut self, code: &str) -> Result<ExecutionOutput> {
+        enum InvocationResult {
+            Immediate(v8::Global<v8::Value>),
+            Promise(v8::Global<Promise>),
+            Exception {
+                typ: String,
+                value: String,
+                stack: Option<String>,
+            },
+        }
+
+        enum PromiseOutcome {
+            Pending,
+            Fulfilled(v8::Global<v8::Value>),
+            Rejected {
+                typ: String,
+                value: String,
+                stack: Option<String>,
+            },
+        }
+
+        let ctx_state = self.context_state.clone();
+        ctx_state.clear_console();
+
+        self.with_context(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let reset_key = v8::String::new(scope, "__aardvarkResetSharedBuffers").unwrap();
+            if let Some(reset_value) = global.get(scope, reset_key.into()) {
+                if let Ok(reset_fn) = Local::<Function>::try_from(reset_value) {
+                    let _ = reset_fn.call(scope, global.into(), &[]);
+                }
+            }
+            Ok(())
+        })?;
+
+        let source = js_snippet_wrapper(code);
+        let mut invocation: Option<InvocationResult> = None;
+
+        self.with_context(|scope, _| {
+            v8::tc_scope!(let try_catch, scope);
+            macro_rules! try_catch_details {
+                ($default_typ:expr, $default_message:expr) => {{
+                    let mut typ = $default_typ.to_string();
+                    let mut message = try_catch
+                        .exception()
+                        .and_then(|value| value.to_string(try_catch))
+                        .map(|s| s.to_rust_string_lossy(try_catch))
+                        .unwrap_or_else(|| $default_message.to_string());
+                    let mut stack: Option<String> = None;
+                    if let Some(object) = try_catch
+                        .exception()
+                        .and_then(|value| value.to_object(try_catch))
+                    {
+                        if let Some(name_value) = object.get(
+                            try_catch,
+                            v8::String::new(try_catch, "name")
+                                .ok_or_else(|| {
+                                    PyRunnerError::Execution(
+                                        "failed to allocate error name string".into(),
+                                    )
+                                })?
+                                .into(),
+                        ) {
+                            if let Some(name_str) = name_value.to_string(try_catch) {
+                                typ = name_str.to_rust_string_lossy(try_catch);
+                            }
+                        }
+                        if let Some(message_value) = object.get(
+                            try_catch,
+                            v8::String::new(try_catch, "message")
+                                .ok_or_else(|| {
+                                    PyRunnerError::Execution(
+                                        "failed to allocate error message string".into(),
+                                    )
+                                })?
+                                .into(),
+                        ) {
+                            if let Some(msg_str) = message_value.to_string(try_catch) {
+                                message = msg_str.to_rust_string_lossy(try_catch);
+                            }
+                        }
+                        if let Some(stack_value) = object.get(
+                            try_catch,
+                            v8::String::new(try_catch, "stack")
+                                .ok_or_else(|| {
+                                    PyRunnerError::Execution(
+                                        "failed to allocate error stack string".into(),
+                                    )
+                                })?
+                                .into(),
+                        ) {
+                            if let Some(stack_str) = stack_value.to_string(try_catch) {
+                                stack = Some(stack_str.to_rust_string_lossy(try_catch));
+                            }
+                        }
+                    }
+                    if stack.is_none() {
+                        stack = try_catch
+                            .stack_trace()
+                            .and_then(|value| value.to_string(try_catch))
+                            .map(|s| s.to_rust_string_lossy(try_catch));
+                    }
+                    (typ, message, stack)
+                }};
+            }
+
+            let global = try_catch.get_current_context().global(try_catch);
+            let pyodide = ctx_state
+                .pyodide_local(try_catch)
+                .ok_or_else(|| PyRunnerError::Execution("Pyodide is not loaded".into()))?;
+            let pyodide_key =
+                v8::String::new(try_catch, "__aardvarkCompatPyodide").ok_or_else(|| {
+                    PyRunnerError::Execution("failed to allocate Pyodide snippet key".into())
+                })?;
+            global.set(try_catch, pyodide_key.into(), pyodide.into());
+
+            let source_value = v8::String::new(try_catch, &source).ok_or_else(|| {
+                PyRunnerError::Execution("failed to allocate JavaScript snippet".into())
+            })?;
+            let resource_name = v8::String::new(try_catch, "aardvark-compat-run-js.js")
+                .ok_or_else(|| {
+                    PyRunnerError::Execution("failed to allocate JavaScript snippet name".into())
+                })?;
+            let origin = v8::ScriptOrigin::new(
+                try_catch,
+                resource_name.into(),
+                0,
+                0,
+                false,
+                0,
+                None,
+                false,
+                false,
+                false,
+                None,
+            );
+
+            let Some(script) = v8::Script::compile(try_catch, source_value, Some(&origin)) else {
+                let (typ, value, stack) = try_catch_details!("SyntaxError", "compile failed");
+                invocation = Some(InvocationResult::Exception { typ, value, stack });
+                return Ok(());
+            };
+
+            let Some(value) = script.run(try_catch) else {
+                let (typ, value, stack) =
+                    try_catch_details!("JavaScriptError", "javascript snippet failed");
+                invocation = Some(InvocationResult::Exception { typ, value, stack });
+                return Ok(());
+            };
+
+            if let Ok(promise) = v8::Local::<Promise>::try_from(value) {
+                invocation = Some(InvocationResult::Promise(v8::Global::new(
+                    try_catch, promise,
+                )));
+            } else {
+                invocation = Some(InvocationResult::Immediate(v8::Global::new(
+                    try_catch, value,
+                )));
+            }
+            Ok(())
+        })?;
+
+        let invocation = invocation.unwrap_or_else(|| InvocationResult::Exception {
+            typ: "JavaScriptError".to_string(),
+            value: "javascript snippet failed".to_string(),
+            stack: None,
+        });
+
+        let mut execution = ExecutionOutput::success_without_payload();
+
+        match invocation {
+            InvocationResult::Exception { typ, value, stack } => {
+                execution.exception_type = Some(typ);
+                execution.exception_value = Some(value);
+                execution.traceback = stack;
+            }
+            InvocationResult::Immediate(value_global) => {
+                populate_execution_output(self, value_global, &mut execution)?;
+            }
+            InvocationResult::Promise(promise_global) => {
+                let mut resolved_value: Option<v8::Global<v8::Value>> = None;
+
+                loop {
+                    let outcome = self.with_context(|scope, _| -> Result<PromiseOutcome> {
+                        let promise = v8::Local::new(scope, &promise_global);
+                        match promise.state() {
+                            PromiseState::Pending => Ok(PromiseOutcome::Pending),
+                            PromiseState::Fulfilled => {
+                                let value = promise.result(scope);
+                                Ok(PromiseOutcome::Fulfilled(v8::Global::new(scope, value)))
+                            }
+                            PromiseState::Rejected => {
+                                let reason = promise.result(scope);
+                                let (typ, value, stack) = javascript_value_error_details(
+                                    scope,
+                                    reason,
+                                    "JavaScriptError",
+                                    "javascript promise rejected",
+                                );
+                                Ok(PromiseOutcome::Rejected { typ, value, stack })
+                            }
+                        }
+                    })?;
+
+                    match outcome {
+                        PromiseOutcome::Pending => {
+                            self.pump_event_loop()?;
+                        }
+                        PromiseOutcome::Fulfilled(value) => {
+                            resolved_value = Some(value);
+                            break;
+                        }
+                        PromiseOutcome::Rejected { typ, value, stack } => {
+                            execution.exception_type = Some(typ);
+                            execution.exception_value = Some(value);
+                            execution.traceback = stack;
+                            break;
+                        }
+                    }
+                }
+
+                if let Some(value_global) = resolved_value {
+                    populate_execution_output(self, value_global, &mut execution)?;
+                }
+            }
+        }
+
+        execution.shared_buffers = self.with_context(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            drain_shared_buffers(scope, global)
+        })?;
+        execution.stdout = ctx_state.take_stdout();
+        execution.stderr = ctx_state.take_stderr();
+        Ok(execution)
+    }
+
     /// Compiles, instantiates, and evaluates an ES module sourced from the asset store.
     pub fn ensure_module(&mut self, specifier: &str) -> Result<()> {
         let specifier = normalize_specifier(specifier);
@@ -2694,6 +3140,110 @@ fn populate_execution_output(
 
         Ok(())
     })
+}
+
+fn js_snippet_wrapper(code: &str) -> String {
+    let mut source = String::from(
+        r#"
+(async (pyodide) => {
+  const sleep = globalThis.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const assert = (condition, message = "assertion failed") => {
+    const passed = typeof condition === "function" ? condition() : condition;
+    if (!passed) {
+      throw new Error(message);
+    }
+  };
+  assert.equal = (actual, expected, message = "assertion failed") => {
+    if (actual !== expected) {
+      throw new Error(message);
+    }
+  };
+  const errorMatches = (error, expectedName, expectedMessage) => {
+    if (expectedName) {
+      const actualName = String(error?.name ?? error?.constructor?.name ?? "");
+      if (!actualName.includes(expectedName)) {
+        return false;
+      }
+    }
+    if (expectedMessage) {
+      const actualMessage = String(error?.message ?? error ?? "");
+      if (!actualMessage.includes(expectedMessage)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const assertThrows = (fn, expectedName = "", expectedMessage = "") => {
+    try {
+      fn();
+    } catch (error) {
+      if (errorMatches(error, expectedName, expectedMessage)) {
+        return error;
+      }
+      throw new Error(`unexpected exception: ${error?.name ?? ""}: ${error?.message ?? error}`);
+    }
+    throw new Error("expected exception was not thrown");
+  };
+  const assertThrowsAsync = async (fn, expectedName = "", expectedMessage = "") => {
+    try {
+      await fn();
+    } catch (error) {
+      if (errorMatches(error, expectedName, expectedMessage)) {
+        return error;
+      }
+      throw new Error(`unexpected exception: ${error?.name ?? ""}: ${error?.message ?? error}`);
+    }
+    throw new Error("expected exception was not thrown");
+  };
+"#,
+    );
+    source.push_str(code);
+    source.push_str(
+        r#"
+})(globalThis.__aardvarkCompatPyodide);
+"#,
+    );
+    source
+}
+
+fn javascript_value_error_details<'a>(
+    scope: &mut PinScope<'a, '_>,
+    value: Local<'a, Value>,
+    default_typ: &str,
+    default_message: &str,
+) -> (String, String, Option<String>) {
+    let mut typ = default_typ.to_string();
+    let mut message = value
+        .to_string(scope)
+        .map(|s| s.to_rust_string_lossy(scope))
+        .unwrap_or_else(|| default_message.to_string());
+    let mut stack: Option<String> = None;
+
+    if let Some(object) = value.to_object(scope) {
+        if let Some(name_key) = v8::String::new(scope, "name") {
+            if let Some(name_value) = object.get(scope, name_key.into()) {
+                if let Some(name_str) = name_value.to_string(scope) {
+                    typ = name_str.to_rust_string_lossy(scope);
+                }
+            }
+        }
+        if let Some(message_key) = v8::String::new(scope, "message") {
+            if let Some(message_value) = object.get(scope, message_key.into()) {
+                if let Some(msg_str) = message_value.to_string(scope) {
+                    message = msg_str.to_rust_string_lossy(scope);
+                }
+            }
+        }
+        if let Some(stack_key) = v8::String::new(scope, "stack") {
+            if let Some(stack_value) = object.get(scope, stack_key.into()) {
+                if let Some(stack_str) = stack_value.to_string(scope) {
+                    stack = Some(stack_str.to_rust_string_lossy(scope));
+                }
+            }
+        }
+    }
+
+    (typ, message, stack)
 }
 
 fn run_python_entrypoint_script<'a>(

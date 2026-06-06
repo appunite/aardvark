@@ -9,6 +9,8 @@ organised so you can jump straight to the task at hand:
   formatting, linting, and running the test matrix.
 - [`runtime-internals.md`](runtime-internals.md) – deep dive into the Rust ↔ JS
   bridge, [Pyodide](https://pyodide.org/) boot sequence, and sandbox shims.
+- [`pyodide-implementation-status.md`](pyodide-implementation-status.md) –
+  current Pyodide version, local compatibility evidence, and known non-claims.
 - [`linux-v8-shared-archive.md`](linux-v8-shared-archive.md) – reproducible
   Linux `rusty_v8` archive builds for shared-library host packaging.
 
