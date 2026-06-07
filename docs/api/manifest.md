@@ -32,9 +32,12 @@
 
 Distribution profiles are selected before Pyodide/V8 isolate creation. They are not a per-call switch: warm states, overlays, and package caches are fingerprint-bound to the selected distribution. Use separate warmed pools for materially different profiles.
 
-> JavaScript runtime support is available as a preview: bundles run with a read-only filesystem
-> and manifest `packages` are ignored. Ship fully bundled JavaScript code; the runtime does not
-> resolve npm dependencies.
+> JavaScript runtime support is experimental. Bundles must be self-contained:
+> the runtime mounts bundled files and supports JSON/RawCtx invocation paths,
+> shared-buffer output, native fetch, and XMLHttpRequest-shaped calls through
+> the manifest network policy. It does not resolve npm packages, walk
+> `node_modules`, or download dependencies at invocation time. JavaScript
+> manifests must leave `packages` empty.
 
 ### `resources`
 
@@ -99,8 +102,9 @@ Distribution profiles are selected before Pyodide/V8 isolate creation. They are 
 }
 ```
 
-> Ship JavaScript bundles that already include dependencies (via esbuild, webpack, etc.).
-> The runtime does not resolve `node_modules` paths or download packages at invocation time.
+> Ship JavaScript bundles that already include dependencies (via esbuild,
+> webpack, etc.). The runtime does not resolve `node_modules` paths or download
+> packages at invocation time.
 
 ## Validation rules
 

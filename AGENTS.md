@@ -10,7 +10,7 @@
 ## Build, Test, and Development Commands
 - `cargo build -p aardvark-core`: compile the runtime library; run before editing JS shims to confirm bindings.
 - `cargo test --workspace`: run unit tests across all crates.
-- `cargo test -p integration-tests -- --nocapture`: run overlay hydration and pooling tests; requires `AARDVARK_PYODIDE_DIST_DIR` or the default staged full distribution path.
+- `cargo test -p integration-tests -- --nocapture`: run overlay snapshot/catalog tests; requires `AARDVARK_PYODIDE_DIST_DIR` or the default staged full distribution path.
 - `cargo fmt && cargo clippy --workspace --all-targets -- -D warnings`: enforce formatting and lint rules prior to commits.
 
 ## Coding Style & Naming Conventions
@@ -21,7 +21,8 @@
 ## Testing Guidelines
 - Rust tests use `cargo test`; place new unit tests beside implementation files and integration tests under `integration-tests/tests/` with descriptive filenames (e.g., `runtime_pool_and_outcome.rs`).
 - When modifying JS sandboxing, add or update Rust regression tests and run a
-  CLI smoke test; there is no standalone Node harness in-tree.
+  CLI smoke test. For Pyodide-facing compatibility work, also use the local
+  harness under `compat-tests/pyodide-node/`.
 - Ensure new features expose telemetry or policy changes via tests before merging.
 
 ## Commit & Pull Request Guidelines

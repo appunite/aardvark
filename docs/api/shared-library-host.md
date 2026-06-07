@@ -176,9 +176,9 @@ impl HostRuntime {
 }
 ```
 
-The exact exported functions are host-specific. The important part is that the
-host boundary stays outside `aardvark-core`; Aardvark supplies the runtime, not a
-one-size-fits-all foreign-function interface.
+The exact exported functions are host-specific. Keep that boundary outside
+`aardvark-core`: Aardvark supplies the runtime, while each host integration owns
+its ABI.
 
 ## Verification
 

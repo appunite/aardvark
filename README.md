@@ -1,22 +1,23 @@
 # Aardvark Runtime
 
-![Aardvark in the Bushveld, Limpopo](https://upload.wikimedia.org/wikipedia/commons/thumb/f/f0/Orycteropus_afer_175359469.jpg/1039px-Orycteropus_afer_175359469.jpg "By Kelly Abram - https://www.inaturalist.org/photos/175359469, CC BY 4.0, https://commons.wikimedia.org/w/index.php?curid=134253363")
+Aardvark is an embeddable runtime for executing Python and JavaScript bundles
+inside [V8](https://v8.dev/). Python runs through [Pyodide](https://pyodide.org/)
+inside the V8 isolate; JavaScript bundles run directly on the same V8 wrapper.
+Hosts provide ZIP bundles, staged Pyodide distributions, resource policies, and
+the process boundary.
 
-> The aardvark (/ˈɑːrdvɑːrk/ ARD-vark; Orycteropus afer) is a medium-sized, burrowing, nocturnal mammal native to Africa. The aardvark is the only living member of the genus Orycteropus, the family Orycteropodidae and the order Tubulidentata. It has a long proboscis, similar to a pig's snout, which is used to sniff out food.
->
-> -- [Wikipedia](https://en.wikipedia.org/wiki/Aardvark)
+The crate is still experimental. Public APIs, manifests, and runtime semantics
+may change, and this is not a production-hardening claim.
 
-Embedded multi-language runtime for executing sandboxed bundles inside [V8](https://v8.dev/), with hardened resource controls and structured diagnostics. The project takes clear inspiration from Cloudflare Python Workers while pursuing an embeddable library-first design for Rust hosts and host-owned shared-library adapters. **Aardvark is experimental software**: APIs, manifests, and runtime semantics may change without notice, and the system has not been hardened for production traffic yet.
-
-## Why Aardvark?
+## Capabilities
 
 - **Persistent isolates** – Keep Python warm between calls, reuse shared buffers, and avoid remounting bundles unless the code changes.
-- **Snapshot-friendly runtimes** – Reuse warm isolates across requests, carry overlay metadata with snapshots, and keep cold starts predictable.
-- **Deterministic sandboxing** – Enforce per-invocation budgets for wall time, CPU, heap, filesystem writes, and outbound network hosts.
+- **Warm snapshots** – Capture Pyodide state with package overlays and reject reuse when the staged distribution fingerprint changes.
+- **Sandbox policies** – Enforce per-invocation budgets for wall time, CPU, heap, filesystem writes, and outbound network hosts.
 - **Self-describing bundles** – Ship code, manifest, and dependency hints together as a ZIP; hosts can honour or override the manifest contract at runtime.
-- **First-class telemetry** – Every invocation emits structured diagnostics (stdout/stderr, exceptions, resource usage, policy violations, reset timings) that hosts can feed into their own observability stack.
-- **Runtime pooling** – Amortise startup cost by recycling isolates with predictable reset semantics.
-- **Dual-language engine (preview)** – Run JavaScript bundles alongside Python handlers using the same network/filesystem sandboxing. JavaScript support is currently read-only and expects bring-your-own modules.
+- **Structured diagnostics** – Every invocation returns stdout/stderr, exceptions, resource usage, policy violations, queue timing, and reset timing.
+- **Runtime pooling** – Amortise startup cost with bundle-aware pools, warmed hosts, and registry caches for repeated bundles.
+- **JavaScript runtime** – Run pre-bundled JavaScript modules alongside Python handlers. JavaScript supports the same manifest language selection, JSON/RawCtx invocation paths, shared-buffer output, and network policy path; it does not resolve npm packages or `node_modules`.
 
 ## Quick Start (CLI)
 
@@ -241,7 +242,7 @@ is maintainer documentation, not the integration entry point.
 
 ## Documentation
 
-- Architecture guidance lives under `docs/architecture/`. Start with `overview.md` for a top-down explanation, then branch into resource-limits, lifecycle/sandbox internals, and telemetry. The current feature plan is in `roadmap.md`.
+- Architecture guidance lives under `docs/architecture/`. Start with `overview.md`, then branch into lifecycle, sandboxing, packages/snapshots, and telemetry. The current feature plan is in `roadmap.md`.
 - API reference under `docs/api/` covers the manifest schema, Rust host integration, shared-library host integration, handler contracts, and diagnostics handling with examples.
 - Developer onboarding material is available in `docs/dev/` for contributors extending the project.
 - Performance notes and benchmark workflow live in `docs/perf/overview.md`.
@@ -250,7 +251,7 @@ is maintainer documentation, not the integration entry point.
 
 ## Publishing Notes
 
-The core library is published as `aardvark-core`. Before cutting any experimental build:
+The core library is published as `aardvark-core`. Before cutting a build:
 
 - Audit the bundled [Pyodide](https://pyodide.org/) version and rebuild snapshots if needed.
 - Decide whether to ship the CLI (`aardvark-cli`) alongside or keep it workspace-only.
@@ -261,12 +262,12 @@ The core library is published as `aardvark-core`. Before cutting any experimenta
 
 - Windows builds are not supported or tested.
 - Shared buffer handles expose zero-copy slices; request an owned copy only if you need to mutate or persist the data.
-- JavaScript support expects pre-bundled modules and does not resolve npm packages or access the filesystem for node_modules.
+- JavaScript bundles must be self-contained. The runtime mounts bundled files, but does not resolve npm packages, fetch external scripts, or walk `node_modules`.
 - Network sandboxing is allowlist-based per session; there is no per-request override yet.
 - Filesystem quota enforcement only covers the `/session` tree.
 - Streaming outputs and incremental logs are not available; handlers must return a single payload.
 - Warm snapshots are tied to the [Pyodide](https://pyodide.org/) distribution fingerprint used when you captured them; changing the distribution requires baking a new snapshot. When you assemble warm states manually, pass the matching fingerprint and only flag them as `overlay_preloaded` when the overlay was baked into the snapshot.
-- Runtime pool resets still execute synchronously on the thread that next checks out a runtime; there is no background reset worker yet.
+- Runtime pool cleanup/reset work is synchronous; there is no background reset worker yet.
 - API stability is not guaranteed; expect breaking changes while the runtime matures.
 
 ## License

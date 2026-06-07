@@ -13,4 +13,6 @@ The CLI (`aardvark-cli`) remains a development aid. Rust production hosts should
 link `aardvark-core` directly. Non-Rust hosts should load a host-owned Rust
 `cdylib` that links `aardvark-core`.
 
-Looking for the bigger picture? Architecture notes live under `../architecture/` (start with `overview.md`, `lifecycle.md`, and `sandboxing.md`). Future-facing work is tracked in `../architecture/roadmap.md`.
+Architecture notes live under `../architecture/`; start with `overview.md`,
+`lifecycle.md`, and `sandboxing.md`. Planned work is tracked in
+`../architecture/roadmap.md`.

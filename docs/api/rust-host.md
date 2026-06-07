@@ -1,6 +1,8 @@
 # Host Integration (Rust)
 
-This guide shows how to embed `aardvark-core` in a Rust service. It covers runtime setup, bundle execution, pooling, and error handling. Everything here is **experimental** and likely to change; use it for prototypes rather than production traffic.
+This guide shows how to embed `aardvark-core` in a Rust service. It covers
+runtime setup, bundle execution, pooling, and error handling. The API is still
+experimental; expect breaking changes before a stable release.
 
 The same surface runs JavaScript bundles: set `InvocationDescriptor::language` or add `"runtime": {"language": "javascript"}` to the manifest. JavaScript bundles must ship their own modules; the runtime never resolves npm packages.
 
@@ -587,7 +589,8 @@ fn manual(bytes: &[u8]) -> anyhow::Result<()> {
 
 ## Warm Snapshots for Faster Cold Starts
 
-If you want Cloudflare-style deploy-time hydration, capture a warm snapshot once and reuse it:
+To move package/import setup out of the request path, capture a warm snapshot
+once and reuse it:
 
 ```rust
 use aardvark_core::{Bundle, PyRuntime, PyRuntimeConfig};
@@ -719,5 +722,5 @@ Arguments are `[iterations] [payload_len]`. The harness warms the runtime, captu
 
 ## Stability & Release Readiness
 
-- Neither runtime path is production hardened. Expect breaking changes to manifests, descriptors, and configuration while we iterate.
+- Neither runtime path is declared production-ready. Expect breaking changes to manifests, descriptors, and configuration while we iterate.
 - The manifest schema is currently versioned as `1.0` but should be treated as provisional; schema bumps may happen before the schema is declared stable.

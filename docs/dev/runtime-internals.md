@@ -24,8 +24,8 @@ information about the moving parts you are likely to touch.
   the runtime thread; we rely on `v8::Locker` to guard isolates.
 - `JsRuntime` caches compiled modules ([Pyodide](https://pyodide.org/), bootstrap scripts) and exposes
   helpers for calling specific exported functions.
-- Errors from JS are converted into `PyRunnerError::Execution` with rich
-  context. When changing bindings, keep failure modes actionable.
+- Errors from JS are converted into `PyRunnerError::Execution` with context
+  from the thrown value. When changing bindings, keep failure modes actionable.
 
 ## Pyodide Bootstrap
 

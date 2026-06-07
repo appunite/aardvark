@@ -92,7 +92,7 @@ sequenceDiagram
 ## Isolation Gaps & Follow-ups
 
 - **Single-process boundary** – isolation depends on the host process.
-- **Network visibility** – DNS, connection metadata, and request bodies are not surfaced today. Follow-up: integrate a host-side proxy and attach richer telemetry events.
+- **Network visibility** – DNS, connection metadata, and request bodies are not surfaced today. Follow-up: integrate a host-side proxy and attach explicit telemetry events for those fields.
 - **Filesystem visibility** – quota enforcement covers byte counts only. We do not surface the list of mutated files; hosts should mount `/session` onto ephemeral storage until we add exposure.
 - **Crash containment** – a fatal trap forces isolate recreation but keeps the process alive. We still rely on host supervision to restart the process.
 - **Capability growth** – all native bridges must opt into the capability gate. Audit new host APIs for accidental exposure.

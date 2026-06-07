@@ -14,7 +14,8 @@ is already known.
 
 **When to choose JSON**
 
-- Rapid prototyping and simple payloads (numbers, strings, small objects).
+- Small payloads: numbers, strings, lists, maps, and ordinary request/response
+  objects.
 - Plain JSON request/response handlers that read `builtins.__aardvark_input`,
   or descriptor-bound handlers when positional arguments are required.
 - Cross-language integrations where clients already speak JSON.
@@ -64,7 +65,7 @@ RawCtx has two usage levels:
   `builtins.__aardvark_publish_buffer(id, data, metadata)`. This is the lowest
   overhead path for bundles that already own the binary protocol.
 
-**When RawCtx shines**
+**When to choose RawCtx**
 
 - High-throughput analytics workloads (NumPy/Pandas tensors, Arrow-like
   records) where copying gigabytes of data would dominate request time.
