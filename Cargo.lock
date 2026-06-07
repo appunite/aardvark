@@ -17,7 +17,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wasm-encoder",
- "zip",
 ]
 
 [[package]]

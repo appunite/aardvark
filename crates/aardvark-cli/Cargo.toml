@@ -20,7 +20,6 @@ hex = "0.4"
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11"
-zip.workspace = true
 
 [[bin]]
 name = "aardvark-cli"
