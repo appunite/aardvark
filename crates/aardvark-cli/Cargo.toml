@@ -15,17 +15,11 @@ anyhow.workspace = true
 clap = { version = "4.6", features = ["derive"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
-aardvark-core = { workspace = true, optional = true }
+aardvark-core = { workspace = true, optional = true, features = ["pyodide-staging"] }
 hex = "0.4"
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11"
-bzip2 = "0.6"
-tar = "0.4"
-tempfile = "3.27"
-ureq = "3.3"
-wasmparser.workspace = true
-zip.workspace = true
 
 [[bin]]
 name = "aardvark-cli"
@@ -33,4 +27,5 @@ path = "src/main.rs"
 required-features = ["runtime"]
 
 [dev-dependencies]
+tempfile = "3.27"
 wasm-encoder.workspace = true

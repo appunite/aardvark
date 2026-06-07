@@ -54,7 +54,31 @@ Aardvark Pyodide distribution, which combines the upstream Pyodide 0.29.4
 release with Aardvark adapter scripts and a manifest containing file hashes plus
 a compatibility fingerprint.
 
-Use the CLI helper:
+Downstream setup tools can stage assets directly from `aardvark-core` without
+installing `aardvark-cli`:
+
+```toml
+[dependencies]
+aardvark-core = { version = "=0.2.1", features = ["pyodide-staging"] }
+```
+
+```rust
+use aardvark_core::pyodide_distribution::{
+    stage_pyodide_distribution, PyodideDistributionStageOptions,
+    PyodideDistributionVariant,
+};
+
+let report = stage_pyodide_distribution(PyodideDistributionStageOptions {
+    variant: PyodideDistributionVariant::Full,
+    output_dir,
+    archive: None,
+    force: true,
+})?;
+println!("staged {}", report.compatibility_fingerprint);
+```
+
+The CLI helper remains available for local development and calls the same
+library API:
 
 ```
 cargo run -p aardvark-cli -- assets stage --variant full
@@ -62,6 +86,12 @@ PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -na
 test -n "$PYODIDE_DIST_DIR"
 cargo run -p aardvark-cli -- assets verify "$PYODIDE_DIST_DIR"
 ```
+
+The `pyodide-staging` feature gates the staging-only normal dependencies used
+for download, archive unpacking, temporary workspaces, and feature scanning. The
+core crate still embeds minimal Pyodide assets at build time through
+`crates/aardvark-core/build.rs`; use `AARDVARK_PYODIDE_ARCHIVE` or
+`AARDVARK_PYODIDE_DIR` when builds must avoid fetching the pinned core archive.
 
 Then set `AARDVARK_PYODIDE_DIST_DIR` or configure
 `PyRuntimeConfig::with_pyodide_dist_dir(...)` / `set_pyodide_dist_dir(...)`.

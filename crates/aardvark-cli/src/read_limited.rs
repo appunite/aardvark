@@ -37,11 +37,6 @@ pub(crate) fn read_file_limited(path: &Path, limit: u64, kind: &str) -> Result<V
     Ok(bytes)
 }
 
-pub(crate) fn read_text_file_limited(path: &Path, limit: u64, kind: &str) -> Result<String> {
-    let bytes = read_file_limited(path, limit, kind)?;
-    String::from_utf8(bytes).with_context(|| format!("{kind} {} is not UTF-8", path.display()))
-}
-
 pub(crate) fn read_utf8_limited<R: Read>(reader: R, limit: u64, kind: &str) -> Result<String> {
     let mut bytes = Vec::new();
     let mut limited = reader.take(limit.saturating_add(1));

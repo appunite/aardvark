@@ -13,6 +13,7 @@ description = "Runtime for executing sandboxed python bundles inside V8."
 [features]
 default = []
 docsrs = []
+pyodide-staging = ["dep:bzip2", "dep:tar", "dep:tempfile", "dep:wasmparser"]
 
 [dependencies]
 bytes.workspace = true
@@ -33,6 +34,10 @@ url.workspace = true
 walkdir.workspace = true
 blake3.workspace = true
 hdrhistogram.workspace = true
+bzip2 = { version = "0.6", optional = true }
+tar = { version = "0.4", optional = true }
+tempfile = { version = "3.27", optional = true }
+wasmparser = { workspace = true, optional = true }
 
 [build-dependencies]
 anyhow = "1.0"
@@ -46,7 +51,8 @@ ureq = "3.3"
 [dev-dependencies]
 anyhow.workspace = true
 tempfile = "3.27"
+wasm-encoder.workspace = true
 
 [package.metadata.docs.rs]
-features = ["docsrs"]
+features = ["docsrs", "pyodide-staging"]
 rustdoc-args = ["--cfg", "docsrs"]

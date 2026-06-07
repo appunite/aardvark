@@ -4,29 +4,24 @@ version = 4
 
 [[package]]
 name = "aardvark-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aardvark-core",
  "anyhow",
- "bzip2",
  "clap",
  "hex",
  "serde",
  "serde_json",
  "sha2",
- "tar",
  "tempfile",
  "tracing",
  "tracing-subscriber",
- "ureq",
  "wasm-encoder",
- "wasmparser",
- "zip",
 ]
 
 [[package]]
 name = "aardvark-compat-runner"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aardvark-core",
  "anyhow",
@@ -36,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "aardvark-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -59,6 +54,8 @@ dependencies = [
  "url",
  "v8",
  "walkdir",
+ "wasm-encoder",
+ "wasmparser",
  "zip",
 ]
 
