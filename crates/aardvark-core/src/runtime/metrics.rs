@@ -1,4 +1,4 @@
-pub(super) fn bytes_from_mb(value: u64) -> usize {
+pub(super) fn bytes_from_mib(value: u64) -> usize {
     const MIB: usize = 1024 * 1024;
     (value as usize).saturating_mul(MIB)
 }

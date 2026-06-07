@@ -55,7 +55,7 @@ impl AardvarkRuntime {
             "applying descriptor limits"
         );
 
-        let heap_limit_bytes = limits.heap_mb.map(bytes_from_mb);
+        let heap_limit_bytes = limits.heap_mb.map(bytes_from_mib);
         if let (Some(limit_bytes), Some(limit_mb)) = (heap_limit_bytes, limits.heap_mb) {
             let used_before = self.engine_mut().js_mut().heap_used_bytes();
             if used_before > limit_bytes {

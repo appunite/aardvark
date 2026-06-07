@@ -459,12 +459,12 @@ impl RuntimeContext {
         }
         match normalized {
             Some(ref path) => tracing::debug!(
-                target = "aardvark::packages",
+                target: "aardvark::packages",
                 path = %path.display(),
                 "runtime package root set"
             ),
             None => tracing::debug!(
-                target = "aardvark::packages",
+                target: "aardvark::packages",
                 "runtime package root cleared"
             ),
         }

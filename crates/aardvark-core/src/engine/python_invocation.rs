@@ -194,7 +194,9 @@ impl JsRuntime {
                     execution
                 };
             if collect_output_buffers {
-                execution.shared_buffers = drain_shared_buffers(scope, global)?;
+                execution
+                    .shared_buffers
+                    .extend(drain_shared_buffers(scope, global)?);
             }
             Ok(execution)
         })

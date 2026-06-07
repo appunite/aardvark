@@ -30,13 +30,31 @@ impl JsRuntime {
             .ok_or_else(|| {
                 PyRunnerError::Execution("failed to allocate filesystem mode value".into())
             })?;
-            let _ = policy.set(scope, mode_key.into(), mode_value.into());
+            let stored = policy
+                .set(scope, mode_key.into(), mode_value.into())
+                .ok_or_else(|| {
+                    PyRunnerError::Execution("failed to set filesystem mode policy".into())
+                })?;
+            if !stored {
+                return Err(PyRunnerError::Execution(
+                    "filesystem mode policy was not stored".into(),
+                ));
+            }
             if let Some(quota) = quota_bytes {
                 let quota_key = v8::String::new(scope, "quotaBytes").ok_or_else(|| {
                     PyRunnerError::Execution("failed to allocate filesystem quota key".into())
                 })?;
                 let quota_value = v8::Number::new(scope, quota as f64);
-                let _ = policy.set(scope, quota_key.into(), quota_value.into());
+                let stored = policy
+                    .set(scope, quota_key.into(), quota_value.into())
+                    .ok_or_else(|| {
+                        PyRunnerError::Execution("failed to set filesystem quota policy".into())
+                    })?;
+                if !stored {
+                    return Err(PyRunnerError::Execution(
+                        "filesystem quota policy was not stored".into(),
+                    ));
+                }
             }
             func.call(scope, global.into(), &[policy.into()])
                 .ok_or_else(|| {

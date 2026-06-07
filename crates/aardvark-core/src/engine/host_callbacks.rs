@@ -108,7 +108,7 @@ pub(super) fn record_buffer_event_callback(
         .unwrap_or_default();
     if event.is_empty() {
         warn!(
-            target = "aardvark::buffers",
+            target: "aardvark::buffers",
             "shared buffer event missing name"
         );
         rv.set(v8::undefined(scope).into());
@@ -122,8 +122,8 @@ pub(super) fn record_buffer_event_callback(
         .unwrap_or_default();
     if buffer_id.is_empty() {
         warn!(
-            target = "aardvark::buffers",
-            buffers.event = event.as_str(),
+            target: "aardvark::buffers",
+            buffers_event = event.as_str(),
             "shared buffer event missing id"
         );
         rv.set(v8::undefined(scope).into());
@@ -144,9 +144,9 @@ pub(super) fn record_buffer_event_callback(
                 metadata_json = Some(stringified.to_rust_string_lossy(scope));
             } else {
                 warn!(
-                    target = "aardvark::buffers",
-                    buffers.event = event.as_str(),
-                    buffers.id = buffer_id.as_str(),
+                    target: "aardvark::buffers",
+                    buffers_event = event.as_str(),
+                    buffers_id = buffer_id.as_str(),
                     "shared buffer metadata stringify failed"
                 );
             }
@@ -154,11 +154,11 @@ pub(super) fn record_buffer_event_callback(
     }
 
     info!(
-        target = "aardvark::buffers",
-        buffers.event = event.as_str(),
-        buffers.id = buffer_id.as_str(),
-        buffers.size = size,
-        buffers.metadata = metadata_json.as_deref(),
+        target: "aardvark::buffers",
+        buffers_event = event.as_str(),
+        buffers_id = buffer_id.as_str(),
+        buffers_size = size,
+        buffers_metadata = metadata_json.as_deref(),
         "shared buffer event"
     );
 
@@ -192,7 +192,7 @@ pub(super) fn filesystem_violation_callback(
         context_state.record_filesystem_violation(path_value, message);
     } else {
         warn!(
-            target = "aardvark::sandbox",
+            target: "aardvark::sandbox",
             "filesystem violation reported without runtime context"
         );
     }
@@ -245,10 +245,10 @@ pub(super) fn native_log_callback(
     if !message.is_empty() {
         match stream {
             ConsoleStream::Stdout => {
-                info!(target = "aardvark::js", "{}", message);
+                info!(target: "aardvark::js", "{}", message);
             }
             ConsoleStream::Stderr => {
-                warn!(target = "aardvark::js", "{}", message);
+                warn!(target: "aardvark::js", "{}", message);
             }
         }
     }

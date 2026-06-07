@@ -54,14 +54,14 @@ pub(in crate::engine) fn resolve_local_package_path(root: &Path, url: &str) -> O
 
     for candidate in attempts {
         tracing::debug!(
-            target = "aardvark::packages",
+            target: "aardvark::packages",
             path = %candidate.display(),
             exists = candidate.exists(),
             "checking local package candidate"
         );
         if candidate.exists() {
             tracing::debug!(
-                target = "aardvark::packages",
+                target: "aardvark::packages",
                 path = %candidate.display(),
                 "resolved local package path"
             );
@@ -71,7 +71,7 @@ pub(in crate::engine) fn resolve_local_package_path(root: &Path, url: &str) -> O
     if let Some(file_name) = as_path.file_name() {
         if let Some(found) = walk_for_file(root, file_name) {
             tracing::debug!(
-                target = "aardvark::packages",
+                target: "aardvark::packages",
                 path = %found.display(),
                 "resolved local package path via search"
             );

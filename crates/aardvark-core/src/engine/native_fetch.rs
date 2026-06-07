@@ -313,7 +313,7 @@ fn apply_native_fetch_options<B>(
     for (name, value) in headers {
         if is_forbidden_xhr_request_header(name) {
             warn!(
-                target = "aardvark::sandbox",
+                target: "aardvark::sandbox",
                 header = name.as_str(),
                 "ignoring forbidden XMLHttpRequest request header"
             );
@@ -391,7 +391,7 @@ pub(super) fn native_fetch_callback(
         match read_local_package_asset(&local_path) {
             Ok(body) => {
                 info!(
-                    target = "aardvark::js",
+                    target: "aardvark::js",
                     %url,
                     path = %local_path.display(),
                     "serving package from local directory"
@@ -420,7 +420,7 @@ pub(super) fn native_fetch_callback(
         }
     } else if is_pyodide_package_asset_url(&url) {
         warn!(
-            target = "aardvark::packages",
+            target: "aardvark::packages",
             %url,
             "Pyodide package asset missing from local distribution"
         );
@@ -439,7 +439,7 @@ pub(super) fn native_fetch_callback(
     let parsed = match Url::parse(&url) {
         Ok(value) => value,
         Err(err) => {
-            warn!(target = "aardvark::sandbox", %url, error = ?err, "network request rejected: invalid url");
+            warn!(target: "aardvark::sandbox", %url, error = ?err, "network request rejected: invalid url");
             throw_v8_error(scope, "network access denied");
             return;
         }
@@ -448,7 +448,7 @@ pub(super) fn native_fetch_callback(
     let host = match parsed.host_str() {
         Some(value) if !value.is_empty() => value.to_ascii_lowercase(),
         _ => {
-            warn!(target = "aardvark::sandbox", %url, "network request rejected: missing host");
+            warn!(target: "aardvark::sandbox", %url, "network request rejected: missing host");
             throw_v8_error(scope, "network access denied");
             return;
         }
@@ -481,8 +481,8 @@ pub(super) fn native_fetch_callback(
             }
         };
         warn!(
-            target = "aardvark::sandbox",
-            network.allowed = false,
+            target: "aardvark::sandbox",
+            network_allowed = false,
             %url,
             host = host.as_str(),
             port,
@@ -506,7 +506,7 @@ pub(super) fn native_fetch_callback(
         Err(err) => {
             let message_text = err.message();
             warn!(
-                target = "aardvark::sandbox",
+                target: "aardvark::sandbox",
                 %url,
                 error = message_text.as_str(),
                 "network request blocked by native fetch limit"
@@ -517,8 +517,8 @@ pub(super) fn native_fetch_callback(
     };
 
     info!(
-        target = "aardvark::sandbox",
-        network.allowed = true,
+        target: "aardvark::sandbox",
+        network_allowed = true,
         method = fetch_init.method.as_str(),
         %url,
         host = host.as_str(),
@@ -590,7 +590,7 @@ pub(super) fn native_fetch_callback(
         }
         other => {
             warn!(
-                target = "aardvark::sandbox",
+                target: "aardvark::sandbox",
                 method = other,
                 %url,
                 "network request rejected: unsupported http method"
@@ -633,7 +633,7 @@ pub(super) fn native_fetch_callback(
             let message_text =
                 NativeFetchLimitError::response_body(limit.saturating_add(1), limit).message();
             warn!(
-                target = "aardvark::sandbox",
+                target: "aardvark::sandbox",
                 %url,
                 error = message_text.as_str(),
                 "network response blocked by native fetch limit"

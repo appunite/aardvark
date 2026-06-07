@@ -288,7 +288,7 @@ fn verify_external_files(root: &Path, manifest: &PyodideDistributionManifest) ->
     let cache_key = external_verification_cache_key(root, manifest);
     if VERIFIED_EXTERNAL_DISTRIBUTIONS.lock().contains(&cache_key) {
         tracing::debug!(
-            target = "aardvark::packages",
+            target: "aardvark::packages",
             root = %root.display(),
             fingerprint = %manifest.compatibility_fingerprint,
             "using cached Pyodide distribution verification"

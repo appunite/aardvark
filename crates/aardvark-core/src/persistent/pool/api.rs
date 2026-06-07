@@ -240,16 +240,13 @@ impl BundlePool {
     /// Setting this to zero makes the pool lazy.
     pub fn set_desired_size(&self, desired_size: usize) -> Result<()> {
         {
-            let max_size = { self.inner.options.lock().max_size };
-            if desired_size > max_size {
+            let mut opts = self.inner.options.lock();
+            if desired_size > opts.max_size {
                 return Err(PyRunnerError::Validation(format!(
-                    "desired_size {desired_size} exceeds max_size {max_size}",
+                    "desired_size {desired_size} exceeds max_size {}",
+                    opts.max_size
                 )));
             }
-        }
-
-        {
-            let mut opts = self.inner.options.lock();
             opts.desired_size = desired_size;
         }
 
@@ -439,7 +436,11 @@ fn current_rss_kib() -> Option<u64> {
     let resident_pages: u64 = parts.next()?.parse().ok()?;
     // SAFETY: `sysconf(_SC_PAGESIZE)` has no pointer arguments and does not
     // impose Rust-side aliasing or initialization requirements.
-    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page_size <= 0 {
+        return None;
+    }
+    let page_size = page_size as u64;
     Some(resident_pages.saturating_mul(page_size) / 1024)
 }
 

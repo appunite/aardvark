@@ -35,7 +35,7 @@ use v8::{self, PinScope};
 pub use javascript::JavaScriptEngine;
 pub use python::PythonEngine;
 
-use metrics::{bytes_from_mb, ns_to_ms, thread_cpu_time_ns};
+use metrics::{bytes_from_mib, ns_to_ms, thread_cpu_time_ns};
 use watchdog::WallClockGuard;
 
 pub type PyRuntime = AardvarkRuntime;
@@ -500,7 +500,7 @@ impl AardvarkRuntime {
                             effective.push(capability);
                         } else {
                             warn!(
-                                target = "aardvark::sandbox",
+                                target: "aardvark::sandbox",
                                 runtime_id = self.runtime_id_str(),
                                 capability = capability.as_str(),
                                 "manifest requested capability not permitted by host configuration"

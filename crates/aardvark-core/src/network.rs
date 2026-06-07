@@ -190,7 +190,9 @@ impl HostPattern {
         }
         match &self.kind {
             HostPatternKind::Exact(expected) => host == expected,
-            HostPatternKind::WildcardSuffix(suffix) => host.ends_with(suffix),
+            HostPatternKind::WildcardSuffix(suffix) => host
+                .strip_suffix(suffix)
+                .is_some_and(|prefix| prefix.ends_with('.')),
         }
     }
 }
@@ -206,4 +208,31 @@ fn split_host_and_port(value: &str) -> (String, Option<u16>) {
         }
     }
     (value.to_owned(), None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NetworkDecision, NetworkPolicy};
+
+    #[test]
+    fn wildcard_patterns_only_match_subdomain_labels() {
+        let policy = NetworkPolicy::new(&["*.example.com".to_owned()], true);
+
+        assert_eq!(
+            policy.evaluate("api.example.com", None, true),
+            NetworkDecision::Allowed
+        );
+        assert_eq!(
+            policy.evaluate("deep.api.example.com", None, true),
+            NetworkDecision::Allowed
+        );
+        assert!(matches!(
+            policy.evaluate("example.com", None, true),
+            NetworkDecision::Denied(_)
+        ));
+        assert!(matches!(
+            policy.evaluate("notexample.com", None, true),
+            NetworkDecision::Denied(_)
+        ));
+    }
 }
