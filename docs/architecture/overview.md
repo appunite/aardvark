@@ -1,13 +1,19 @@
 # Architecture Overview
 
-This document introduces Aardvark’s execution model from the host’s point of view. It is written for engineers who need to embed the runtime, reason about the layering, or evaluate whether the current features satisfy a production workload. Want the five-minute version? Start with [`what-this-is.md`](what-this-is.md) and come back here for the deeper dive.
+This document describes Aardvark’s execution model from the host’s point of
+view. It is for engineers embedding the runtime, checking the layering, or
+deciding whether the current feature set fits a workload. For a shorter
+overview, start with [`what-this-is.md`](what-this-is.md).
 
 ## System Goals
 
-- Provide deterministic, embeddable runtimes (Python via [Pyodide](https://pyodide.org/) today, JavaScript via a [V8](https://v8.dev/) embed) without shipping a browser.
-- Allow hosts to preload dependencies (via manifests, overlays, and snapshots) so cold-start cost stays predictable.
+- Provide embeddable runtimes (Python via [Pyodide](https://pyodide.org/),
+  JavaScript via [V8](https://v8.dev/)) without shipping a browser.
+- Let hosts move dependency and package setup into manifests, overlays,
+  snapshots, warmed pools, and warmed-host registries.
 - Enforce resource limits inside the same process: CPU, wall time, heap, filesystem writes, and outbound network access.
-- Keep the host-facing API small enough for Rust, but expose structured diagnostics so other host languages can wrap it later.
+- Keep the public Rust API narrow enough for direct hosts while leaving a clear
+  boundary for host-owned shared-library adapters.
 - Surface reset timings and sandbox telemetry so pooling strategies remain observable without tracing every call.
 
 ## Layers at a Glance
@@ -71,8 +77,12 @@ sequenceDiagram
 
 - **[Pyodide](https://pyodide.org/) inside [V8](https://v8.dev/)** – Running Pyodide in V8 lets us reuse the same WASM module across invocations, keep snapshots small, and apply V8’s tooling (heap statistics, isolate limits) to Python workloads. The JavaScript engine reuses the same embed without the Pyodide layer, making cross-language behaviour consistent.
 - **Descriptor-first contract** – Manifests are optional at runtime. Hosts can provide `InvocationDescriptor`s directly when they need to override limits or use fully dynamic pipelines. Manifests exist to make bundles self-describing for less opinionated hosts.
-- **“Everything is a bundle”** – Packages, manifests, and entrypoints travel together inside a single ZIP. This keeps the host API simple and avoids filesystem mutation outside the sandbox when code is deployed.
-- **Telemetry as a first-class product** – Diagnostics always attach CPU, filesystem, network telemetry, queue wait durations (if pooled), reset summaries, and heap stats even when the invocation fails. Hosts can surface policy violations without parsing logs.
+- **Bundle as deployment unit** – Manifests, entrypoints, and static files travel
+  together inside a ZIP. Python package files come from the staged Pyodide
+  distribution, not from network downloads during invocation.
+- **Diagnostics on every invocation** – Outcomes include CPU, filesystem,
+  network, queue wait, reset, heap, and RSS fields where the platform can report
+  them. Hosts can detect policy violations without parsing logs.
 - **Reset visibility** – Each invocation records how the runtime was reset (recreate vs in-place), how long it took, and which engine generation served the handler, making pool behaviour observable without diving into logs.
 
 ## Current Limitations

@@ -58,8 +58,9 @@ runtime. The following steps get you ready to develop locally.
 
 - `crates/aardvark-core/` – the runtime library and the bulk of the logic.
 - `crates/aardvark-cli/` – developer CLI wrapper around the core library.
-- `integration-tests/` – slow tests that exercise TarFS overlays and runtime
-  pooling.
+- `integration-tests/` – slow tests for snapshot overlays and the overlay
+  catalog. Pool and warmed-host coverage lives mostly under
+  `crates/aardvark-core/tests/`.
 - `docs/` – public and developer documentation.
 - `internal_docs/` – historical research notes (ignored in git).
 - `scripts/` – utility scripts for asset and overlay maintenance.

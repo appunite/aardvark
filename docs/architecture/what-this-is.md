@@ -1,6 +1,7 @@
 # What This Runtime Actually Does
 
-New to Aardvark? Start here. This doc gives you the mental model for how a bundle of Python or JavaScript ends up running safely inside your service.
+Start here for the runtime shape: how a Python or JavaScript bundle gets from a
+ZIP file to a V8 isolate, and where the host boundary sits.
 
 ## Big Picture
 
@@ -22,11 +23,11 @@ graph LR
     Core --> Host
 ```
 
-### Layers in plain English
+### Layers
 
 1. **Host (you)** – Link `aardvark-core` and decide when to prepare/run bundles.
 2. **Core runtime** – Rust code that builds sessions, enforces policies, and collects telemetry.
-3. **[V8](https://v8.dev/)** – Acts as the sandbox shell; each isolate keeps guest state contained.
+3. **[V8](https://v8.dev/)** – Owns the isolate and the JavaScript execution context.
 4. **[Pyodide](https://pyodide.org/) WASM + shims** – WebAssembly binary plus JavaScript glue that exposes filesystem/network guards to the interpreter.
 5. **CPython** – The actual Python VM running inside Pyodide.
 6. **Bundle entrypoint** – The function from your ZIP bundle (`module:function`) returning JSON, RawCtx buffers, or nothing.
@@ -52,11 +53,16 @@ sequenceDiagram
     Core->>V8: reset or recycle isolate
 ```
 
-## Why This Encapsulation Works
+## Isolation Model
 
-- **Single process, many guards** – Even though everything runs inside one process, [V8](https://v8.dev/) isolates, WebAssembly sandboxes, and our JS shims combine to keep guest code deterministic.
-- **Warm isolation** – Pooling isolates means you reuse the heavy parts ([Pyodide](https://pyodide.org/) init, imports) without violating sandbox rules.
-- **Policy enforcement** – Filesystem/network/hook checks live in the JS shims *and* are mirrored in Rust diagnostics so hosts can alert/kill misbehaving bundles.
+- **Single process** – V8 isolates, WebAssembly, and JS shims are the in-process
+  guard rails. They are not a substitute for a process, container, or VM
+  boundary.
+- **Warm reuse** – Pools and warmed hosts reuse Pyodide init, package imports,
+  and handler preparation without changing the bundle fingerprint or active
+  distribution profile.
+- **Policy enforcement** – Filesystem, network, and host-hook checks live in the
+  JS shims and are mirrored in Rust diagnostics.
 
 ## What You Need To Deploy It
 
@@ -65,4 +71,5 @@ sequenceDiagram
 - Decide on invocation strategy: JSON (serde-friendly) or RawCtx (zero-copy buffers).
 - Monitor `ExecutionOutcome.diagnostics` for policy hits; guard rails are surfaced there first.
 
-When you’re ready for more depth, head back to `docs/architecture/overview.md` and `docs/architecture/lifecycle.md`.
+For the full execution path, see `docs/architecture/overview.md` and
+`docs/architecture/lifecycle.md`.

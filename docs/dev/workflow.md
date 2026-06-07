@@ -38,13 +38,21 @@ the daily workflow.
   AARDVARK_PYODIDE_DIST_DIR="$PYODIDE_DIST_DIR" \
     cargo test --workspace --exclude integration-tests
   ```
-- Integration tests:
+- Overlay/catalog integration tests:
   ```bash
   cargo test -p integration-tests -- --nocapture
   ```
   These will mount real overlay caches. Ensure `AARDVARK_PYODIDE_DIST_DIR`
   points at a verified Aardvark Pyodide distribution (or run
   `cargo run -p aardvark-cli -- assets stage --variant full` beforehand).
+
+- Local Pyodide compatibility harness:
+  ```bash
+  python3 compat-tests/pyodide-node/run_local.py --version 0.29.4
+  python3 compat-tests/pyodide-node/run_package_imports.py --version 0.29.4
+  ```
+  This is a local Node-shaped Pyodide parity check, not a CI gate and not a
+  browser conformance suite.
 
 ### Smoke Testing the CLI
 
@@ -64,8 +72,9 @@ Set `RUST_LOG=aardvark::telemetry=info` to verify tracing and sandbox telemetry 
 - Keep the assets ASCII-only to simplify embedding.
 - After changes, rebuild the core crate. JS assets are embedded through
   `include_str!` or copied into generated [Pyodide](https://pyodide.org/) assets by `build.rs`.
-- There is no standalone Node test harness in-tree today. Cover behavioural
-  changes with Rust regression tests and run a CLI smoke test.
+- There is no root npm lint/unit harness for the embedded JS assets. Cover
+  behavioural changes with Rust regression tests, the CLI smoke path, and the
+  local Pyodide compatibility harness when Pyodide-facing behaviour changes.
 
 ## Manifest Schema Updates
 
