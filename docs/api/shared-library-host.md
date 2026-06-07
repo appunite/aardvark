@@ -119,7 +119,7 @@ The shared object should be a normal Rust crate:
 crate-type = ["cdylib"]
 
 [dependencies]
-aardvark-core = "0.1.1"
+aardvark-core = "0.2.0"
 anyhow = "1"
 ```
 
