@@ -131,6 +131,11 @@ fn module_path_for_entrypoint(entrypoint: &str) -> Result<(String, Vec<String>)>
             init_modules.push(format!("{prefix}/__init__.py"));
         }
     }
+    let Some(module_filename) = components.last() else {
+        return Err(PyRunnerError::Manifest(
+            "entrypoint must specify a module".into(),
+        ));
+    };
     let module_path = format!(
         "{}{}.py",
         if components.len() > 1 {
@@ -138,7 +143,7 @@ fn module_path_for_entrypoint(entrypoint: &str) -> Result<(String, Vec<String>)>
         } else {
             String::new()
         },
-        components.last().unwrap()
+        module_filename
     );
     Ok((module_path, init_modules))
 }

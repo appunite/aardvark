@@ -122,4 +122,4 @@ Distribution profiles are selected before Pyodide/V8 isolate creation. They are 
 
 - Schema versioning is exact today: the runtime accepts `schemaVersion: "1.0"`.
   Future schema versions require explicit parser and validation changes.
-- There is no manifest field for describing output payloads beyond the descriptor metadata; hosts should rely on descriptors for now.
+- There is no manifest field for describing output payloads beyond the descriptor metadata; hosts should rely on descriptors as the output contract.

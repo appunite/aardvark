@@ -15,8 +15,18 @@ fn pyodide_dist_dir() -> PathBuf {
     if let Some(dir) = env::var_os("AARDVARK_PYODIDE_DIST_DIR") {
         PathBuf::from(dir)
     } else {
-        workspace_root().join(".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full")
+        workspace_root()
+            .join(".aardvark/pyodide-distributions")
+            .join(default_pyodide_dist_dir_name())
     }
+}
+
+fn default_pyodide_dist_dir_name() -> String {
+    format!(
+        "aardvark-{}-pyodide-v{}-full",
+        aardvark_core::AARDVARK_VERSION,
+        aardvark_core::pyodide::PYODIDE_VERSION
+    )
 }
 
 fn workspace_root() -> &'static Path {

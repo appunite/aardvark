@@ -87,6 +87,21 @@
             "httpsOnly": {
               "type": "boolean",
               "default": true
+            },
+            "maxRequestBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum native fetch request body size in bytes."
+            },
+            "maxResponseBytes": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum native fetch response body size in bytes."
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Per-request native fetch timeout in milliseconds."
             }
           }
         },

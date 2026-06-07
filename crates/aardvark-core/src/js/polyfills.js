@@ -511,9 +511,13 @@ if (typeof globalThis.XMLHttpRequest !== "function") {
     }
 
     if (/^https?:/i.test(href) && typeof globalThis.__pyRunnerNativeFetch === "function") {
-      const response = globalThis.__pyRunnerNativeFetch(href, init);
-      if (response) {
-        return response;
+      try {
+        const response = globalThis.__pyRunnerNativeFetch(href, init);
+        if (response) {
+          return response;
+        }
+      } catch (err) {
+        throw createXhrError("NetworkError", err?.message ?? String(err));
       }
     }
 

@@ -112,6 +112,15 @@ pub struct ManifestNetworkResources {
     /// Whether HTTPS is required for outbound requests (defaults to `true`).
     #[serde(default = "ManifestNetworkResources::default_https_only")]
     pub https_only: bool,
+    /// Maximum request body bytes accepted by native fetch.
+    #[serde(default)]
+    pub max_request_bytes: Option<u64>,
+    /// Maximum response body bytes accepted by native fetch.
+    #[serde(default)]
+    pub max_response_bytes: Option<u64>,
+    /// Per-request native fetch timeout in milliseconds.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
 }
 
 impl Default for ManifestNetworkResources {
@@ -119,6 +128,9 @@ impl Default for ManifestNetworkResources {
         Self {
             allow: Vec::new(),
             https_only: true,
+            max_request_bytes: None,
+            max_response_bytes: None,
+            timeout_ms: None,
         }
     }
 }
@@ -321,6 +333,21 @@ impl ManifestResources {
                 }
             }
             network.allow = normalized;
+            if matches!(network.max_request_bytes, Some(0)) {
+                return Err(PyRunnerError::Manifest(
+                    "resources.network.maxRequestBytes must be positive when specified".into(),
+                ));
+            }
+            if matches!(network.max_response_bytes, Some(0)) {
+                return Err(PyRunnerError::Manifest(
+                    "resources.network.maxResponseBytes must be positive when specified".into(),
+                ));
+            }
+            if matches!(network.timeout_ms, Some(0)) {
+                return Err(PyRunnerError::Manifest(
+                    "resources.network.timeoutMs must be positive when specified".into(),
+                ));
+            }
         }
 
         if let Some(filesystem) = &self.filesystem {
@@ -360,7 +387,7 @@ mod tests {
     #[test]
     fn manifest_round_trip() {
         let json = format!(
-            "{{\n            \"schemaVersion\": \"1.0\",\n            \"entrypoint\": \"main:run\",\n            \"packages\": [\"Pandas\", \"numpy\"],\n            \"runtime\": {{\"language\": \"python\", \"pyodide\": {{\"version\": \"{}\"}}}},\n            \"resources\": {{\n                \"cpu\": {{\"defaultLimitMs\": 5000}},\n                \"network\": {{\"allow\": [\"Example.com\", \"api.example.com\"], \"httpsOnly\": true}},\n                \"filesystem\": {{\"mode\": \"readWrite\", \"quotaBytes\": 1048576}},\n                \"hostCapabilities\": [\"rawctx_buffers\", \"rawctx_buffers\"]\n            }}\n        }}",
+            "{{\n            \"schemaVersion\": \"1.0\",\n            \"entrypoint\": \"main:run\",\n            \"packages\": [\"Pandas\", \"numpy\"],\n            \"runtime\": {{\"language\": \"python\", \"pyodide\": {{\"version\": \"{}\"}}}},\n            \"resources\": {{\n                \"cpu\": {{\"defaultLimitMs\": 5000}},\n                \"network\": {{\"allow\": [\"Example.com\", \"api.example.com\"], \"httpsOnly\": true, \"maxRequestBytes\": 1024, \"maxResponseBytes\": 2048, \"timeoutMs\": 3000}},\n                \"filesystem\": {{\"mode\": \"readWrite\", \"quotaBytes\": 1048576}},\n                \"hostCapabilities\": [\"rawctx_buffers\", \"rawctx_buffers\"]\n            }}\n        }}",
             PYODIDE_VERSION
         );
 
@@ -381,6 +408,9 @@ mod tests {
             vec!["Example.com".to_string(), "api.example.com".to_string()]
         );
         assert!(network.https_only);
+        assert_eq!(network.max_request_bytes, Some(1024));
+        assert_eq!(network.max_response_bytes, Some(2048));
+        assert_eq!(network.timeout_ms, Some(3000));
         let filesystem = resources.filesystem.as_ref().expect("filesystem present");
         assert_eq!(filesystem.mode, Some(ManifestFilesystemMode::ReadWrite));
         assert_eq!(filesystem.quota_bytes, Some(1_048_576));
@@ -485,6 +515,22 @@ mod tests {
             "resources": {
                 "cpu": {
                     "defaultLimitMs": 0
+                }
+            }
+        }"#;
+        let err = BundleManifest::from_bytes(json.as_bytes()).unwrap_err();
+        assert!(matches!(err, PyRunnerError::Manifest(_)));
+    }
+
+    #[test]
+    fn manifest_rejects_zero_network_limits() {
+        let json = r#"{
+            "schemaVersion": "1.0",
+            "entrypoint": "main:run",
+            "resources": {
+                "network": {
+                    "allow": ["api.example.com"],
+                    "maxRequestBytes": 0
                 }
             }
         }"#;

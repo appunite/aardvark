@@ -1,0 +1,17 @@
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+    # Transitive through v8 149.2.0; keep new advisories denied while upstream resolves paste.
+    "RUSTSEC-2024-0436",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

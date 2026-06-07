@@ -108,10 +108,9 @@ def _random_before_first_request(_random):
 @contextmanager
 def numpy_random_context(numpy_random):
     """numpy.random doesn't call getentropy() itself, but we want to block calls
-    that might use the bad seed.
-
-    TODO: Maybe there are more calls we can whitelist?
-    TODO: Is it not enough to just block numpy.random.mtrand calls?
+    that might use the bad seed. The allowlist stays deliberately narrow until
+    additional NumPy random entrypoints are proven safe under this import
+    context.
     """
     yield
     # Calling default_rng() with a given seed is fine, calling it without a seed

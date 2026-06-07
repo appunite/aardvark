@@ -7,10 +7,11 @@ use crate::pyodide::PYODIDE_VERSION;
 use crate::runtime::PyRuntime;
 use crate::runtime_language::RuntimeLanguage;
 use crate::BundleManifest;
+use parking_lot::Mutex;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 pub const DEFAULT_PYODIDE_DISTRIBUTION_PROFILE: &str = "default";
 
@@ -27,12 +28,12 @@ pub struct SnapshotConfig {
 impl SnapshotConfig {
     /// Clears any cached snapshot bytes.
     pub fn clear_cache(&self) {
-        let mut guard = self.cache.bytes.lock().unwrap();
+        let mut guard = self.cache.bytes.lock();
         *guard = None;
     }
 
     pub(crate) fn cached_bytes(&self) -> Option<CachedSnapshot> {
-        self.cache.bytes.lock().unwrap().clone()
+        self.cache.bytes.lock().clone()
     }
 
     pub(crate) fn store_cached_bytes(
@@ -40,7 +41,7 @@ impl SnapshotConfig {
         bytes: Arc<[u8]>,
         compatibility_fingerprint: Option<&str>,
     ) {
-        let mut guard = self.cache.bytes.lock().unwrap();
+        let mut guard = self.cache.bytes.lock();
         *guard = Some(CachedSnapshot {
             bytes,
             compatibility_fingerprint: compatibility_fingerprint.map(ToOwned::to_owned),
@@ -81,7 +82,7 @@ pub(crate) struct CachedSnapshot {
 
 impl fmt::Debug for SnapshotCache {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let cached = self.bytes.lock().unwrap().as_ref().map(|snapshot| {
+        let cached = self.bytes.lock().as_ref().map(|snapshot| {
             (
                 snapshot.bytes.len(),
                 snapshot.compatibility_fingerprint.clone(),

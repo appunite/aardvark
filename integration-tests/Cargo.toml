@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [dev-dependencies]
+aardvark-core.workspace = true
 assert_cmd = "2.2"
 tempfile = "3.27"
 serde_json = "1.0"

@@ -3,7 +3,7 @@
 .DEFAULT_GOAL := help
 
 # Default location for the staged Aardvark Pyodide distribution.
-AARDVARK_VERSION ?= 0.1.1
+AARDVARK_VERSION ?= $(shell cargo pkgid -p aardvark-core | sed 's/.*\#//')
 PYODIDE_DIST_DIR ?= $(PWD)/.aardvark/pyodide-distributions/aardvark-$(AARDVARK_VERSION)-pyodide-v$(PYODIDE_VERSION)-full
 ITERATIONS ?= 25
 PERF_JSON ?= target/perf/results.json

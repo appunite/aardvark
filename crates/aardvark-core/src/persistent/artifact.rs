@@ -156,6 +156,7 @@ mod tests {
                 network: Some(ManifestNetworkResources {
                     allow: vec!["Api.Example.com".to_string()],
                     https_only: false,
+                    ..ManifestNetworkResources::default()
                 }),
                 filesystem: Some(ManifestFilesystemResources {
                     mode: Some(ManifestFilesystemMode::ReadWrite),

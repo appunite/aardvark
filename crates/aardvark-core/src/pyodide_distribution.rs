@@ -8,11 +8,15 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub const DISTRIBUTION_MANIFEST: &str = "aardvark-pyodide-dist.json";
+const MAX_EXTERNAL_BINARY_ASSET_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_EXTERNAL_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_EXTERNAL_TEXT_ASSET_BYTES: u64 = 256 * 1024 * 1024;
 
 static VERIFIED_EXTERNAL_DISTRIBUTIONS: Lazy<Mutex<BTreeSet<String>>> =
     Lazy::new(|| Mutex::new(BTreeSet::new()));
@@ -152,12 +156,11 @@ impl PyodideDistribution {
     pub fn external(root: impl AsRef<Path>) -> Result<Self> {
         let root = normalize_path(root.as_ref());
         let manifest_path = root.join(DISTRIBUTION_MANIFEST);
-        let raw = fs::read_to_string(&manifest_path).map_err(|err| {
-            PyRunnerError::Init(format!(
-                "failed to read Pyodide distribution manifest {}: {err}",
-                manifest_path.display()
-            ))
-        })?;
+        let raw = read_text_file_limited(
+            &manifest_path,
+            MAX_EXTERNAL_MANIFEST_BYTES,
+            "Pyodide distribution manifest",
+        )?;
         let manifest: PyodideDistributionManifest = serde_json::from_str(&raw).map_err(|err| {
             PyRunnerError::Init(format!(
                 "failed to parse Pyodide distribution manifest {}: {err}",
@@ -212,26 +215,24 @@ impl PyodideDistribution {
     pub fn read_text_asset(&self, name: &str) -> Result<Arc<str>> {
         match &self.source {
             DistributionSource::Embedded => embedded_text_asset(name).map(Arc::<str>::from),
-            DistributionSource::External { root } => read_external_text_asset(
-                root,
-                self.external_cache_key
-                    .as_deref()
-                    .expect("external distribution should have a cache key"),
-                name,
-            ),
+            DistributionSource::External { root } => {
+                let cache_key = self.external_cache_key.as_deref().ok_or_else(|| {
+                    PyRunnerError::Init("external Pyodide distribution missing cache key".into())
+                })?;
+                read_external_text_asset(root, cache_key, name)
+            }
         }
     }
 
     pub fn read_binary_asset(&self, name: &str) -> Result<Arc<[u8]>> {
         match &self.source {
             DistributionSource::Embedded => embedded_binary_asset(name).map(Arc::<[u8]>::from),
-            DistributionSource::External { root } => read_external_binary_asset(
-                root,
-                self.external_cache_key
-                    .as_deref()
-                    .expect("external distribution should have a cache key"),
-                name,
-            ),
+            DistributionSource::External { root } => {
+                let cache_key = self.external_cache_key.as_deref().ok_or_else(|| {
+                    PyRunnerError::Init("external Pyodide distribution missing cache key".into())
+                })?;
+                read_external_binary_asset(root, cache_key, name)
+            }
         }
     }
 }
@@ -342,12 +343,7 @@ fn read_external_text_asset(root: &Path, distribution_key: &str, name: &str) -> 
     }
 
     let path = root.join(name);
-    let text = fs::read_to_string(&path).map_err(|err| {
-        PyRunnerError::Init(format!(
-            "failed to read Pyodide text asset {}: {err}",
-            path.display()
-        ))
-    })?;
+    let text = read_text_file_limited(&path, MAX_EXTERNAL_TEXT_ASSET_BYTES, "Pyodide text asset")?;
     let text = Arc::<str>::from(text);
     let mut cache = EXTERNAL_TEXT_ASSET_CACHE.lock();
     let cached = cache.entry(cache_key).or_insert_with(|| text.clone());
@@ -365,26 +361,81 @@ fn read_external_binary_asset(
     }
 
     let path = root.join(name);
-    let bytes = fs::read(&path).map_err(|err| {
-        PyRunnerError::Init(format!(
-            "failed to read Pyodide binary asset {}: {err}",
-            path.display()
-        ))
-    })?;
+    let bytes = read_file_limited(
+        &path,
+        MAX_EXTERNAL_BINARY_ASSET_BYTES,
+        "Pyodide binary asset",
+    )?;
     let bytes = Arc::<[u8]>::from(bytes.into_boxed_slice());
     let mut cache = EXTERNAL_BINARY_ASSET_CACHE.lock();
     let cached = cache.entry(cache_key).or_insert_with(|| bytes.clone());
     Ok(cached.clone())
 }
 
-fn sha256_file(path: &Path) -> Result<String> {
-    let bytes = fs::read(path).map_err(|err| {
+fn read_text_file_limited(path: &Path, limit: u64, kind: &str) -> Result<String> {
+    let bytes = read_file_limited(path, limit, kind)?;
+    String::from_utf8(bytes).map_err(|err| {
         PyRunnerError::Init(format!(
-            "failed to read Pyodide distribution file {}: {err}",
+            "failed to read {kind} {} as UTF-8: {err}",
+            path.display()
+        ))
+    })
+}
+
+fn read_file_limited(path: &Path, limit: u64, kind: &str) -> Result<Vec<u8>> {
+    let file = File::open(path).map_err(|err| {
+        PyRunnerError::Init(format!("failed to open {kind} {}: {err}", path.display()))
+    })?;
+    let metadata = file.metadata().map_err(|err| {
+        PyRunnerError::Init(format!("failed to stat {kind} {}: {err}", path.display()))
+    })?;
+    let len = metadata.len();
+    if len > limit {
+        return Err(PyRunnerError::Init(format!(
+            "refusing to read {kind} {}: {} bytes exceeds the {} byte limit",
+            path.display(),
+            len,
+            limit
+        )));
+    }
+
+    let mut bytes = Vec::with_capacity(len.min(8 * 1024 * 1024) as usize);
+    let mut limited = file.take(limit.saturating_add(1));
+    limited.read_to_end(&mut bytes).map_err(|err| {
+        PyRunnerError::Init(format!("failed to read {kind} {}: {err}", path.display()))
+    })?;
+    if bytes.len() as u64 > limit {
+        return Err(PyRunnerError::Init(format!(
+            "{kind} {} exceeded the {} byte limit while reading",
+            path.display(),
+            limit
+        )));
+    }
+    Ok(bytes)
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut file = File::open(path).map_err(|err| {
+        PyRunnerError::Init(format!(
+            "failed to open Pyodide distribution file {}: {err}",
             path.display()
         ))
     })?;
-    Ok(Sha256::digest(&bytes).encode_hex::<String>())
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 131_072];
+    loop {
+        let read = file.read(&mut buffer).map_err(|err| {
+            PyRunnerError::Init(format!(
+                "failed to read Pyodide distribution file {}: {err}",
+                path.display()
+            ))
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().encode_hex::<String>())
 }
 
 fn normalize_sha256(value: &str) -> String {

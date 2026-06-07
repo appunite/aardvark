@@ -55,8 +55,8 @@ def disable_urandom():
     crypto.getRandomValues() which throws at top level, fatally crashing the
     interpreter.
 
-    TODO: Patch Emscripten's getentropy() to return EIO if
-    `crypto.getRandomValues()` throws. Then we can remove this.
+    This Python-level guard can be removed if the Emscripten getentropy()
+    binding is changed to return EIO when `crypto.getRandomValues()` throws.
     """
     os.urandom = patch_urandom
 

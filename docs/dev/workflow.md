@@ -33,7 +33,9 @@ the daily workflow.
   ```
 - Workspace tests without the slower integration crate:
   ```bash
-  AARDVARK_PYODIDE_DIST_DIR=.aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full \
+  PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v0.29.4-full' | sort | tail -n 1)"
+  test -n "$PYODIDE_DIST_DIR"
+  AARDVARK_PYODIDE_DIST_DIR="$PYODIDE_DIST_DIR" \
     cargo test --workspace --exclude integration-tests
   ```
 - Integration tests:
@@ -47,7 +49,9 @@ the daily workflow.
 ### Smoke Testing the CLI
 
 ```
-AARDVARK_PYODIDE_DIST_DIR=.aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full \
+PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v0.29.4-full' | sort | tail -n 1)"
+test -n "$PYODIDE_DIST_DIR"
+AARDVARK_PYODIDE_DIST_DIR="$PYODIDE_DIST_DIR" \
   cargo run -p aardvark-cli -- \
   --bundle example/numpy_bundle.zip --entrypoint main:main --package numpy
 ```

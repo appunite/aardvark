@@ -14,7 +14,7 @@ today. It is a status note, not a complete upstream conformance claim.
   name includes the current Aardvark workspace package version:
 
 ```text
-.aardvark/pyodide-distributions/aardvark-<aardvark-version>-pyodide-v0.29.4-full
+.aardvark/pyodide-distributions/aardvark-${AARDVARK_VERSION}-pyodide-v0.29.4-full
 ```
 
 The staging CLI and local compatibility runners derive this default path from
