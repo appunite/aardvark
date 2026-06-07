@@ -29,7 +29,7 @@ pub(super) fn current_rss_mib() -> Option<f64> {
 
 #[cfg(target_os = "linux")]
 pub(super) fn current_rss_mib() -> Option<f64> {
-    let contents = fs::read_to_string("/proc/self/statm").ok()?;
+    let contents = std::fs::read_to_string("/proc/self/statm").ok()?;
     let resident_pages: f64 = contents.split_whitespace().nth(1)?.parse().ok()?;
     // SAFETY: `sysconf(_SC_PAGESIZE)` has no pointer arguments and only reads
     // the process configuration reported by libc.
