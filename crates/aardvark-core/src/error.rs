@@ -9,6 +9,16 @@ pub enum PyRunnerError {
     Init(String),
     #[error("bundle error: {0}")]
     Bundle(String),
+    #[error(
+        "bundle {kind} limit exceeded{path_display}: actual {actual} bytes, limit {limit} bytes",
+        path_display = BundleLimitPath(path.as_deref())
+    )]
+    BundleLimitExceeded {
+        kind: BundleLimitKind,
+        path: Option<String>,
+        actual: u64,
+        limit: u64,
+    },
     #[error("manifest error: {0}")]
     Manifest(String),
     #[error("descriptor error: {0}")]
@@ -32,3 +42,33 @@ pub enum PyRunnerError {
 }
 
 pub type Result<T, E = PyRunnerError> = std::result::Result<T, E>;
+
+struct BundleLimitPath<'a>(Option<&'a str>);
+
+impl std::fmt::Display for BundleLimitPath<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Some(path) => write!(f, " for {path}"),
+            None => Ok(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundleLimitKind {
+    ArchiveBytes,
+    EntryCount,
+    EntryBytes,
+    TotalUncompressedBytes,
+}
+
+impl std::fmt::Display for BundleLimitKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            BundleLimitKind::ArchiveBytes => "archive byte",
+            BundleLimitKind::EntryCount => "entry count",
+            BundleLimitKind::EntryBytes => "entry byte",
+            BundleLimitKind::TotalUncompressedBytes => "total uncompressed byte",
+        })
+    }
+}

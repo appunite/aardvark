@@ -4,8 +4,8 @@ value that is not None, this is interpreted as a context manager that should be
 used when executing the module top level scope.
 
 When we're done, we put back the original module. The wrapper module and wrapper
-stubs will persist in the wild, so we need to make sure they behave the same way
-as the originals after we put them back. This is controlled by the
+functions can remain reachable, so they must behave the same way as the
+originals after we put them back. This is controlled by the
 IN_REQUEST_CONTEXT variable.
 """
 
@@ -246,7 +246,8 @@ class BlockedCallModule:
         # If we aren't in a request scope, the value is a callable, and it's not
         # in the allow_list, return a wrapper that raises an error if it's
         # called before entering the request scope.
-        # TODO: this doesn't wrap classes correctly, does it matter?
+        # Class constructors are intentionally left as original objects; the
+        # current import patches only need to block function calls.
         @wraps(orig)
         def wrapper(*args, **kwargs):
             if not IN_REQUEST_CONTEXT:

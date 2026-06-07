@@ -13,7 +13,7 @@ function requireCapability(name) {
   }
 }
 
-globalThis.__aardvarkSetHostCapabilities = function setHostCapabilities(list) {
+function setHostCapabilities(list) {
   hostCapabilityState.enabled.clear();
   if (Array.isArray(list)) {
     for (const entry of list) {
@@ -23,7 +23,7 @@ globalThis.__aardvarkSetHostCapabilities = function setHostCapabilities(list) {
       }
     }
   }
-};
+}
 
 globalThis.__aardvarkGetJsonInput = function getJsonInput() {
   return globalThis.__aardvarkJsonInput ?? null;
@@ -533,8 +533,7 @@ globalThis.__aardvarkPublishBuffer = function publishBuffer(bufferId, data, meta
   return assigned;
 };
 
-globalThis.__aardvarkCollectSharedBuffers = function collectSharedBuffers() {
-  requireCapability("rawctx_buffers");
+function collectSharedBuffersUnchecked() {
   const result = [];
   for (const [id, entry] of sharedBufferState.map.entries()) {
     result.push({
@@ -544,10 +543,9 @@ globalThis.__aardvarkCollectSharedBuffers = function collectSharedBuffers() {
     });
   }
   return result;
-};
+}
 
-globalThis.__aardvarkDrainSharedBuffers = function drainSharedBuffers() {
-  requireCapability("rawctx_buffers");
+function drainSharedBuffersUnchecked() {
   const result = [];
   for (const [id, entry] of Array.from(sharedBufferState.map.entries())) {
     result.push({
@@ -559,10 +557,9 @@ globalThis.__aardvarkDrainSharedBuffers = function drainSharedBuffers() {
     sharedBufferState.map.delete(id);
   }
   return result;
-};
+}
 
-globalThis.__aardvarkReleaseSharedBuffers = function releaseSharedBuffers(ids) {
-  requireCapability("rawctx_buffers");
+function releaseSharedBuffersUnchecked(ids) {
   const pending = Array.isArray(ids) ? ids : Array.from(sharedBufferState.map.keys());
   for (const id of pending) {
     const key = String(id);
@@ -573,10 +570,26 @@ globalThis.__aardvarkReleaseSharedBuffers = function releaseSharedBuffers(ids) {
     recordSharedBufferEvent("release", key, entry?.view?.byteLength ?? 0, entry?.metadata ?? null);
     sharedBufferState.map.delete(key);
   }
+}
+
+globalThis.__aardvarkCollectSharedBuffers = function collectSharedBuffers() {
+  requireCapability("rawctx_buffers");
+  return collectSharedBuffersUnchecked();
+};
+
+globalThis.__aardvarkDrainSharedBuffers = function drainSharedBuffers() {
+  requireCapability("rawctx_buffers");
+  return drainSharedBuffersUnchecked();
+};
+
+globalThis.__aardvarkReleaseSharedBuffers = function releaseSharedBuffers(ids) {
+  requireCapability("rawctx_buffers");
+  releaseSharedBuffersUnchecked(ids);
 };
 
 globalThis.__aardvarkResetSharedBuffers = function resetSharedBuffers() {
-  globalThis.__aardvarkReleaseSharedBuffers();
+  requireCapability("rawctx_buffers");
+  releaseSharedBuffersUnchecked();
 };
 
 const filesystemState = {
@@ -585,7 +598,7 @@ const filesystemState = {
   usageBytes: 0,
 };
 
-globalThis.__aardvarkFilesystemSetPolicy = function setFilesystemPolicy(policy) {
+function setFilesystemPolicy(policy) {
   const mode =
     policy && typeof policy.mode === "string"
       ? policy.mode.toLowerCase()
@@ -603,13 +616,30 @@ globalThis.__aardvarkFilesystemSetPolicy = function setFilesystemPolicy(policy) 
   }
   filesystemState.usageBytes = 0;
   return filesystemState.usageBytes;
-};
+}
 
-globalThis.__aardvarkFilesystemReset = function resetFilesystem() {
+function resetFilesystem() {
   filesystemState.usageBytes = 0;
   return filesystemState.usageBytes;
-};
+}
 
-globalThis.__aardvarkFilesystemGetUsage = function getFilesystemUsage() {
+function getFilesystemUsage() {
   return filesystemState.usageBytes;
-};
+}
+
+globalThis.__aardvarkHostHooks = Object.freeze({
+  setHostCapabilities,
+  filesystem: Object.freeze({
+    setPolicy: setFilesystemPolicy,
+    reset: resetFilesystem,
+    getUsage: getFilesystemUsage,
+  }),
+  sharedBuffers: Object.freeze({
+    collect: collectSharedBuffersUnchecked,
+    drain: drainSharedBuffersUnchecked,
+    release: releaseSharedBuffersUnchecked,
+    reset() {
+      releaseSharedBuffersUnchecked();
+    },
+  }),
+});

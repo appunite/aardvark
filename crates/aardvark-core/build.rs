@@ -14,6 +14,10 @@ use ureq::Agent;
 
 include!(concat!(env!("CARGO_MANIFEST_DIR"), "/pyodide_manifest.rs"));
 
+const MAX_BUILD_PYODIDE_LOCKFILE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_BUILD_PYODIDE_PATCH_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_BUILD_PYODIDE_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PyodideVariant {
     Core,
@@ -119,12 +123,30 @@ fn download_pyodide_archive(spec: &PyodideArchiveSpec) -> Result<PathBuf> {
         .get(&url)
         .call()
         .with_context(|| format!("downloading {}", url))?;
-    let mut reader = response.body_mut().as_reader();
-    let mut file = fs::File::create(&archive_path)?;
-    io::copy(&mut reader, &mut file)?;
+    let reader = response.body_mut().as_reader();
+    copy_archive_with_limit(reader, &archive_path, MAX_BUILD_PYODIDE_ARCHIVE_BYTES, &url)?;
 
     verify_sha256(&archive_path, spec.sha256)?;
     Ok(archive_path)
+}
+
+fn copy_archive_with_limit<R: Read>(
+    reader: R,
+    archive_path: &Path,
+    limit: u64,
+    context: &str,
+) -> Result<u64> {
+    let mut limited = reader.take(limit.saturating_add(1));
+    let mut file = fs::File::create(archive_path)?;
+    let written = io::copy(&mut limited, &mut file)?;
+    if written > limit {
+        let _ = fs::remove_file(archive_path);
+        anyhow::bail!(
+            "refusing to download {context}: archive exceeded the {} byte limit",
+            limit
+        );
+    }
+    Ok(written)
 }
 
 fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
@@ -287,8 +309,11 @@ fn copy_packages_script(out_dir: &Path) -> Result<()> {
 fn generate_patched_pyodide(out_dir: &Path) -> Result<()> {
     let original_path = out_dir.join("pyodide.asm.js");
     let target_path = out_dir.join("pyodide.asm.patched.js");
-    let source = fs::read_to_string(&original_path)
-        .with_context(|| format!("read {}", original_path.display()))?;
+    let source = read_text_file_limited(
+        &original_path,
+        MAX_BUILD_PYODIDE_PATCH_SOURCE_BYTES,
+        "Pyodide JS source",
+    )?;
     let patched = apply_pyodide_replacements(&source)?;
     fs::write(&target_path, patched).with_context(|| format!("write {}", target_path.display()))?;
     Ok(())
@@ -362,8 +387,11 @@ fn apply_pyodide_replacements(source: &str) -> Result<String> {
 
 fn generate_distribution_manifest(out_dir: &Path, variant: PyodideVariant) -> Result<()> {
     let lock_path = out_dir.join("pyodide-lock.json");
-    let lock_raw =
-        fs::read_to_string(&lock_path).with_context(|| format!("read {}", lock_path.display()))?;
+    let lock_raw = read_text_file_limited(
+        &lock_path,
+        MAX_BUILD_PYODIDE_LOCKFILE_BYTES,
+        "Pyodide lockfile",
+    )?;
     let lock_json: serde_json::Value =
         serde_json::from_str(&lock_raw).context("parse pyodide-lock.json")?;
     let info = lock_json
@@ -506,6 +534,40 @@ fn object_str<'a>(
         .get(key)
         .and_then(|value| value.as_str())
         .with_context(|| format!("manifest missing string field {key}"))
+}
+
+fn read_text_file_limited(path: &Path, limit: u64, kind: &str) -> Result<String> {
+    let bytes = read_file_limited(path, limit, kind)?;
+    String::from_utf8(bytes).with_context(|| format!("read {} as UTF-8", path.display()))
+}
+
+fn read_file_limited(path: &Path, limit: u64, kind: &str) -> Result<Vec<u8>> {
+    let file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let len = file
+        .metadata()
+        .with_context(|| format!("stat {}", path.display()))?
+        .len();
+    if len > limit {
+        anyhow::bail!(
+            "refusing to read {kind} {}: {} bytes exceeds the {} byte limit",
+            path.display(),
+            len,
+            limit
+        );
+    }
+    let mut bytes = Vec::with_capacity(len.min(8 * 1024 * 1024) as usize);
+    let mut limited = file.take(limit.saturating_add(1));
+    limited
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("read {}", path.display()))?;
+    if bytes.len() as u64 > limit {
+        anyhow::bail!(
+            "{kind} {} exceeded the {} byte limit while reading",
+            path.display(),
+            limit
+        );
+    }
+    Ok(bytes)
 }
 
 fn sha256_file(path: &Path) -> Result<String> {

@@ -1047,11 +1047,11 @@ function defaultSnapshotDeserializer(value) {
     }
     case "function": {
       const name = typeof value.name === "string" ? value.name : "pyRunnerSnapshotFn";
-      const stub = function () {
-        throw new Error(`snapshot placeholder function '${name}' invoked`);
+      const restoredFunction = function () {
+        throw new Error(`snapshot function '${name}' cannot be invoked after restore`);
       };
-      Object.defineProperty(stub, "name", { value: name, configurable: true });
-      return stub;
+      Object.defineProperty(restoredFunction, "name", { value: name, configurable: true });
+      return restoredFunction;
     }
     case "object": {
       if (value.ctor === "Map") {
@@ -1916,11 +1916,11 @@ export async function loadPyRunnerPyodide(options = {}) {
     throw new Error("Pyodide module did not expose API");
   }
 
-  globalThis.__aardvarkFilesystemSetPolicy = (policy) =>
-    setFilesystemPolicy(Module, policy || {});
-  globalThis.__aardvarkFilesystemGetUsage = () => filesystemState.usageBytes;
-  globalThis.__aardvarkFilesystemReset = () => resetFilesystem(Module);
-  globalThis.__aardvarkSetHostCapabilities = (caps) => setHostCapabilities(caps);
+  const filesystemHostHooks = Object.freeze({
+    setPolicy: (policy) => setFilesystemPolicy(Module, policy || {}),
+    getUsage: () => filesystemState.usageBytes,
+    reset: () => resetFilesystem(Module),
+  });
   setFilesystemPolicy(Module, filesystemState.policy);
 
   api.config = api.config || {};
@@ -2799,8 +2799,7 @@ export async function loadPyRunnerPyodide(options = {}) {
     return assigned;
   };
 
-globalThis.__aardvarkCollectSharedBuffers = function () {
-    requireCapability("rawctx_buffers");
+function collectSharedBuffersUnchecked() {
     const result = [];
     for (const [id, entry] of sharedBufferState.map.entries()) {
       result.push({
@@ -2810,10 +2809,9 @@ globalThis.__aardvarkCollectSharedBuffers = function () {
       });
     }
     return result;
-  };
+  }
 
-globalThis.__aardvarkDrainSharedBuffers = function () {
-    requireCapability("rawctx_buffers");
+function drainSharedBuffersUnchecked() {
     const result = [];
     for (const [id, entry] of Array.from(sharedBufferState.map.entries())) {
       result.push({
@@ -2829,10 +2827,9 @@ globalThis.__aardvarkDrainSharedBuffers = function () {
       sharedBufferState.map.delete(id);
     }
     return result;
-  };
+  }
 
-globalThis.__aardvarkReleaseSharedBuffers = function (ids) {
-    requireCapability("rawctx_buffers");
+function releaseSharedBuffersUnchecked(ids) {
     const pending = Array.isArray(ids)
       ? ids
       : Array.from(sharedBufferState.map.keys());
@@ -2848,12 +2845,40 @@ globalThis.__aardvarkReleaseSharedBuffers = function (ids) {
       }
       sharedBufferState.map.delete(id);
     }
+  }
+
+globalThis.__aardvarkCollectSharedBuffers = function () {
+    requireCapability("rawctx_buffers");
+    return collectSharedBuffersUnchecked();
+  };
+
+globalThis.__aardvarkDrainSharedBuffers = function () {
+    requireCapability("rawctx_buffers");
+    return drainSharedBuffersUnchecked();
+  };
+
+globalThis.__aardvarkReleaseSharedBuffers = function (ids) {
+    requireCapability("rawctx_buffers");
+    releaseSharedBuffersUnchecked(ids);
   };
 
 globalThis.__aardvarkResetSharedBuffers = function () {
     requireCapability("rawctx_buffers");
-    globalThis.__aardvarkReleaseSharedBuffers();
+    releaseSharedBuffersUnchecked();
   };
+
+globalThis.__aardvarkHostHooks = Object.freeze({
+    setHostCapabilities,
+    filesystem: filesystemHostHooks,
+    sharedBuffers: Object.freeze({
+      collect: collectSharedBuffersUnchecked,
+      drain: drainSharedBuffersUnchecked,
+      release: releaseSharedBuffersUnchecked,
+      reset() {
+        releaseSharedBuffersUnchecked();
+      },
+    }),
+  });
 
   globalThis.__aardvarkClearInputBuffers = function () {
     requireCapability("rawctx_buffers");

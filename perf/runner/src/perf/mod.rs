@@ -1,5 +1,17 @@
 use super::LoadProfile;
 
+const NUMPY_LOW_SIZE: u64 = 64;
+const NUMPY_MEDIUM_SIZE: u64 = 4_096;
+const NUMPY_HIGH_SIZE: u64 = 1_000_000;
+
+const PANDAS_LOW_ROWS: u64 = 128;
+const PANDAS_MEDIUM_ROWS: u64 = 10_000;
+const PANDAS_HIGH_ROWS: u64 = 1_000_000;
+
+const MATPLOTLIB_LOW_POINTS: u64 = 128;
+const MATPLOTLIB_MEDIUM_POINTS: u64 = 4_096;
+const MATPLOTLIB_HIGH_POINTS: u64 = 65_536;
+
 pub fn echo_script() -> &'static str {
     include_str!("../../../fixtures/scenarios/echo.py")
 }
@@ -40,15 +52,9 @@ pub fn echo_payload(profile: LoadProfile) -> Option<&'static [u8]> {
 pub fn numpy_size(profile: LoadProfile) -> Option<u64> {
     match profile {
         LoadProfile::None => None,
-        LoadProfile::Low => Some(parse_u64(include_str!(
-            "../../../fixtures/inputs/numpy_low.txt"
-        ))),
-        LoadProfile::Medium => Some(parse_u64(include_str!(
-            "../../../fixtures/inputs/numpy_medium.txt"
-        ))),
-        LoadProfile::High => Some(parse_u64(include_str!(
-            "../../../fixtures/inputs/numpy_high.txt"
-        ))),
+        LoadProfile::Low => Some(NUMPY_LOW_SIZE),
+        LoadProfile::Medium => Some(NUMPY_MEDIUM_SIZE),
+        LoadProfile::High => Some(NUMPY_HIGH_SIZE),
     }
 }
 
@@ -64,30 +70,18 @@ pub fn matrix_size(profile: LoadProfile) -> Option<u64> {
 pub fn pandas_rows(profile: LoadProfile) -> Option<u64> {
     match profile {
         LoadProfile::None => None,
-        LoadProfile::Low => Some(parse_u64(include_str!(
-            "../../../fixtures/inputs/pandas_low.txt"
-        ))),
-        LoadProfile::Medium => Some(parse_u64(include_str!(
-            "../../../fixtures/inputs/pandas_medium.txt"
-        ))),
-        LoadProfile::High => Some(parse_u64(include_str!(
-            "../../../fixtures/inputs/pandas_high.txt"
-        ))),
+        LoadProfile::Low => Some(PANDAS_LOW_ROWS),
+        LoadProfile::Medium => Some(PANDAS_MEDIUM_ROWS),
+        LoadProfile::High => Some(PANDAS_HIGH_ROWS),
     }
 }
 
 pub fn matplotlib_points(profile: LoadProfile) -> Option<u64> {
     match profile {
         LoadProfile::None => None,
-        LoadProfile::Low => Some(parse_u64(include_str!(
-            "../../../fixtures/inputs/matplotlib_low.txt"
-        ))),
-        LoadProfile::Medium => Some(parse_u64(include_str!(
-            "../../../fixtures/inputs/matplotlib_medium.txt"
-        ))),
-        LoadProfile::High => Some(parse_u64(include_str!(
-            "../../../fixtures/inputs/matplotlib_high.txt"
-        ))),
+        LoadProfile::Low => Some(MATPLOTLIB_LOW_POINTS),
+        LoadProfile::Medium => Some(MATPLOTLIB_MEDIUM_POINTS),
+        LoadProfile::High => Some(MATPLOTLIB_HIGH_POINTS),
     }
 }
 
@@ -116,10 +110,4 @@ pub fn tensor_bytes(profile: LoadProfile) -> Vec<u8> {
         buffer.extend_from_slice(&value.to_le_bytes());
     }
     buffer
-}
-
-fn parse_u64(text: &str) -> u64 {
-    text.trim()
-        .parse::<u64>()
-        .expect("fixture values must parse as integers")
 }

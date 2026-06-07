@@ -448,6 +448,33 @@ fn filesystem_blocks_writes_in_read_mode() -> Result<()> {
 }
 
 #[test]
+fn guest_cannot_mutate_filesystem_policy() -> Result<()> {
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:main",
+        "resources": {
+            "filesystem": {
+                "mode": "read"
+            }
+        }
+    }"#;
+    let bundle = bundle_with_main_and_manifest(FILESYSTEM_POLICY_ESCALATION_SCRIPT, manifest);
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    match outcome.status {
+        OutcomeStatus::Failure(FailureKind::PythonException(_)) => {}
+        OutcomeStatus::Failure(FailureKind::AdapterError { .. }) => {}
+        other => panic!("expected filesystem permission failure, got {:?}", other),
+    }
+    assert!(
+        !outcome.diagnostics.filesystem_violations.is_empty(),
+        "expected filesystem violation to be recorded"
+    );
+    Ok(())
+}
+
+#[test]
 fn filesystem_enforces_quota() -> Result<()> {
     let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
     let manifest = r#"{
@@ -591,9 +618,18 @@ fn pyodide_dist_dir() -> PathBuf {
     env::var_os("AARDVARK_PYODIDE_DIST_DIR").map_or_else(
         || {
             workspace_root()
-                .join(".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full")
+                .join(".aardvark/pyodide-distributions")
+                .join(default_pyodide_dist_dir_name())
         },
         PathBuf::from,
+    )
+}
+
+fn default_pyodide_dist_dir_name() -> String {
+    format!(
+        "aardvark-{}-pyodide-v{}-full",
+        aardvark_core::AARDVARK_VERSION,
+        aardvark_core::pyodide::PYODIDE_VERSION
     )
 }
 
@@ -708,6 +744,20 @@ const FILESYSTEM_CREATE_FILE_SCRIPT: &str = r#"
 from pathlib import Path
 
 def main():
+    root = Path("/session/runtime-test")
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "test.txt").write_text("hello")
+    return "ok"
+"#;
+
+const FILESYSTEM_POLICY_ESCALATION_SCRIPT: &str = r#"
+import js
+from pathlib import Path
+
+def main():
+    setter = getattr(js, "__aardvarkFilesystemSetPolicy", None)
+    if setter is not None:
+        setter({"mode": "readWrite", "quotaBytes": 1048576})
     root = Path("/session/runtime-test")
     root.mkdir(parents=True, exist_ok=True)
     (root / "test.txt").write_text("hello")

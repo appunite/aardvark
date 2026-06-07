@@ -24,15 +24,18 @@ Use the CLI helper:
 
 ```bash
 cargo run -p aardvark-cli -- assets stage --variant full
-cargo run -p aardvark-cli -- assets verify \
-  .aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full
+PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v0.29.4-full' | sort | tail -n 1)"
+test -n "$PYODIDE_DIST_DIR"
+cargo run -p aardvark-cli -- assets verify "$PYODIDE_DIST_DIR"
 ```
 
 Then either set `AARDVARK_PYODIDE_DIST_DIR` or configure the runtime directly:
 
 ```rust
+let pyodide_dist_dir = std::env::var("AARDVARK_PYODIDE_DIST_DIR")
+    .expect("AARDVARK_PYODIDE_DIST_DIR must point at a staged Pyodide distribution");
 let config = PyRuntimeConfig::default()
-    .with_pyodide_dist_dir(".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full");
+    .with_pyodide_dist_dir(pyodide_dist_dir);
 ```
 
 The `core` variant is useful for runtimes that do not need the full wheel set.
@@ -48,8 +51,10 @@ use aardvark_core::{
     BundlePoolRegistry, IsolateConfig, PoolOptions, PyRuntimeConfig,
 };
 
+let pyodide_dist_dir = std::env::var("AARDVARK_PYODIDE_DIST_DIR")
+    .expect("AARDVARK_PYODIDE_DIST_DIR must point at a staged Pyodide distribution");
 let runtime = PyRuntimeConfig::default()
-    .with_pyodide_dist_dir(".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full");
+    .with_pyodide_dist_dir(pyodide_dist_dir);
 let registry = BundlePoolRegistry::new(PoolOptions {
     isolate: IsolateConfig {
         runtime,
@@ -70,11 +75,10 @@ manifests request them through `runtime.pyodide.profile`:
 ```rust
 use aardvark_core::{BundleArtifact, BundlePool, IsolateConfig, PoolOptions, PyRuntimeConfig};
 
+let blas_dist_dir = std::env::var("AARDVARK_BLAS_PYODIDE_DIST_DIR")
+    .expect("AARDVARK_BLAS_PYODIDE_DIST_DIR must point at a staged BLAS distribution");
 let runtime = PyRuntimeConfig::default()
-    .with_pyodide_distribution_profile_dir(
-        "blas",
-        ".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-blas",
-    )?;
+    .with_pyodide_distribution_profile_dir("blas", blas_dist_dir)?;
 
 let artifact = BundleArtifact::from_bytes(bundle_bytes)?;
 let pool = BundlePool::from_artifact(
@@ -98,11 +102,10 @@ use aardvark_core::{
     BundlePoolRegistry, IsolateConfig, PoolOptions, PyRuntimeConfig,
 };
 
+let blas_dist_dir = std::env::var("AARDVARK_BLAS_PYODIDE_DIST_DIR")
+    .expect("AARDVARK_BLAS_PYODIDE_DIST_DIR must point at a staged BLAS distribution");
 let runtime = PyRuntimeConfig::default()
-    .with_pyodide_distribution_profile_dir(
-        "blas",
-        ".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-blas",
-    )?;
+    .with_pyodide_distribution_profile_dir("blas", blas_dist_dir)?;
 let registry = BundlePoolRegistry::new(PoolOptions {
     isolate: IsolateConfig {
         runtime,
@@ -139,12 +142,11 @@ For one-shot direct runtime usage, construct the runtime from the bundle so the
 manifest profile is applied before Pyodide starts:
 
 ```rust
+let blas_dist_dir = std::env::var("AARDVARK_BLAS_PYODIDE_DIST_DIR")
+    .expect("AARDVARK_BLAS_PYODIDE_DIST_DIR must point at a staged BLAS distribution");
 let bundle = aardvark_core::Bundle::from_zip_bytes(bundle_bytes)?;
 let runtime_config = PyRuntimeConfig::default()
-    .with_pyodide_distribution_profile_dir(
-        "blas",
-        ".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-blas",
-    )?;
+    .with_pyodide_distribution_profile_dir("blas", blas_dist_dir)?;
 let mut runtime = aardvark_core::PyRuntime::new_for_bundle(runtime_config, &bundle)?;
 let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
 let outcome = runtime.run_session(&session)?;
@@ -209,9 +211,10 @@ use aardvark_core::{
     ManifestResources, PyRuntimeConfig, PythonIsolate,
 };
 
+let pyodide_dist_dir = std::env::var("AARDVARK_PYODIDE_DIST_DIR")
+    .expect("AARDVARK_PYODIDE_DIST_DIR must point at a staged Pyodide distribution");
 let mut isolate = PythonIsolate::new(IsolateConfig {
-    runtime: PyRuntimeConfig::default()
-        .with_pyodide_dist_dir(".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full"),
+    runtime: PyRuntimeConfig::default().with_pyodide_dist_dir(pyodide_dist_dir),
     ..IsolateConfig::default()
 })?;
 let mut options = InlinePythonOptions::default();
@@ -241,9 +244,10 @@ If you want to reuse the inline handler across isolates or pools, build a `Bundl
 let artifact = BundleArtifact::from_inline_python(script, InlinePythonOptions::default())?;
 let handle = BundleHandle::from_artifact(artifact.clone());
 let handler = handle.prepare_default_handler();
+let pyodide_dist_dir = std::env::var("AARDVARK_PYODIDE_DIST_DIR")
+    .expect("AARDVARK_PYODIDE_DIST_DIR must point at a staged Pyodide distribution");
 let mut isolate = PythonIsolate::new(IsolateConfig {
-    runtime: PyRuntimeConfig::default()
-        .with_pyodide_dist_dir(".aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full"),
+    runtime: PyRuntimeConfig::default().with_pyodide_dist_dir(pyodide_dist_dir),
     ..IsolateConfig::default()
 })?;
 isolate.load_bundle(&handle)?;

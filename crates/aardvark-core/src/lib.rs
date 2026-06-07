@@ -1,4 +1,5 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![warn(clippy::undocumented_unsafe_blocks)]
 
 //! Aardvark is an embeddable multi-language runtime for executing sandboxed bundles inside V8.
 //!
@@ -40,6 +41,9 @@
 //! a deeper discussion of the runtime design, manifest schema, and integration
 //! patterns.
 
+/// Version of the Aardvark runtime crate.
+pub const AARDVARK_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 mod asset_store;
 pub mod assets;
 pub mod bundle;
@@ -48,6 +52,7 @@ pub mod config;
 pub mod error;
 pub mod host;
 pub mod invocation;
+mod network;
 pub mod outcome;
 mod package_metadata;
 pub mod persistent;
@@ -61,7 +66,7 @@ pub mod strategy;
 mod engine;
 mod session;
 
-pub use bundle::{Bundle, BundleFingerprint};
+pub use bundle::{Bundle, BundleFingerprint, BundleLimits};
 pub use bundle_manifest::{
     BundleManifest, ManifestCpuResources, ManifestFilesystemMode, ManifestFilesystemResources,
     ManifestNetworkResources, ManifestPyodide, ManifestResources, ManifestRuntime,

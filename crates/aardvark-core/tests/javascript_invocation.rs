@@ -821,6 +821,101 @@ export default function main() {
 }
 
 #[test]
+fn native_fetch_rejects_request_body_over_manifest_limit() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind unused port");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    let manifest = format!(
+        r#"{{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": {{ "language": "javascript" }},
+        "resources": {{
+            "network": {{
+                "allow": ["127.0.0.1:{port}"],
+                "httpsOnly": false,
+                "maxRequestBytes": 3
+            }}
+        }}
+    }}"#
+    );
+
+    let bundle = bundle_with_js_main_and_manifest(
+        &format!(
+            r#"
+export default function main() {{
+    globalThis.__pyRunnerNativeFetch("http://127.0.0.1:{port}/upload", {{
+        method: "POST",
+        body: new Uint8Array([1, 2, 3, 4])
+    }});
+    return "should-not-complete";
+}}
+"#
+        ),
+        &manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    assert_failure_contains(
+        &outcome.status,
+        "network request body exceeds configured limit",
+    );
+    Ok(())
+}
+
+#[test]
+fn native_fetch_rejects_response_body_over_manifest_limit() -> Result<()> {
+    let response =
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 8\r\nConnection: close\r\n\r\naccepted"
+            .to_vec();
+    let (port, request_rx) = spawn_one_shot_http_server_with_response(response);
+    let manifest = format!(
+        r#"{{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": {{ "language": "javascript" }},
+        "resources": {{
+            "network": {{
+                "allow": ["127.0.0.1:{port}"],
+                "httpsOnly": false,
+                "maxResponseBytes": 3
+            }}
+        }}
+    }}"#
+    );
+
+    let bundle = bundle_with_js_main_and_manifest(
+        &format!(
+            r#"
+export default function main() {{
+    globalThis.__pyRunnerNativeFetch("http://127.0.0.1:{port}/large");
+    return "should-not-complete";
+}}
+"#
+        ),
+        &manifest,
+    );
+
+    let mut runtime = PyRuntime::new(PyRuntimeConfig::default())?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+    assert_failure_contains(
+        &outcome.status,
+        "network response body exceeds configured limit",
+    );
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("server should receive request");
+    assert!(
+        request.starts_with("GET /large "),
+        "expected large request, got {request:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn exception_reports_failure() -> Result<()> {
     let manifest = r#"{
         "schemaVersion": "1.0",
@@ -877,6 +972,55 @@ fn rawctx_requires_capability() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn guest_cannot_grant_rawctx_capability_with_host_hooks() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:default",
+        "runtime": { "language": "javascript" }
+    }"#;
+
+    let bundle = bundle_with_js_main_and_manifest(
+        r#"
+export default function main() {
+    const exposed = [
+        "__aardvarkSetHostCapabilities",
+        "__aardvarkHostHooks",
+        "__aardvarkHostCollectSharedBuffers",
+        "__aardvarkHostDrainSharedBuffers",
+        "__aardvarkHostReleaseSharedBuffers",
+        "__aardvarkHostResetSharedBuffers",
+    ].filter((name) => globalThis[name] !== undefined);
+    if (exposed.length > 0) {
+        throw new Error(`host hooks exposed: ${exposed.join(",")}`);
+    }
+    try {
+        globalThis.__aardvarkSetHostCapabilities?.(["rawctx_buffers"]);
+        globalThis.__aardvarkPublishBuffer("js-buf", new Uint8Array([1, 2, 3]), null);
+    } catch (error) {
+        return { denied: String(error.message || error).includes("rawctx_buffers") };
+    }
+    return { denied: false };
+}
+"#,
+        manifest,
+    );
+
+    let mut config = PyRuntimeConfig::default();
+    config.host_capabilities.clear();
+    let mut runtime = PyRuntime::new(config)?;
+    let (session, _) = runtime.prepare_session_with_manifest(bundle)?;
+    let outcome = runtime.run_session(&session)?;
+
+    match outcome.payload() {
+        Some(ResultPayload::Json(value)) => {
+            assert_eq!(value, &json!({"denied": true}));
+        }
+        other => panic!("expected json denial payload, got {:?}", other),
+    }
+    Ok(())
+}
+
 fn bundle_with_js_main_and_manifest(code: &str, manifest: &str) -> Bundle {
     use std::io::Cursor;
 
@@ -904,6 +1048,19 @@ fn bundle_with_js_main_and_manifest(code: &str, manifest: &str) -> Bundle {
 
     let cursor = writer.finish().expect("failed to finish bundle");
     Bundle::from_zip_bytes(cursor.into_inner()).expect("failed to parse bundle")
+}
+
+fn assert_failure_contains(status: &OutcomeStatus, needle: &str) {
+    match status {
+        OutcomeStatus::Failure(FailureKind::PythonException(info)) => {
+            let value = info.value.clone().unwrap_or_default();
+            assert!(
+                value.contains(needle),
+                "expected failure value to contain {needle:?}, got {value:?}"
+            );
+        }
+        other => panic!("expected javascript exception failure, got {:?}", other),
+    }
 }
 
 fn spawn_one_shot_http_server() -> (u16, mpsc::Receiver<String>) {

@@ -61,7 +61,8 @@ pinned Aardvark/Pyodide versions). A quick setup looks like:
 
 ```sh
 cargo run -p aardvark-cli -- assets stage --variant full
-export PYODIDE_DIST_DIR="$PWD/.aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full"
+export PYODIDE_DIST_DIR="$(find "$PWD/.aardvark/pyodide-distributions" -maxdepth 1 -type d -name 'aardvark-*-pyodide-v0.29.4-full' | sort | tail -n 1)"
+test -n "$PYODIDE_DIST_DIR"
 cargo run -p aardvark-cli -- assets verify "$PYODIDE_DIST_DIR"
 ```
 
@@ -76,7 +77,7 @@ Available targets:
   make setup-python Install Python 3.13.2 via mise (used by host runner).
 Variables:
   PYODIDE_VERSION=0.29.4
-  PYODIDE_DIST_DIR=/.../.aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full
+  PYODIDE_DIST_DIR=/.../.aardvark/pyodide-distributions/aardvark-${AARDVARK_VERSION}-pyodide-v0.29.4-full
   ITERATIONS=25
 ```
 

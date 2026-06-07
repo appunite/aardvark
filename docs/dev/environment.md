@@ -37,8 +37,9 @@ runtime. The following steps get you ready to develop locally.
 
    ```bash
    cargo run -p aardvark-cli -- assets stage --variant full
-   cargo run -p aardvark-cli -- assets verify \
-     .aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full
+   PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v0.29.4-full' | sort | tail -n 1)"
+   test -n "$PYODIDE_DIST_DIR"
+   cargo run -p aardvark-cli -- assets verify "$PYODIDE_DIST_DIR"
    ```
 
    Point the runtime at that directory with `AARDVARK_PYODIDE_DIST_DIR` or by

@@ -1,4 +1,5 @@
 use crate::assets;
+use crate::error::{PyRunnerError, Result};
 use capnp::message::Builder;
 use capnp::serialize;
 use once_cell::sync::Lazy;
@@ -214,19 +215,19 @@ static LOCKFILE_METADATA_CACHE: Lazy<Mutex<BTreeMap<String, Arc<BuildResult>>>> 
 pub(crate) fn package_metadata_from_lockfile_keyed(
     raw_json: &str,
     cache_key: impl Into<String>,
-) -> BuildResult {
+) -> Result<BuildResult> {
     let cache_key = cache_key.into();
     if let Some(cached) = LOCKFILE_METADATA_CACHE.lock().get(&cache_key).cloned() {
-        return cached.as_ref().clone();
+        return Ok(cached.as_ref().clone());
     }
 
-    let built = Arc::new(build_metadata(raw_json));
+    let built = Arc::new(build_metadata(raw_json)?);
     let mut cache = LOCKFILE_METADATA_CACHE.lock();
-    cache
+    Ok(cache
         .entry(cache_key)
         .or_insert_with(|| built.clone())
         .as_ref()
-        .clone()
+        .clone())
 }
 
 #[derive(Clone)]
@@ -235,9 +236,10 @@ pub(crate) struct BuildResult {
     pub(crate) capnp_bytes: Vec<u8>,
 }
 
-fn build_metadata(raw_json: &str) -> BuildResult {
-    let lockfile: Lockfile =
-        serde_json::from_str(raw_json).expect("pyodide lockfile JSON should be valid");
+fn build_metadata(raw_json: &str) -> Result<BuildResult> {
+    let lockfile: Lockfile = serde_json::from_str(raw_json).map_err(|err| {
+        PyRunnerError::Init(format!("failed to parse Pyodide lockfile metadata: {err}"))
+    })?;
 
     let mut message = Builder::new_default();
     {
@@ -282,13 +284,20 @@ fn build_metadata(raw_json: &str) -> BuildResult {
     }
 
     let mut capnp_bytes = Vec::new();
-    serialize::write_message(&mut capnp_bytes, &message)
-        .expect("serialize package metadata to capnp");
+    serialize::write_message(&mut capnp_bytes, &message).map_err(|err| {
+        PyRunnerError::Init(format!(
+            "failed to serialize Pyodide lockfile metadata to capnp: {err}"
+        ))
+    })?;
 
-    let json_text = serde_json::to_string(&lockfile).expect("serialize canonical lockfile json");
+    let json_text = serde_json::to_string(&lockfile).map_err(|err| {
+        PyRunnerError::Init(format!(
+            "failed to serialize canonical Pyodide lockfile metadata: {err}"
+        ))
+    })?;
 
-    BuildResult {
+    Ok(BuildResult {
         json_text,
         capnp_bytes,
-    }
+    })
 }

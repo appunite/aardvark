@@ -10,13 +10,17 @@ use crate::pyodide_distribution::PyodideDistribution;
 use crate::runtime_language::RuntimeLanguage;
 use std::collections::HashSet;
 use std::env;
-use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use v8;
 
 use super::LanguageEngine;
+
+const MAX_SNAPSHOT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_SNAPSHOT_METADATA_BYTES: u64 = 8 * 1024 * 1024;
 
 pub struct PythonEngine {
     js: JsRuntime,
@@ -111,7 +115,7 @@ impl PythonEngine {
         let metadata = package_metadata::package_metadata_from_lockfile_keyed(
             &lockfile,
             self.distribution.manifest().lockfile.sha256.clone(),
-        );
+        )?;
         js.insert_text_asset("pyodide-lock.json", metadata.json_text);
         js.insert_binary_asset_owned("pyodide-lock.capnp", metadata.capnp_bytes);
         js.insert_text_asset(
@@ -306,7 +310,12 @@ fn validate_compatibility_fingerprint(
 
 fn validate_snapshot_metadata(path: &Path, expected_fingerprint: &str) -> Result<()> {
     let metadata_path = snapshot_metadata_path(path);
-    let raw = fs::read_to_string(&metadata_path).map_err(|err| {
+    let raw = read_text_file_limited(
+        &metadata_path,
+        MAX_SNAPSHOT_METADATA_BYTES,
+        "snapshot metadata",
+    )
+    .map_err(|err| {
         PyRunnerError::Init(format!(
             "snapshot {} is missing compatibility metadata {}: {err}",
             path.display(),
@@ -341,11 +350,50 @@ fn snapshot_metadata_path(path: &Path) -> PathBuf {
 }
 
 fn read_snapshot_bytes(path: &Path) -> Result<Arc<[u8]>> {
-    let data = fs::read(path).map_err(|err| {
+    let data = read_file_limited(path, MAX_SNAPSHOT_BYTES, "snapshot")?;
+    Ok(Arc::<[u8]>::from(data.into_boxed_slice()))
+}
+
+fn read_text_file_limited(path: &Path, limit: u64, kind: &str) -> Result<String> {
+    let bytes = read_file_limited(path, limit, kind)?;
+    String::from_utf8(bytes).map_err(|err| {
         PyRunnerError::Init(format!(
-            "failed to read snapshot from {}: {err}",
+            "failed to read {kind} {} as UTF-8: {err}",
             path.display()
         ))
+    })
+}
+
+fn read_file_limited(path: &Path, limit: u64, kind: &str) -> Result<Vec<u8>> {
+    let file = File::open(path).map_err(|err| {
+        PyRunnerError::Init(format!("failed to open {kind} {}: {err}", path.display()))
     })?;
-    Ok(Arc::<[u8]>::from(data.into_boxed_slice()))
+    let len = file
+        .metadata()
+        .map_err(|err| {
+            PyRunnerError::Init(format!("failed to stat {kind} {}: {err}", path.display()))
+        })?
+        .len();
+    if len > limit {
+        return Err(PyRunnerError::Init(format!(
+            "refusing to read {kind} {}: {} bytes exceeds the {} byte limit",
+            path.display(),
+            len,
+            limit
+        )));
+    }
+
+    let mut bytes = Vec::with_capacity(len.min(8 * 1024 * 1024) as usize);
+    let mut limited = file.take(limit.saturating_add(1));
+    limited.read_to_end(&mut bytes).map_err(|err| {
+        PyRunnerError::Init(format!("failed to read {kind} {}: {err}", path.display()))
+    })?;
+    if bytes.len() as u64 > limit {
+        return Err(PyRunnerError::Init(format!(
+            "{kind} {} exceeded the {} byte limit while reading",
+            path.display(),
+            limit
+        )));
+    }
+    Ok(bytes)
 }

@@ -41,7 +41,7 @@ pub fn distribution_manifest_json() -> &'static str {
     ))
 }
 
-/// Returns the stock `pyodide.js` loader JavaScript (unused for now).
+/// Returns the stock `pyodide.js` loader JavaScript bundled with the distribution.
 pub fn loader_js() -> &'static str {
     include_str!(concat!(env!("OUT_DIR"), "/pyodide/pyodide.js"))
 }

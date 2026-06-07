@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Local Pyodide compatibility runner for Aardvark."
 
 [dependencies]
-aardvark-core = { path = "../aardvark-core" }
+aardvark-core.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

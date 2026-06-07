@@ -16,7 +16,7 @@ Embedded multi-language runtime for executing sandboxed bundles inside [V8](http
 - **Self-describing bundles** – Ship code, manifest, and dependency hints together as a ZIP; hosts can honour or override the manifest contract at runtime.
 - **First-class telemetry** – Every invocation emits structured diagnostics (stdout/stderr, exceptions, resource usage, policy violations, reset timings) that hosts can feed into their own observability stack.
 - **Runtime pooling** – Amortise startup cost by recycling isolates with predictable reset semantics.
-- **Dual-language engine (preview)** – Run JavaScript bundles alongside Python handlers using the same network/filesystem sandboxing. JavaScript support is read-only for now and expects bring-your-own modules.
+- **Dual-language engine (preview)** – Run JavaScript bundles alongside Python handlers using the same network/filesystem sandboxing. JavaScript support is currently read-only and expects bring-your-own modules.
 
 ## Quick Start (CLI)
 
@@ -24,7 +24,9 @@ The CLI is intended for local smoke tests and debugging; production setups shoul
 
 ```
 cargo run -p aardvark-cli -- assets stage --variant full
-AARDVARK_PYODIDE_DIST_DIR=.aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full \
+PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v0.29.4-full' | sort | tail -n 1)"
+test -n "$PYODIDE_DIST_DIR"
+AARDVARK_PYODIDE_DIST_DIR="$PYODIDE_DIST_DIR" \
   cargo run -p aardvark-cli -- \
   --bundle example/numpy_bundle.zip
 ```
@@ -35,7 +37,7 @@ the runtime at the same staged distribution and run another manifest-backed
 bundle:
 
 ```
-AARDVARK_PYODIDE_DIST_DIR=.aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full \
+AARDVARK_PYODIDE_DIST_DIR="$PYODIDE_DIST_DIR" \
   cargo run -p aardvark-cli -- \
   --bundle example/pandas_numpy_bundle.zip
 ```
@@ -55,8 +57,9 @@ Use the CLI helper:
 
 ```
 cargo run -p aardvark-cli -- assets stage --variant full
-cargo run -p aardvark-cli -- assets verify \
-  .aardvark/pyodide-distributions/aardvark-0.1.1-pyodide-v0.29.4-full
+PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v0.29.4-full' | sort | tail -n 1)"
+test -n "$PYODIDE_DIST_DIR"
+cargo run -p aardvark-cli -- assets verify "$PYODIDE_DIST_DIR"
 ```
 
 Then set `AARDVARK_PYODIDE_DIST_DIR` or configure

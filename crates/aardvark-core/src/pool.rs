@@ -3,10 +3,11 @@
 use crate::config::{PyRuntimeConfig, ResetPolicy};
 use crate::error::Result;
 use crate::runtime::PyRuntime;
+use parking_lot::{Condvar, Mutex};
 use std::collections::VecDeque;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc, Condvar, Mutex,
+    Arc,
 };
 use tracing::{info, info_span, warn};
 
@@ -92,7 +93,7 @@ impl PyRuntimePool {
 
     /// Check out a runtime handle, blocking until one is available.
     pub fn checkout(&self) -> Result<PooledRuntime> {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = self.inner.state.lock();
         loop {
             if let Some(managed) = state.queue.pop_front() {
                 drop(state);
@@ -121,7 +122,7 @@ impl PyRuntimePool {
                 ));
             }
 
-            state = self.inner.condvar.wait(state).unwrap();
+            self.inner.condvar.wait(&mut state);
         }
     }
 }
@@ -201,7 +202,7 @@ impl Drop for PooledRuntime {
                         "reset failed; dropping runtime"
                     );
                     // Drop this runtime and reduce total count.
-                    let mut state = self.inner.state.lock().unwrap();
+                    let mut state = self.inner.state.lock();
                     state.total = state.total.saturating_sub(1);
                     self.inner.condvar.notify_one();
                     return;
@@ -226,7 +227,7 @@ impl Drop for PooledRuntime {
                 "returning runtime to pool"
             );
 
-            let mut state = self.inner.state.lock().unwrap();
+            let mut state = self.inner.state.lock();
             state.queue.push_back(ManagedRuntime {
                 id: runtime_id,
                 runtime: managed.runtime,

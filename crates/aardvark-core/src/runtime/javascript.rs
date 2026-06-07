@@ -18,6 +18,7 @@ impl JavaScriptEngine {
         js.insert_text_asset("js_runtime_bootstrap.js", assets::js_runtime_bootstrap_js());
         let mut engine = Self { js };
         engine.js.ensure_module("js_runtime_bootstrap.js")?;
+        engine.js.seal_host_hooks()?;
         Ok(engine)
     }
 }
@@ -33,6 +34,7 @@ impl LanguageEngine for JavaScriptEngine {
 
     fn prepare_environment(&mut self, _config: &PyRuntimeConfig) -> Result<()> {
         self.js.ensure_module("js_runtime_bootstrap.js")?;
+        self.js.seal_host_hooks()?;
         Ok(())
     }
 
@@ -61,6 +63,7 @@ impl LanguageEngine for JavaScriptEngine {
         self.js.reset()?;
         self.js
             .insert_text_asset("js_runtime_bootstrap.js", assets::js_runtime_bootstrap_js());
-        self.js.ensure_module("js_runtime_bootstrap.js")
+        self.js.ensure_module("js_runtime_bootstrap.js")?;
+        self.js.seal_host_hooks()
     }
 }

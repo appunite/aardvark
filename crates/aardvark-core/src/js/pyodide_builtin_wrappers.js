@@ -1,7 +1,7 @@
 // Minimal helpers referenced by the patched Pyodide Emscripten bundle.
 // Helper utilities expected by the patched Pyodide asm bundle. These mirror the
-// minimal surface expected by the upstream sandbox but intentionally omit the
-// more security-sensitive wiring (unsafe eval) for now.
+// minimal surface expected by the upstream sandbox while intentionally omitting
+// unsafe-eval wiring.
 
 const DEFAULT_LOCATION = {
   href: "https://pyodide.local/",
