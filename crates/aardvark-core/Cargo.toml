@@ -54,5 +54,5 @@ tempfile = "3.27"
 wasm-encoder.workspace = true
 
 [package.metadata.docs.rs]
-features = ["docsrs"]
+features = ["docsrs", "pyodide-staging"]
 rustdoc-args = ["--cfg", "docsrs"]

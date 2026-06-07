@@ -61,7 +61,7 @@ pub struct PyodideDistributionManifest {
     pub python: PythonCompatibility,
     pub lockfile: LockfileManifest,
     pub package_root: Option<String>,
-    #[serde(default, skip_serializing_if = "DistributionFeatures::is_empty")]
+    #[serde(default)]
     pub features: DistributionFeatures,
     #[serde(default)]
     pub files: BTreeMap<String, String>,

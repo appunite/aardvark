@@ -1,9 +1,11 @@
 use aardvark_core::pyodide_distribution::{
     default_pyodide_distribution_stage_output_dir, stage_pyodide_distribution,
     DistributionFeatures, PackageFeatures, PyodideDistribution, PyodideDistributionStageOptions,
-    PyodideDistributionVariant,
+    PyodideDistributionVariant, DISTRIBUTION_MANIFEST,
 };
 use anyhow::{Context, Result};
+use serde_json::Value;
+use std::fs;
 
 use crate::args::{AssetsCommand, AssetsStageArgs, AssetsVerifyArgs, StageVariant};
 
@@ -38,7 +40,11 @@ fn verify_assets(args: AssetsVerifyArgs) -> Result<()> {
         dist.manifest().variant.as_str(),
         dist.compatibility_fingerprint()
     );
-    print_distribution_features(&dist.manifest().features);
+    if manifest_records_features(&args)? {
+        print_distribution_features(&dist.manifest().features);
+    } else {
+        println!("features: not recorded by this distribution manifest");
+    }
     Ok(())
 }
 
@@ -47,6 +53,15 @@ fn pyodide_variant(variant: StageVariant) -> PyodideDistributionVariant {
         StageVariant::Core => PyodideDistributionVariant::Core,
         StageVariant::Full => PyodideDistributionVariant::Full,
     }
+}
+
+fn manifest_records_features(args: &AssetsVerifyArgs) -> Result<bool> {
+    let manifest_path = args.path.join(DISTRIBUTION_MANIFEST);
+    let raw = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("read {}", manifest_path.display()))?;
+    let value: Value =
+        serde_json::from_str(&raw).with_context(|| format!("parse {}", manifest_path.display()))?;
+    Ok(value.get("features").is_some())
 }
 
 fn print_distribution_features(features: &DistributionFeatures) {
