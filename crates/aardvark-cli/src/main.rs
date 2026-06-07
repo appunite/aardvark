@@ -433,21 +433,6 @@ fn render_outcome(outcome: &ExecutionOutcome) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{scan_binary_feature_bytes, validate_force_removal_target};
-    use aardvark_core::pyodide_distribution::{PackageFeatures, DISTRIBUTION_MANIFEST};
-    use std::env;
-    use std::fs;
-    use tempfile::tempdir;
-
-    #[test]
-    fn binary_feature_scan_detects_openblas_without_wasm() {
-        let mut features = PackageFeatures::default();
-        scan_binary_feature_bytes(Some("libopenblas.so"), b"native payload", &mut features)
-            .unwrap();
-        assert!(features.openblas);
-        assert!(!features.wasm_simd);
-        assert_eq!(features.wasm_modules, 0);
-    }
 
     #[test]
     fn parse_pyodide_profile_dir_requires_name_and_path() {
@@ -458,95 +443,5 @@ mod tests {
         assert!(parse_pyodide_profile_dir("blas").is_err());
         assert!(parse_pyodide_profile_dir("blas=").is_err());
         assert!(parse_pyodide_profile_dir("=/tmp/blas").is_err());
-    }
-
-    #[test]
-    fn force_output_guard_rejects_unmarked_custom_directory() {
-        let dir = tempdir().unwrap();
-        let output = dir.path().join("custom");
-        fs::create_dir(&output).unwrap();
-        fs::write(output.join("not-a-distribution.txt"), b"data").unwrap();
-
-        assert!(validate_force_removal_target(&output).is_err());
-    }
-
-    #[test]
-    fn force_output_guard_allows_existing_distribution_directory() {
-        let dir = tempdir().unwrap();
-        let output = dir.path().join("existing-dist");
-        fs::create_dir(&output).unwrap();
-        fs::write(output.join(DISTRIBUTION_MANIFEST), b"{}").unwrap();
-
-        validate_force_removal_target(&output).unwrap();
-    }
-
-    #[test]
-    fn force_output_guard_rejects_current_directory() {
-        let cwd = env::current_dir().unwrap();
-
-        assert!(validate_force_removal_target(&cwd).is_err());
-    }
-
-    #[test]
-    fn wasm_simd_detector_requires_parsed_simd_operator() {
-        let mut scalar_features = PackageFeatures::default();
-        scan_binary_feature_bytes(
-            Some("scalar.wasm"),
-            &minimal_scalar_wasm(),
-            &mut scalar_features,
-        )
-        .unwrap();
-        assert_eq!(scalar_features.wasm_modules, 1);
-        assert!(!scalar_features.wasm_simd);
-
-        let mut simd_features = PackageFeatures::default();
-        scan_binary_feature_bytes(Some("simd.wasm"), &minimal_simd_wasm(), &mut simd_features)
-            .unwrap();
-        assert_eq!(simd_features.wasm_modules, 1);
-        assert!(simd_features.wasm_simd);
-    }
-
-    fn minimal_scalar_wasm() -> Vec<u8> {
-        use wasm_encoder::{
-            CodeSection, Function, FunctionSection, Instruction, Module, TypeSection, ValType,
-        };
-
-        let mut types = TypeSection::new();
-        types
-            .ty()
-            .function(Vec::<ValType>::new(), Vec::<ValType>::new());
-        let mut functions = FunctionSection::new();
-        functions.function(0);
-        let mut func = Function::new([]);
-        func.instruction(&Instruction::I32Const(1))
-            .instruction(&Instruction::Drop)
-            .instruction(&Instruction::End);
-        let mut code = CodeSection::new();
-        code.function(&func);
-        let mut module = Module::new();
-        module.section(&types).section(&functions).section(&code);
-        module.finish()
-    }
-
-    fn minimal_simd_wasm() -> Vec<u8> {
-        use wasm_encoder::{
-            CodeSection, Function, FunctionSection, Instruction, Module, TypeSection, ValType,
-        };
-
-        let mut types = TypeSection::new();
-        types
-            .ty()
-            .function(Vec::<ValType>::new(), Vec::<ValType>::new());
-        let mut functions = FunctionSection::new();
-        functions.function(0);
-        let mut func = Function::new([]);
-        func.instruction(&Instruction::V128Const(0))
-            .instruction(&Instruction::Drop)
-            .instruction(&Instruction::End);
-        let mut code = CodeSection::new();
-        code.function(&func);
-        let mut module = Module::new();
-        module.section(&types).section(&functions).section(&code);
-        module.finish()
     }
 }

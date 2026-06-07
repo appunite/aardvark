@@ -14,6 +14,12 @@ aardvark-core = { path = "crates/aardvark-core" }
 ```
 
 For crates.io you will depend on the published version instead of the workspace path.
+Enable `pyodide-staging` in setup tools that need to prepare runtime assets:
+
+```toml
+[dependencies]
+aardvark-core = { version = "=0.2.1", features = ["pyodide-staging"] }
+```
 
 ## Preparing [Pyodide](https://pyodide.org/) assets
 
@@ -22,7 +28,40 @@ distribution on disk. The distribution contains the upstream Pyodide 0.29.4
 runtime files, package files, Aardvark adapter scripts, a manifest, and a
 compatibility fingerprint.
 
-Use the CLI helper:
+Hosts can stage assets directly from the library without installing
+`aardvark-cli`:
+
+```rust,no_run
+use aardvark_core::pyodide_distribution::{
+    stage_pyodide_distribution, PyodideDistributionStageOptions,
+    PyodideDistributionVariant,
+};
+
+fn prepare_pyodide(output_dir: std::path::PathBuf) -> aardvark_core::Result<String> {
+    let report = stage_pyodide_distribution(PyodideDistributionStageOptions {
+        variant: PyodideDistributionVariant::Full,
+        output_dir,
+        archive: None,
+        force: true,
+    })?;
+    Ok(report.compatibility_fingerprint)
+}
+```
+
+The staging API downloads the pinned upstream archive when `archive` is `None`,
+verifies its SHA-256 digest, unpacks the `core` or `full` distribution, copies
+Aardvark adapter scripts, generates `pyodide.asm.patched.js`, writes
+`aardvark-pyodide-dist.json`, and verifies the final directory with
+`PyodideDistribution::external`.
+
+The `pyodide-staging` feature gates the staging-only normal dependencies used
+for download, archive unpacking, temporary workspaces, and feature scanning. The
+core crate still embeds minimal Pyodide assets at build time through
+`crates/aardvark-core/build.rs`; set `AARDVARK_PYODIDE_ARCHIVE` or
+`AARDVARK_PYODIDE_DIR` in hermetic builds that must avoid fetching the pinned
+core archive during compilation.
+
+The CLI remains available as a developer helper and calls the same library API:
 
 ```bash
 cargo run -p aardvark-cli -- assets stage --variant full

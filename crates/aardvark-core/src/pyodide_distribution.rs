@@ -18,6 +18,16 @@ const MAX_EXTERNAL_BINARY_ASSET_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_EXTERNAL_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_EXTERNAL_TEXT_ASSET_BYTES: u64 = 256 * 1024 * 1024;
 
+#[cfg(feature = "pyodide-staging")]
+mod staging;
+
+#[cfg(feature = "pyodide-staging")]
+#[cfg_attr(docsrs, doc(cfg(feature = "pyodide-staging")))]
+pub use staging::{
+    default_pyodide_distribution_stage_output_dir, stage_pyodide_distribution,
+    PyodideDistributionStageOptions, PyodideDistributionStageReport,
+};
+
 static VERIFIED_EXTERNAL_DISTRIBUTIONS: Lazy<Mutex<BTreeSet<String>>> =
     Lazy::new(|| Mutex::new(BTreeSet::new()));
 static EXTERNAL_TEXT_ASSET_CACHE: Lazy<Mutex<BTreeMap<String, Arc<str>>>> =
