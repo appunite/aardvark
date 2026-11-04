@@ -20,9 +20,21 @@ def _load_echo(profile: str):
     return data
 
 
+# Keep in sync with the profile constants in perf/runner/src/perf/mod.rs.
+NUMPY_SIZES = {"low": 64, "medium": 4_096, "high": 1_000_000}
+PANDAS_ROWS = {"low": 128, "medium": 10_000, "high": 1_000_000}
+MATPLOTLIB_POINTS = {"low": 128, "medium": 4_096, "high": 65_536}
+
+
+def _profile_value(table: dict, kind: str, profile: str) -> int:
+    try:
+        return table[profile]
+    except KeyError:
+        raise RuntimeError(f"unsupported {kind} profile '{profile}'") from None
+
+
 def _load_numpy(profile: str):
-    path = FIXTURE_DIR / f"numpy_{profile}.txt"
-    return {"size": int(path.read_text().strip())}
+    return {"size": _profile_value(NUMPY_SIZES, "numpy", profile)}
 
 
 def _matrix_size(profile: str) -> int:
@@ -40,13 +52,11 @@ def _load_matrix(profile: str):
 
 
 def _load_pandas(profile: str):
-    path = FIXTURE_DIR / f"pandas_{profile}.txt"
-    return {"rows": int(path.read_text().strip())}
+    return {"rows": _profile_value(PANDAS_ROWS, "pandas", profile)}
 
 
 def _load_matplotlib(profile: str):
-    path = FIXTURE_DIR / f"matplotlib_{profile}.txt"
-    return {"points": int(path.read_text().strip())}
+    return {"points": _profile_value(MATPLOTLIB_POINTS, "matplotlib", profile)}
 
 
 def _tensor_length(profile: str) -> int:

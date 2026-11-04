@@ -19,6 +19,10 @@ def _rawctx_payload(field: str) -> Optional[bytes]:
     if source is None:
         return None
     record = source.get(field)
+    if isinstance(record, memoryview):
+        return record.tobytes()
+    if isinstance(record, (bytes, bytearray)):
+        return bytes(record)
     if isinstance(record, dict):
         data = record.get("data")
         if isinstance(data, memoryview):
