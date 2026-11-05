@@ -62,8 +62,18 @@
     "decorators": [],
     "file": "src/tests/test_asyncio.py",
     "fixtures": [],
-    "id": "src/tests/test_asyncio.py::test_eval_code_async_loop",
+    "id": "src/tests/test_asyncio.py::test_eval_code_async_dedent",
     "lineno": 222,
+    "name": "test_eval_code_async_dedent",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_asyncio.py",
+    "fixtures": [],
+    "id": "src/tests/test_asyncio.py::test_eval_code_async_loop",
+    "lineno": 238,
     "name": "test_eval_code_async_loop",
     "nodeStatusHint": "candidate"
   },
@@ -75,7 +85,7 @@
       "selenium"
     ],
     "id": "src/tests/test_asyncio.py::test_eval_code_await_jsproxy",
-    "lineno": 242,
+    "lineno": 260,
     "name": "test_eval_code_await_jsproxy",
     "nodeStatusHint": "candidate"
   },
@@ -87,7 +97,7 @@
       "selenium"
     ],
     "id": "src/tests/test_asyncio.py::test_eval_code_await_fetch",
-    "lineno": 273,
+    "lineno": 291,
     "name": "test_eval_code_await_fetch",
     "nodeStatusHint": "candidate"
   },
@@ -99,7 +109,7 @@
       "selenium"
     ],
     "id": "src/tests/test_asyncio.py::test_eval_code_await_error",
-    "lineno": 304,
+    "lineno": 322,
     "name": "test_eval_code_await_error",
     "nodeStatusHint": "candidate"
   },
@@ -113,7 +123,7 @@
       "selenium"
     ],
     "id": "src/tests/test_asyncio.py::test_ensure_future_memleak",
-    "lineno": 336,
+    "lineno": 354,
     "name": "test_ensure_future_memleak",
     "nodeStatusHint": "candidate"
   },
@@ -125,7 +135,7 @@
       "selenium"
     ],
     "id": "src/tests/test_asyncio.py::test_await_pyproxy_eval_async",
-    "lineno": 349,
+    "lineno": 367,
     "name": "test_await_pyproxy_eval_async",
     "nodeStatusHint": "candidate"
   },
@@ -137,7 +147,7 @@
       "selenium"
     ],
     "id": "src/tests/test_asyncio.py::test_await_pyproxy_async_def",
-    "lineno": 411,
+    "lineno": 429,
     "name": "test_await_pyproxy_async_def",
     "nodeStatusHint": "candidate"
   },
@@ -149,7 +159,7 @@
       "selenium"
     ],
     "id": "src/tests/test_asyncio.py::test_cancellation",
-    "lineno": 425,
+    "lineno": 443,
     "name": "test_cancellation",
     "nodeStatusHint": "candidate"
   },
@@ -161,7 +171,7 @@
       "selenium"
     ],
     "id": "src/tests/test_asyncio.py::test_uncaught_exception",
-    "lineno": 445,
+    "lineno": 463,
     "name": "test_uncaught_exception",
     "nodeStatusHint": "candidate"
   },
@@ -359,7 +369,7 @@
     ],
     "file": "src/tests/test_canvas.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_canvas.py::test_canvas2D",
     "lineno": 5,
@@ -373,7 +383,7 @@
     ],
     "file": "src/tests/test_canvas.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_canvas.py::test_canvas3D",
     "lineno": 23,
@@ -865,8 +875,38 @@
     "decorators": [],
     "file": "src/tests/test_console.py",
     "fixtures": [],
-    "id": "src/tests/test_console.py::test_interactive_console",
+    "id": "src/tests/test_console.py::test_completion_partial_keyword",
     "lineno": 95,
+    "name": "test_completion_partial_keyword",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_console.py",
+    "fixtures": [],
+    "id": "src/tests/test_console.py::test_completion_empty_string",
+    "lineno": 103,
+    "name": "test_completion_empty_string",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_console.py",
+    "fixtures": [],
+    "id": "src/tests/test_console.py::test_completion_with_word_break",
+    "lineno": 116,
+    "name": "test_completion_with_word_break",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_console.py",
+    "fixtures": [],
+    "id": "src/tests/test_console.py::test_interactive_console",
+    "lineno": 127,
     "name": "test_interactive_console",
     "nodeStatusHint": "candidate"
   },
@@ -876,7 +916,7 @@
     "file": "src/tests/test_console.py",
     "fixtures": [],
     "id": "src/tests/test_console.py::test_top_level_await",
-    "lineno": 152,
+    "lineno": 184,
     "name": "test_top_level_await",
     "nodeStatusHint": "candidate"
   },
@@ -888,7 +928,7 @@
       "safe_sys_redirections"
     ],
     "id": "src/tests/test_console.py::test_persistent_redirection",
-    "lineno": 180,
+    "lineno": 212,
     "name": "test_persistent_redirection",
     "nodeStatusHint": "candidate"
   },
@@ -900,7 +940,7 @@
       "safe_sys_redirections"
     ],
     "id": "src/tests/test_console.py::test_nonpersistent_redirection",
-    "lineno": 241,
+    "lineno": 273,
     "name": "test_nonpersistent_redirection",
     "nodeStatusHint": "candidate"
   },
@@ -912,7 +952,7 @@
     "file": "src/tests/test_console.py",
     "fixtures": [],
     "id": "src/tests/test_console.py::test_compile_optimize",
-    "lineno": 295,
+    "lineno": 327,
     "name": "test_compile_optimize",
     "nodeStatusHint": "candidate"
   },
@@ -924,7 +964,7 @@
     "file": "src/tests/test_console.py",
     "fixtures": [],
     "id": "src/tests/test_console.py::test_console_filename",
-    "lineno": 308,
+    "lineno": 340,
     "name": "test_console_filename",
     "nodeStatusHint": "candidate"
   },
@@ -939,7 +979,7 @@
       "selenium"
     ],
     "id": "src/tests/test_console.py::test_pyodide_console_runcode_locked",
-    "lineno": 321,
+    "lineno": 353,
     "name": "test_pyodide_console_runcode_locked",
     "nodeStatusHint": "candidate"
   },
@@ -954,7 +994,7 @@
       "selenium"
     ],
     "id": "src/tests/test_console.py::test_console_imports",
-    "lineno": 332,
+    "lineno": 364,
     "name": "test_console_imports",
     "nodeStatusHint": "candidate"
   },
@@ -968,7 +1008,7 @@
       "selenium_standalone"
     ],
     "id": "src/tests/test_console.py::test_console_html",
-    "lineno": 347,
+    "lineno": 379,
     "name": "test_console_html",
     "nodeStatusHint": "xfail_node"
   },
@@ -982,7 +1022,7 @@
       "selenium_standalone"
     ],
     "id": "src/tests/test_console.py::test_console_v2_html",
-    "lineno": 507,
+    "lineno": 539,
     "name": "test_console_v2_html",
     "nodeStatusHint": "xfail_node"
   },
@@ -1001,6 +1041,125 @@
     "nodeStatusHint": "candidate"
   },
   {
+    "category": "python",
+    "decorators": [
+      "pytest.mark.skip_refcount_check",
+      "pytest.mark.db",
+      "only_node"
+    ],
+    "file": "src/tests/test_database_driver.py",
+    "fixtures": [
+      "selenium_nodesock",
+      "mysql_test_db"
+    ],
+    "id": "src/tests/test_database_driver.py::test_mysql_pymysql_features",
+    "lineno": 96,
+    "name": "test_mysql_pymysql_features",
+    "nodeStatusHint": "node_only"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "pytest.mark.skip_refcount_check",
+      "pytest.mark.db",
+      "only_node"
+    ],
+    "file": "src/tests/test_database_driver.py",
+    "fixtures": [
+      "selenium_nodesock",
+      "mysql_test_db"
+    ],
+    "id": "src/tests/test_database_driver.py::test_sqlalchemy_mysql",
+    "lineno": 212,
+    "name": "test_sqlalchemy_mysql",
+    "nodeStatusHint": "node_only"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "pytest.mark.skip_refcount_check",
+      "pytest.mark.db",
+      "only_node"
+    ],
+    "file": "src/tests/test_database_driver.py",
+    "fixtures": [
+      "selenium_nodesock",
+      "mysql_test_db"
+    ],
+    "id": "src/tests/test_database_driver.py::test_mysql_pymysql_tls",
+    "lineno": 339,
+    "name": "test_mysql_pymysql_tls",
+    "nodeStatusHint": "node_only"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "pytest.mark.skip_refcount_check",
+      "pytest.mark.db",
+      "only_node"
+    ],
+    "file": "src/tests/test_database_driver.py",
+    "fixtures": [
+      "selenium_nodesock",
+      "mysql_test_db"
+    ],
+    "id": "src/tests/test_database_driver.py::test_mysql_aiomysql_features",
+    "lineno": 394,
+    "name": "test_mysql_aiomysql_features",
+    "nodeStatusHint": "node_only"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "pytest.mark.skip_refcount_check",
+      "pytest.mark.db",
+      "only_node"
+    ],
+    "file": "src/tests/test_database_driver.py",
+    "fixtures": [
+      "selenium_nodesock",
+      "pg_test_db"
+    ],
+    "id": "src/tests/test_database_driver.py::test_postgresql_pg8000_features",
+    "lineno": 524,
+    "name": "test_postgresql_pg8000_features",
+    "nodeStatusHint": "node_only"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "pytest.mark.skip_refcount_check",
+      "pytest.mark.db",
+      "only_node"
+    ],
+    "file": "src/tests/test_database_driver.py",
+    "fixtures": [
+      "selenium_nodesock",
+      "pg_test_db"
+    ],
+    "id": "src/tests/test_database_driver.py::test_sqlalchemy_pg8000",
+    "lineno": 642,
+    "name": "test_sqlalchemy_pg8000",
+    "nodeStatusHint": "node_only"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "pytest.mark.skip_refcount_check",
+      "pytest.mark.db",
+      "only_node"
+    ],
+    "file": "src/tests/test_database_driver.py",
+    "fixtures": [
+      "selenium_nodesock",
+      "redis_test_db"
+    ],
+    "id": "src/tests/test_database_driver.py::test_redis_py_features",
+    "lineno": 803,
+    "name": "test_redis_py_features",
+    "nodeStatusHint": "node_only"
+  },
+  {
     "category": "filesystem",
     "decorators": [
       "pytest.mark.skip_refcount_check",
@@ -1008,7 +1167,7 @@
     ],
     "file": "src/tests/test_filesystem.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_filesystem.py::test_idbfs_persist_code",
     "lineno": 14,
@@ -1024,7 +1183,7 @@
     "file": "src/tests/test_filesystem.py",
     "fixtures": [
       "request",
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_filesystem.py::test_nativefs_dir",
     "lineno": 116,
@@ -1096,7 +1255,7 @@
     "decorators": [],
     "file": "src/tests/test_filesystem.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_filesystem.py::test_trackingDelegate",
     "lineno": 437,
@@ -1117,19 +1276,23 @@
   },
   {
     "category": "js_ffi",
-    "decorators": [],
+    "decorators": [
+      "run_in_pyodide"
+    ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_dir",
-    "lineno": 12,
+    "lineno": 13,
     "name": "test_jsproxy_dir",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "js_ffi",
-    "decorators": [],
+    "decorators": [
+      "run_in_pyodide"
+    ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
       "selenium"
@@ -1220,25 +1383,29 @@
   },
   {
     "category": "js_ffi",
-    "decorators": [],
+    "decorators": [
+      "run_in_pyodide"
+    ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_function",
-    "lineno": 176,
+    "lineno": 177,
     "name": "test_jsproxy_function",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "js_ffi",
-    "decorators": [],
+    "decorators": [
+      "run_in_pyodide"
+    ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_class",
-    "lineno": 189,
+    "lineno": 188,
     "name": "test_jsproxy_class",
     "nodeStatusHint": "candidate"
   },
@@ -1252,43 +1419,49 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_map",
-    "lineno": 214,
+    "lineno": 210,
     "name": "test_jsproxy_map",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "js_ffi",
-    "decorators": [],
+    "decorators": [
+      "run_in_pyodide"
+    ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_iter",
-    "lineno": 234,
+    "lineno": 231,
     "name": "test_jsproxy_iter",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "js_ffi",
-    "decorators": [],
+    "decorators": [
+      "run_in_pyodide"
+    ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_implicit_iter",
-    "lineno": 253,
+    "lineno": 255,
     "name": "test_jsproxy_implicit_iter",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "js_ffi",
-    "decorators": [],
+    "decorators": [
+      "run_in_pyodide"
+    ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_call1",
-    "lineno": 265,
+    "lineno": 272,
     "name": "test_jsproxy_call1",
     "nodeStatusHint": "candidate"
   },
@@ -1302,57 +1475,64 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_call2",
-    "lineno": 283,
+    "lineno": 287,
     "name": "test_jsproxy_call2",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "js_ffi",
-    "decorators": [],
+    "decorators": [
+      "run_in_pyodide"
+    ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_call_kwargs",
-    "lineno": 290,
+    "lineno": 295,
     "name": "test_jsproxy_call_kwargs",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "js_ffi",
     "decorators": [
-      "pytest.mark.xfail"
+      "pytest.mark.xfail",
+      "run_in_pyodide"
     ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_call_meth_py",
-    "lineno": 307,
+    "lineno": 313,
     "name": "test_jsproxy_call_meth_py",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "js_ffi",
-    "decorators": [],
+    "decorators": [
+      "run_in_pyodide"
+    ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_call_meth_js",
-    "lineno": 324,
+    "lineno": 328,
     "name": "test_jsproxy_call_meth_js",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "js_ffi",
-    "decorators": [],
+    "decorators": [
+      "run_in_pyodide"
+    ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_call_meth_js_kwargs",
-    "lineno": 340,
+    "lineno": 345,
     "name": "test_jsproxy_call_meth_js_kwargs",
     "nodeStatusHint": "candidate"
   },
@@ -1364,7 +1544,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_call_pyproxy_destroy_args",
-    "lineno": 359,
+    "lineno": 364,
     "name": "test_call_pyproxy_destroy_args",
     "nodeStatusHint": "candidate"
   },
@@ -1376,7 +1556,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_call_pyproxy_set_global",
-    "lineno": 411,
+    "lineno": 416,
     "name": "test_call_pyproxy_set_global",
     "nodeStatusHint": "candidate"
   },
@@ -1388,7 +1568,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_call_pyproxy_destroy_result",
-    "lineno": 456,
+    "lineno": 461,
     "name": "test_call_pyproxy_destroy_result",
     "nodeStatusHint": "candidate"
   },
@@ -1402,7 +1582,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_call_pyproxy_return_arg",
-    "lineno": 496,
+    "lineno": 501,
     "name": "test_call_pyproxy_return_arg",
     "nodeStatusHint": "candidate"
   },
@@ -1416,7 +1596,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_import_invocation",
-    "lineno": 533,
+    "lineno": 538,
     "name": "test_import_invocation",
     "nodeStatusHint": "candidate"
   },
@@ -1430,7 +1610,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_import_bind",
-    "lineno": 546,
+    "lineno": 551,
     "name": "test_import_bind",
     "nodeStatusHint": "candidate"
   },
@@ -1444,7 +1624,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_nested_attribute_access",
-    "lineno": 553,
+    "lineno": 558,
     "name": "test_nested_attribute_access",
     "nodeStatusHint": "candidate"
   },
@@ -1456,7 +1636,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_destroy_attribute",
-    "lineno": 561,
+    "lineno": 566,
     "name": "test_destroy_attribute",
     "nodeStatusHint": "candidate"
   },
@@ -1470,7 +1650,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_window_isnt_super_weird_anymore",
-    "lineno": 600,
+    "lineno": 605,
     "name": "test_window_isnt_super_weird_anymore",
     "nodeStatusHint": "candidate"
   },
@@ -1478,38 +1658,43 @@
     "category": "js_ffi",
     "decorators": [
       "pytest.mark.skip_refcount_check",
-      "pytest.mark.skip_pyproxy_check"
+      "pytest.mark.skip_pyproxy_check",
+      "run_in_pyodide"
     ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_jsproxy.py::test_mount_object",
-    "lineno": 614,
+    "lineno": 620,
     "name": "test_mount_object",
     "nodeStatusHint": "candidate"
   },
   {
-    "category": "js_ffi",
-    "decorators": [],
+    "category": "package",
+    "decorators": [
+      "run_in_pyodide(packages=[\"pytest\"])"
+    ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_unregister_jsmodule",
-    "lineno": 663,
+    "lineno": 668,
     "name": "test_unregister_jsmodule",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "js_ffi",
-    "decorators": [],
+    "decorators": [
+      "run_in_pyodide"
+    ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_unregister_jsmodule_error",
-    "lineno": 681,
+    "lineno": 688,
     "name": "test_unregister_jsmodule_error",
     "nodeStatusHint": "candidate"
   },
@@ -1525,7 +1710,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsmod_import_star1",
-    "lineno": 699,
+    "lineno": 708,
     "name": "test_jsmod_import_star1",
     "nodeStatusHint": "candidate"
   },
@@ -1541,7 +1726,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsmod_import_star2",
-    "lineno": 724,
+    "lineno": 733,
     "name": "test_jsmod_import_star2",
     "nodeStatusHint": "candidate"
   },
@@ -1549,14 +1734,15 @@
     "category": "js_ffi",
     "decorators": [
       "pytest.mark.skip_refcount_check",
-      "pytest.mark.skip_pyproxy_check"
+      "pytest.mark.skip_pyproxy_check",
+      "run_in_pyodide"
     ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_jsproxy.py::test_nested_import",
-    "lineno": 748,
+    "lineno": 758,
     "name": "test_nested_import",
     "nodeStatusHint": "candidate"
   },
@@ -1564,14 +1750,15 @@
     "category": "js_ffi",
     "decorators": [
       "pytest.mark.skip_refcount_check",
-      "pytest.mark.skip_pyproxy_check"
+      "pytest.mark.skip_pyproxy_check",
+      "run_in_pyodide"
     ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_jsproxy.py::test_register_jsmodule_docs_example",
-    "lineno": 770,
+    "lineno": 780,
     "name": "test_register_jsmodule_docs_example",
     "nodeStatusHint": "candidate"
   },
@@ -1579,14 +1766,15 @@
     "category": "js_ffi",
     "decorators": [
       "pytest.mark.skip_refcount_check",
-      "pytest.mark.skip_pyproxy_check"
+      "pytest.mark.skip_pyproxy_check",
+      "run_in_pyodide"
     ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_jsproxy.py::test_register_non_extendable_jsmodule",
-    "lineno": 808,
+    "lineno": 820,
     "name": "test_register_non_extendable_jsmodule",
     "nodeStatusHint": "candidate"
   },
@@ -1600,19 +1788,21 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_object_entries_keys_values",
-    "lineno": 825,
+    "lineno": 835,
     "name": "test_object_entries_keys_values",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "js_ffi",
-    "decorators": [],
+    "decorators": [
+      "run_in_pyodide"
+    ],
     "file": "src/tests/test_jsproxy.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_mixins_feature_presence",
-    "lineno": 834,
+    "lineno": 845,
     "name": "test_mixins_feature_presence",
     "nodeStatusHint": "candidate"
   },
@@ -1624,7 +1814,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_mixins_calls",
-    "lineno": 878,
+    "lineno": 886,
     "name": "test_mixins_calls",
     "nodeStatusHint": "candidate"
   },
@@ -1636,7 +1826,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_mixins_errors_1",
-    "lineno": 931,
+    "lineno": 939,
     "name": "test_mixins_errors_1",
     "nodeStatusHint": "candidate"
   },
@@ -1648,7 +1838,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_mixins_errors_2",
-    "lineno": 958,
+    "lineno": 966,
     "name": "test_mixins_errors_2",
     "nodeStatusHint": "candidate"
   },
@@ -1662,7 +1852,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_mixins_errors_3",
-    "lineno": 1013,
+    "lineno": 1021,
     "name": "test_mixins_errors_3",
     "nodeStatusHint": "candidate"
   },
@@ -1676,7 +1866,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_mixins_errors_4",
-    "lineno": 1049,
+    "lineno": 1057,
     "name": "test_mixins_errors_4",
     "nodeStatusHint": "candidate"
   },
@@ -1688,7 +1878,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_buffer",
-    "lineno": 1084,
+    "lineno": 1092,
     "name": "test_buffer",
     "nodeStatusHint": "candidate"
   },
@@ -1702,7 +1892,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_buffer_to_file",
-    "lineno": 1140,
+    "lineno": 1148,
     "name": "test_buffer_to_file",
     "nodeStatusHint": "candidate"
   },
@@ -1716,7 +1906,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_buffer_into_file",
-    "lineno": 1159,
+    "lineno": 1167,
     "name": "test_buffer_into_file",
     "nodeStatusHint": "candidate"
   },
@@ -1730,7 +1920,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_buffer_into_file2",
-    "lineno": 1173,
+    "lineno": 1181,
     "name": "test_buffer_into_file2",
     "nodeStatusHint": "candidate"
   },
@@ -1742,7 +1932,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_buffer_assign_back",
-    "lineno": 1186,
+    "lineno": 1194,
     "name": "test_buffer_assign_back",
     "nodeStatusHint": "candidate"
   },
@@ -1756,7 +1946,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_buffer_conversions",
-    "lineno": 1203,
+    "lineno": 1211,
     "name": "test_buffer_conversions",
     "nodeStatusHint": "candidate"
   },
@@ -1770,7 +1960,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_tostring_encoding",
-    "lineno": 1221,
+    "lineno": 1229,
     "name": "test_tostring_encoding",
     "nodeStatusHint": "candidate"
   },
@@ -1784,7 +1974,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_tostring_error",
-    "lineno": 1235,
+    "lineno": 1243,
     "name": "test_tostring_error",
     "nodeStatusHint": "candidate"
   },
@@ -1798,7 +1988,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_duck_buffer_method_presence",
-    "lineno": 1254,
+    "lineno": 1262,
     "name": "test_duck_buffer_method_presence",
     "nodeStatusHint": "candidate"
   },
@@ -1810,7 +2000,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_memory_leaks",
-    "lineno": 1267,
+    "lineno": 1275,
     "name": "test_memory_leaks",
     "nodeStatusHint": "candidate"
   },
@@ -1824,7 +2014,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_raise_js_error",
-    "lineno": 1283,
+    "lineno": 1291,
     "name": "test_raise_js_error",
     "nodeStatusHint": "candidate"
   },
@@ -1838,7 +2028,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_js_id",
-    "lineno": 1295,
+    "lineno": 1303,
     "name": "test_js_id",
     "nodeStatusHint": "candidate"
   },
@@ -1852,7 +2042,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_object_with_null_constructor",
-    "lineno": 1305,
+    "lineno": 1313,
     "name": "test_object_with_null_constructor",
     "nodeStatusHint": "candidate"
   },
@@ -1868,7 +2058,7 @@
       "n"
     ],
     "id": "src/tests/test_jsproxy.py::test_very_large_length",
-    "lineno": 1314,
+    "lineno": 1322,
     "name": "test_very_large_length",
     "nodeStatusHint": "candidate"
   },
@@ -1884,7 +2074,7 @@
       "n"
     ],
     "id": "src/tests/test_jsproxy.py::test_negative_length",
-    "lineno": 1340,
+    "lineno": 1346,
     "name": "test_negative_length",
     "nodeStatusHint": "candidate"
   },
@@ -1898,7 +2088,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsarray_reversed",
-    "lineno": 1363,
+    "lineno": 1367,
     "name": "test_jsarray_reversed",
     "nodeStatusHint": "candidate"
   },
@@ -1912,7 +2102,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsarray_reverse",
-    "lineno": 1389,
+    "lineno": 1393,
     "name": "test_jsarray_reverse",
     "nodeStatusHint": "candidate"
   },
@@ -1926,7 +2116,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_array_empty_slot",
-    "lineno": 1405,
+    "lineno": 1409,
     "name": "test_array_empty_slot",
     "nodeStatusHint": "candidate"
   },
@@ -1940,7 +2130,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_array_pop",
-    "lineno": 1420,
+    "lineno": 1424,
     "name": "test_array_pop",
     "nodeStatusHint": "candidate"
   },
@@ -1966,7 +2156,7 @@
       "slice"
     ],
     "id": "src/tests/test_jsproxy.py::test_array_slices",
-    "lineno": 1439,
+    "lineno": 1443,
     "name": "test_array_slices",
     "nodeStatusHint": "candidate"
   },
@@ -1992,7 +2182,7 @@
       "slice"
     ],
     "id": "src/tests/test_jsproxy.py::test_array_slice_del",
-    "lineno": 1460,
+    "lineno": 1464,
     "name": "test_array_slice_del",
     "nodeStatusHint": "candidate"
   },
@@ -2012,7 +2202,7 @@
       "lsv"
     ],
     "id": "src/tests/test_jsproxy.py::test_array_slice_assign_1",
-    "lineno": 1496,
+    "lineno": 1500,
     "name": "test_array_slice_assign_1",
     "nodeStatusHint": "candidate"
   },
@@ -2026,7 +2216,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_array_slice_assign_2",
-    "lineno": 1508,
+    "lineno": 1512,
     "name": "test_array_slice_assign_2",
     "nodeStatusHint": "candidate"
   },
@@ -2046,7 +2236,7 @@
       "l2"
     ],
     "id": "src/tests/test_jsproxy.py::test_array_extend",
-    "lineno": 1545,
+    "lineno": 1549,
     "name": "test_array_extend",
     "nodeStatusHint": "candidate"
   },
@@ -2060,7 +2250,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_typed_array",
-    "lineno": 1561,
+    "lineno": 1565,
     "name": "test_typed_array",
     "nodeStatusHint": "candidate"
   },
@@ -2075,14 +2265,28 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_html_array",
-    "lineno": 1590,
+    "lineno": 1594,
     "name": "test_html_array",
     "nodeStatusHint": "xfail_node"
   },
   {
     "category": "js_ffi",
     "decorators": [
-      "pytest.mark.parametrize(\n    \"sequence_converter\",\n    [\n        \"(x) => x\",\n        \"(x) => new Uint8Array(x)\",\n        \"(x) => Object.create({[Symbol.toStringTag] : 'NodeList'}, Object.getOwnPropertyDescriptors(x))\",\n    ],\n)",
+      "run_in_pyodide"
+    ],
+    "file": "src/tests/test_jsproxy.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_jsproxy.py::test_array_like_sequence_iteration_fail",
+    "lineno": 1611,
+    "name": "test_array_like_sequence_iteration_fail",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "js_ffi",
+    "decorators": [
+      "pytest.mark.parametrize(\n    \"sequence_converter\",\n    [\n        \"(x) => x\",\n        \"(x) => new Uint8Array(x)\",\n        \"(x) => Object.create({[Symbol.iterator]: Array.prototype[Symbol.iterator]}, Object.getOwnPropertyDescriptors(x))\",\n    ],\n)",
       "pytest.mark.requires_dynamic_linking",
       "run_in_pyodide"
     ],
@@ -2092,7 +2296,7 @@
       "sequence_converter"
     ],
     "id": "src/tests/test_jsproxy.py::test_array_sequence_methods",
-    "lineno": 1616,
+    "lineno": 1642,
     "name": "test_array_sequence_methods",
     "nodeStatusHint": "candidate"
   },
@@ -2106,7 +2310,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_array_sequence_repeat",
-    "lineno": 1669,
+    "lineno": 1708,
     "name": "test_array_sequence_repeat",
     "nodeStatusHint": "candidate"
   },
@@ -2120,7 +2324,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_match",
-    "lineno": 1690,
+    "lineno": 1729,
     "name": "test_jsproxy_match",
     "nodeStatusHint": "candidate"
   },
@@ -2134,7 +2338,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsarray_index",
-    "lineno": 1735,
+    "lineno": 1774,
     "name": "test_jsarray_index",
     "nodeStatusHint": "candidate"
   },
@@ -2148,7 +2352,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsarray_count",
-    "lineno": 1752,
+    "lineno": 1791,
     "name": "test_jsarray_count",
     "nodeStatusHint": "candidate"
   },
@@ -2162,7 +2366,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsarray_remove",
-    "lineno": 1783,
+    "lineno": 1822,
     "name": "test_jsarray_remove",
     "nodeStatusHint": "candidate"
   },
@@ -2176,7 +2380,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsarray_insert",
-    "lineno": 1810,
+    "lineno": 1849,
     "name": "test_jsarray_insert",
     "nodeStatusHint": "candidate"
   },
@@ -2190,7 +2394,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_descr_get",
-    "lineno": 1824,
+    "lineno": 1863,
     "name": "test_jsproxy_descr_get",
     "nodeStatusHint": "candidate"
   },
@@ -2204,7 +2408,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_mappings",
-    "lineno": 1841,
+    "lineno": 1880,
     "name": "test_mappings",
     "nodeStatusHint": "candidate"
   },
@@ -2218,7 +2422,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_as_object_map",
-    "lineno": 1885,
+    "lineno": 1933,
     "name": "test_jsproxy_as_object_map",
     "nodeStatusHint": "candidate"
   },
@@ -2232,7 +2436,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_object_map_mapping_methods",
-    "lineno": 1929,
+    "lineno": 1977,
     "name": "test_object_map_mapping_methods",
     "nodeStatusHint": "candidate"
   },
@@ -2246,7 +2450,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_as_object_map_heritable",
-    "lineno": 1977,
+    "lineno": 2025,
     "name": "test_as_object_map_heritable",
     "nodeStatusHint": "candidate"
   },
@@ -2260,7 +2464,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_as_object_map_presence",
-    "lineno": 2033,
+    "lineno": 2081,
     "name": "test_as_object_map_presence",
     "nodeStatusHint": "candidate"
   },
@@ -2274,7 +2478,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_as_py_json",
-    "lineno": 2060,
+    "lineno": 2108,
     "name": "test_as_py_json",
     "nodeStatusHint": "candidate"
   },
@@ -2288,7 +2492,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_subtypes",
-    "lineno": 2110,
+    "lineno": 2158,
     "name": "test_jsproxy_subtypes",
     "nodeStatusHint": "candidate"
   },
@@ -2302,7 +2506,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_gen_send",
-    "lineno": 2141,
+    "lineno": 2189,
     "name": "test_gen_send",
     "nodeStatusHint": "candidate"
   },
@@ -2316,7 +2520,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_gen_send_type_errors",
-    "lineno": 2172,
+    "lineno": 2220,
     "name": "test_gen_send_type_errors",
     "nodeStatusHint": "candidate"
   },
@@ -2330,7 +2534,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_gen_throw",
-    "lineno": 2214,
+    "lineno": 2262,
     "name": "test_gen_throw",
     "nodeStatusHint": "candidate"
   },
@@ -2344,7 +2548,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_gen_close",
-    "lineno": 2261,
+    "lineno": 2309,
     "name": "test_gen_close",
     "nodeStatusHint": "candidate"
   },
@@ -2358,7 +2562,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_agen_aiter",
-    "lineno": 2313,
+    "lineno": 2361,
     "name": "test_agen_aiter",
     "nodeStatusHint": "candidate"
   },
@@ -2372,7 +2576,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_agen_aiter2",
-    "lineno": 2355,
+    "lineno": 2403,
     "name": "test_agen_aiter2",
     "nodeStatusHint": "candidate"
   },
@@ -2386,7 +2590,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_agen_asend",
-    "lineno": 2388,
+    "lineno": 2436,
     "name": "test_agen_asend",
     "nodeStatusHint": "candidate"
   },
@@ -2400,7 +2604,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_agen_athrow",
-    "lineno": 2417,
+    "lineno": 2465,
     "name": "test_agen_athrow",
     "nodeStatusHint": "candidate"
   },
@@ -2414,7 +2618,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_agen_aclose",
-    "lineno": 2467,
+    "lineno": 2515,
     "name": "test_agen_aclose",
     "nodeStatusHint": "candidate"
   },
@@ -2428,7 +2632,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_gen_lifetimes",
-    "lineno": 2501,
+    "lineno": 2549,
     "name": "test_gen_lifetimes",
     "nodeStatusHint": "candidate"
   },
@@ -2442,7 +2646,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_agen_lifetimes",
-    "lineno": 2540,
+    "lineno": 2588,
     "name": "test_agen_lifetimes",
     "nodeStatusHint": "candidate"
   },
@@ -2456,7 +2660,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_python_reserved_keywords",
-    "lineno": 2579,
+    "lineno": 2627,
     "name": "test_python_reserved_keywords",
     "nodeStatusHint": "candidate"
   },
@@ -2470,7 +2674,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_revoked_proxy",
-    "lineno": 2643,
+    "lineno": 2691,
     "name": "test_revoked_proxy",
     "nodeStatusHint": "candidate"
   },
@@ -2484,7 +2688,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_js_proxy_attribute",
-    "lineno": 2656,
+    "lineno": 2704,
     "name": "test_js_proxy_attribute",
     "nodeStatusHint": "candidate"
   },
@@ -2498,7 +2702,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_js_proxy_str",
-    "lineno": 2685,
+    "lineno": 2733,
     "name": "test_js_proxy_str",
     "nodeStatusHint": "candidate"
   },
@@ -2512,7 +2716,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_bind_jsfunc_sig",
-    "lineno": 2752,
+    "lineno": 2800,
     "name": "test_bind_jsfunc_sig",
     "nodeStatusHint": "candidate"
   },
@@ -2526,7 +2730,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_bind_func_illegal_sigs",
-    "lineno": 2768,
+    "lineno": 2816,
     "name": "test_bind_func_illegal_sigs",
     "nodeStatusHint": "candidate"
   },
@@ -2543,7 +2747,7 @@
       "sig"
     ],
     "id": "src/tests/test_jsproxy.py::test_bind_arg_checking",
-    "lineno": 2825,
+    "lineno": 2873,
     "name": "test_bind_arg_checking",
     "nodeStatusHint": "candidate"
   },
@@ -2557,7 +2761,7 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_bind_self_reference",
-    "lineno": 2901,
+    "lineno": 2949,
     "name": "test_bind_self_reference",
     "nodeStatusHint": "candidate"
   },
@@ -2571,8 +2775,66 @@
       "selenium"
     ],
     "id": "src/tests/test_jsproxy.py::test_jsproxy_no_error_this",
-    "lineno": 2931,
+    "lineno": 2979,
     "name": "test_jsproxy_no_error_this",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "js_ffi",
+    "decorators": [
+      "pytest.mark.xfail_browsers(safari=\"Symbol.dispose not supported in Safari\")",
+      "run_in_pyodide"
+    ],
+    "file": "src/tests/test_jsproxy.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_jsproxy.py::test_jsproxy_context_manager",
+    "lineno": 2997,
+    "name": "test_jsproxy_context_manager",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "js_ffi",
+    "decorators": [
+      "pytest.mark.xfail_browsers(safari=\"Symbol.asyncDispose not supported in Safari\")",
+      "run_in_pyodide"
+    ],
+    "file": "src/tests/test_jsproxy.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_jsproxy.py::test_jsproxy_async_context_manager",
+    "lineno": 3030,
+    "name": "test_jsproxy_async_context_manager",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "js_ffi",
+    "decorators": [
+      "pytest.mark.xfail_browsers(safari=\"Symbol.asyncDispose not supported in Safari\")",
+      "run_in_pyodide"
+    ],
+    "file": "src/tests/test_jsproxy.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_jsproxy.py::test_jsproxy_async_dispose_returns_synchronously",
+    "lineno": 3064,
+    "name": "test_jsproxy_async_dispose_returns_synchronously",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "js_ffi",
+    "decorators": [],
+    "file": "src/tests/test_jsproxy.py",
+    "fixtures": [
+      "obj",
+      "keys_expected"
+    ],
+    "id": "src/tests/test_jsproxy.py::test_object",
+    "lineno": 848,
+    "name": "test_object",
     "nodeStatusHint": "candidate"
   },
   {
@@ -2583,7 +2845,7 @@
     ],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone",
+      "selenium_standalone_refresh",
       "httpserver"
     ],
     "id": "src/tests/test_package_loading.py::test_load_from_url",
@@ -2610,7 +2872,7 @@
     "decorators": [],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_package_loading.py::test_list_loaded_urls",
     "lineno": 90,
@@ -2622,7 +2884,7 @@
     "decorators": [],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_package_loading.py::test_uri_mismatch",
     "lineno": 101,
@@ -2637,7 +2899,7 @@
       "selenium"
     ],
     "id": "src/tests/test_package_loading.py::test_invalid_package_name",
-    "lineno": 109,
+    "lineno": 112,
     "name": "test_invalid_package_name",
     "nodeStatusHint": "candidate"
   },
@@ -2646,10 +2908,10 @@
     "decorators": [],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_package_loading.py::test_load_package_return",
-    "lineno": 122,
+    "lineno": 125,
     "name": "test_load_package_return",
     "nodeStatusHint": "candidate"
   },
@@ -2660,10 +2922,10 @@
     ],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_package_loading.py::test_load_package_return_from_url",
-    "lineno": 131,
+    "lineno": 134,
     "name": "test_load_package_return_from_url",
     "nodeStatusHint": "xfail_node"
   },
@@ -2675,11 +2937,11 @@
     ],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone",
+      "selenium_standalone_refresh",
       "packages"
     ],
     "id": "src/tests/test_package_loading.py::test_load_packages_multiple",
-    "lineno": 149,
+    "lineno": 152,
     "name": "test_load_packages_multiple",
     "nodeStatusHint": "candidate"
   },
@@ -2691,11 +2953,11 @@
     ],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone",
+      "selenium_standalone_refresh",
       "packages"
     ],
     "id": "src/tests/test_package_loading.py::test_load_packages_sequential",
-    "lineno": 174,
+    "lineno": 177,
     "name": "test_load_packages_sequential",
     "nodeStatusHint": "candidate"
   },
@@ -2706,10 +2968,10 @@
     ],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_package_loading.py::test_load_handle_failure",
-    "lineno": 197,
+    "lineno": 200,
     "name": "test_load_handle_failure",
     "nodeStatusHint": "candidate"
   },
@@ -2720,10 +2982,10 @@
     ],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_package_loading.py::test_load_failure_retry",
-    "lineno": 209,
+    "lineno": 212,
     "name": "test_load_failure_retry",
     "nodeStatusHint": "candidate"
   },
@@ -2732,10 +2994,10 @@
     "decorators": [],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_package_loading.py::test_load_twice",
-    "lineno": 223,
+    "lineno": 226,
     "name": "test_load_twice",
     "nodeStatusHint": "candidate"
   },
@@ -2744,10 +3006,10 @@
     "decorators": [],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_package_loading.py::test_load_twice_different_source",
-    "lineno": 229,
+    "lineno": 232,
     "name": "test_load_twice_different_source",
     "nodeStatusHint": "candidate"
   },
@@ -2756,10 +3018,10 @@
     "decorators": [],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_package_loading.py::test_load_twice_same_source",
-    "lineno": 242,
+    "lineno": 245,
     "name": "test_load_twice_same_source",
     "nodeStatusHint": "candidate"
   },
@@ -2768,10 +3030,10 @@
     "decorators": [],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_package_loading.py::test_js_load_package_from_python",
-    "lineno": 252,
+    "lineno": 255,
     "name": "test_js_load_package_from_python",
     "nodeStatusHint": "candidate"
   },
@@ -2782,11 +3044,11 @@
     ],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone",
+      "selenium_standalone_refresh",
       "pkg"
     ],
     "id": "src/tests/test_package_loading.py::test_load_package_mixed_case",
-    "lineno": 272,
+    "lineno": 275,
     "name": "test_load_package_mixed_case",
     "nodeStatusHint": "candidate"
   },
@@ -2798,11 +3060,11 @@
     ],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone",
+      "selenium_standalone_refresh",
       "pkg"
     ],
     "id": "src/tests/test_package_loading.py::test_install_mixed_case_micropip",
-    "lineno": 288,
+    "lineno": 291,
     "name": "test_install_mixed_case_micropip",
     "nodeStatusHint": "candidate"
   },
@@ -2813,10 +3075,10 @@
     ],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_package_loading.py::test_unvendoring",
-    "lineno": 302,
+    "lineno": 305,
     "name": "test_unvendoring",
     "nodeStatusHint": "candidate"
   },
@@ -2828,7 +3090,7 @@
       "selenium"
     ],
     "id": "src/tests/test_package_loading.py::test_install_archive",
-    "lineno": 332,
+    "lineno": 335,
     "name": "test_install_archive",
     "nodeStatusHint": "candidate"
   },
@@ -2839,10 +3101,10 @@
     ],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_package_loading.py::test_load_bad_so_file",
-    "lineno": 375,
+    "lineno": 378,
     "name": "test_load_bad_so_file",
     "nodeStatusHint": "candidate"
   },
@@ -2853,10 +3115,10 @@
     ],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_package_loading.py::test_load_dlerror",
-    "lineno": 390,
+    "lineno": 393,
     "name": "test_load_dlerror",
     "nodeStatusHint": "candidate"
   },
@@ -2866,7 +3128,7 @@
     "file": "src/tests/test_package_loading.py",
     "fixtures": [],
     "id": "src/tests/test_package_loading.py::test_should_load_dynlib",
-    "lineno": 413,
+    "lineno": 416,
     "name": "test_should_load_dynlib",
     "nodeStatusHint": "candidate"
   },
@@ -2876,7 +3138,7 @@
     "file": "src/tests/test_package_loading.py",
     "fixtures": [],
     "id": "src/tests/test_package_loading.py::test_get_dynlibs",
-    "lineno": 451,
+    "lineno": 454,
     "name": "test_get_dynlibs",
     "nodeStatusHint": "candidate"
   },
@@ -2886,7 +3148,7 @@
     "file": "src/tests/test_package_loading.py",
     "fixtures": [],
     "id": "src/tests/test_package_loading.py::test_find_wheel_metadata_dir",
-    "lineno": 487,
+    "lineno": 490,
     "name": "test_find_wheel_metadata_dir",
     "nodeStatusHint": "candidate"
   },
@@ -2896,7 +3158,7 @@
     "file": "src/tests/test_package_loading.py",
     "fixtures": [],
     "id": "src/tests/test_package_loading.py::test_wheel_dist_info_dir",
-    "lineno": 506,
+    "lineno": 509,
     "name": "test_wheel_dist_info_dir",
     "nodeStatusHint": "candidate"
   },
@@ -2906,7 +3168,7 @@
     "file": "src/tests/test_package_loading.py",
     "fixtures": [],
     "id": "src/tests/test_package_loading.py::test_wheel_data_file_dir",
-    "lineno": 539,
+    "lineno": 542,
     "name": "test_wheel_data_file_dir",
     "nodeStatusHint": "candidate"
   },
@@ -2922,7 +3184,7 @@
       "tmp_path"
     ],
     "id": "src/tests/test_package_loading.py::test_get_dist_source",
-    "lineno": 648,
+    "lineno": 651,
     "name": "test_get_dist_source",
     "nodeStatusHint": "candidate"
   },
@@ -2935,7 +3197,7 @@
       "tmp_path"
     ],
     "id": "src/tests/test_package_loading.py::test_init_loaded_packages",
-    "lineno": 656,
+    "lineno": 659,
     "name": "test_init_loaded_packages",
     "nodeStatusHint": "candidate"
   },
@@ -2952,7 +3214,7 @@
       "selenium_standalone_noload"
     ],
     "id": "src/tests/test_package_loading.py::test_custom_lockfile",
-    "lineno": 679,
+    "lineno": 682,
     "name": "test_custom_lockfile",
     "nodeStatusHint": "xfail_node"
   },
@@ -2969,7 +3231,7 @@
       "selenium_standalone_noload"
     ],
     "id": "src/tests/test_package_loading.py::test_custom_lockfile_from_indexedDB",
-    "lineno": 713,
+    "lineno": 716,
     "name": "test_custom_lockfile_from_indexedDB",
     "nodeStatusHint": "xfail_node"
   },
@@ -2983,7 +3245,7 @@
       "httpserver"
     ],
     "id": "src/tests/test_package_loading.py::test_custom_lockfile_different_dir",
-    "lineno": 748,
+    "lineno": 750,
     "name": "test_custom_lockfile_different_dir",
     "nodeStatusHint": "candidate"
   },
@@ -2995,7 +3257,7 @@
       "selenium_standalone_noload"
     ],
     "id": "src/tests/test_package_loading.py::test_lock_file_contents_error",
-    "lineno": 808,
+    "lineno": 810,
     "name": "test_lock_file_contents_error",
     "nodeStatusHint": "candidate"
   },
@@ -3008,7 +3270,7 @@
       "tmp_path"
     ],
     "id": "src/tests/test_package_loading.py::test_lock_file_contents_relative_file_name",
-    "lineno": 822,
+    "lineno": 824,
     "name": "test_lock_file_contents_relative_file_name",
     "nodeStatusHint": "candidate"
   },
@@ -3022,7 +3284,7 @@
       "httpserver"
     ],
     "id": "src/tests/test_package_loading.py::test_lockfilecontents_package_base_url",
-    "lineno": 854,
+    "lineno": 856,
     "name": "test_lockfilecontents_package_base_url",
     "nodeStatusHint": "candidate"
   },
@@ -3036,7 +3298,7 @@
       "httpserver"
     ],
     "id": "src/tests/test_package_loading.py::test_lockfilecontents_absolute_file_name",
-    "lineno": 903,
+    "lineno": 905,
     "name": "test_lockfilecontents_absolute_file_name",
     "nodeStatusHint": "candidate"
   },
@@ -3048,13 +3310,13 @@
     ],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone",
+      "selenium_standalone_refresh",
       "load_name",
       "normalized_name",
       "real_name"
     ],
     "id": "src/tests/test_package_loading.py::test_normalized_name",
-    "lineno": 970,
+    "lineno": 972,
     "name": "test_normalized_name",
     "nodeStatusHint": "candidate"
   },
@@ -3063,11 +3325,11 @@
     "decorators": [],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone",
+      "selenium_standalone_refresh",
       "httpserver"
     ],
     "id": "src/tests/test_package_loading.py::test_data_files_support",
-    "lineno": 995,
+    "lineno": 999,
     "name": "test_data_files_support",
     "nodeStatusHint": "candidate"
   },
@@ -3076,11 +3338,11 @@
     "decorators": [],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone",
+      "selenium_standalone_refresh",
       "httpserver"
     ],
     "id": "src/tests/test_package_loading.py::test_install_api",
-    "lineno": 1031,
+    "lineno": 1035,
     "name": "test_install_api",
     "nodeStatusHint": "candidate"
   },
@@ -3089,11 +3351,11 @@
     "decorators": [],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone",
+      "selenium_standalone_refresh",
       "httpserver"
     ],
     "id": "src/tests/test_package_loading.py::test_load_package_stream",
-    "lineno": 1077,
+    "lineno": 1081,
     "name": "test_load_package_stream",
     "nodeStatusHint": "candidate"
   },
@@ -3104,11 +3366,11 @@
     ],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone",
+      "selenium_standalone_refresh",
       "httpserver"
     ],
     "id": "src/tests/test_package_loading.py::test_load_package_stream_and_callback",
-    "lineno": 1108,
+    "lineno": 1112,
     "name": "test_load_package_stream_and_callback",
     "nodeStatusHint": "candidate"
   },
@@ -3119,10 +3381,10 @@
     ],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_package_loading.py::test_micropip_list_pyodide_package",
-    "lineno": 1140,
+    "lineno": 1144,
     "name": "test_micropip_list_pyodide_package",
     "nodeStatusHint": "candidate"
   },
@@ -3133,10 +3395,10 @@
     ],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_package_loading.py::test_micropip_list_loaded_from_js",
-    "lineno": 1166,
+    "lineno": 1170,
     "name": "test_micropip_list_loaded_from_js",
     "nodeStatusHint": "candidate"
   },
@@ -3147,10 +3409,10 @@
     ],
     "file": "src/tests/test_package_loading.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_package_loading.py::test_micropip_install_non_normalized_package",
-    "lineno": 1183,
+    "lineno": 1187,
     "name": "test_micropip_install_non_normalized_package",
     "nodeStatusHint": "candidate"
   },
@@ -3165,7 +3427,7 @@
       "tmp_path"
     ],
     "id": "src/tests/test_package_loading.py::test_package_cache_dir",
-    "lineno": 1196,
+    "lineno": 1200,
     "name": "test_package_cache_dir",
     "nodeStatusHint": "node_only"
   },
@@ -3180,7 +3442,7 @@
       "tmp_path"
     ],
     "id": "src/tests/test_package_loading.py::test_micropip_freeze_with_package_cache_dir",
-    "lineno": 1227,
+    "lineno": 1231,
     "name": "test_micropip_freeze_with_package_cache_dir",
     "nodeStatusHint": "node_only"
   },
@@ -3195,7 +3457,7 @@
       "tmp_path"
     ],
     "id": "src/tests/test_package_loading.py::test_package_manager_urls_node",
-    "lineno": 1262,
+    "lineno": 1266,
     "name": "test_package_manager_urls_node",
     "nodeStatusHint": "node_only"
   },
@@ -3210,7 +3472,7 @@
       "httpserver"
     ],
     "id": "src/tests/test_package_loading.py::test_package_manager_urls_browsers",
-    "lineno": 1339,
+    "lineno": 1343,
     "name": "test_package_manager_urls_browsers",
     "nodeStatusHint": "xfail_node"
   },
@@ -3282,7 +3544,7 @@
     "file": "src/tests/test_pyodide.py",
     "fixtures": [],
     "id": "src/tests/test_pyodide.py::test_code_runner_mode",
-    "lineno": 119,
+    "lineno": 124,
     "name": "test_code_runner_mode",
     "nodeStatusHint": "candidate"
   },
@@ -3292,7 +3554,7 @@
     "file": "src/tests/test_pyodide.py",
     "fixtures": [],
     "id": "src/tests/test_pyodide.py::test_eval_code",
-    "lineno": 136,
+    "lineno": 141,
     "name": "test_eval_code",
     "nodeStatusHint": "candidate"
   },
@@ -3301,8 +3563,18 @@
     "decorators": [],
     "file": "src/tests/test_pyodide.py",
     "fixtures": [],
+    "id": "src/tests/test_pyodide.py::test_eval_code_dedent",
+    "lineno": 205,
+    "name": "test_eval_code_dedent",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_pyodide.py",
+    "fixtures": [],
     "id": "src/tests/test_pyodide.py::test_eval_code_locals",
-    "lineno": 200,
+    "lineno": 225,
     "name": "test_eval_code_locals",
     "nodeStatusHint": "candidate"
   },
@@ -3312,7 +3584,7 @@
     "file": "src/tests/test_pyodide.py",
     "fixtures": [],
     "id": "src/tests/test_pyodide.py::test_relaxed_call",
-    "lineno": 234,
+    "lineno": 259,
     "name": "test_relaxed_call",
     "nodeStatusHint": "candidate"
   },
@@ -3322,7 +3594,7 @@
     "file": "src/tests/test_pyodide.py",
     "fixtures": [],
     "id": "src/tests/test_pyodide.py::test_relaxed_wrap",
-    "lineno": 291,
+    "lineno": 316,
     "name": "test_relaxed_wrap",
     "nodeStatusHint": "candidate"
   },
@@ -3331,10 +3603,10 @@
     "decorators": [],
     "file": "src/tests/test_pyodide.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_pyodide.py::test_unpack_archive",
-    "lineno": 352,
+    "lineno": 377,
     "name": "test_unpack_archive",
     "nodeStatusHint": "candidate"
   },
@@ -3348,7 +3620,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_dup_pipe",
-    "lineno": 370,
+    "lineno": 395,
     "name": "test_dup_pipe",
     "nodeStatusHint": "candidate"
   },
@@ -3362,7 +3634,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_dup_temp_file",
-    "lineno": 389,
+    "lineno": 414,
     "name": "test_dup_temp_file",
     "nodeStatusHint": "candidate"
   },
@@ -3376,7 +3648,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_dup_stdout",
-    "lineno": 410,
+    "lineno": 435,
     "name": "test_dup_stdout",
     "nodeStatusHint": "candidate"
   },
@@ -3390,7 +3662,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_monkeypatch_eval_code",
-    "lineno": 435,
+    "lineno": 460,
     "name": "test_monkeypatch_eval_code",
     "nodeStatusHint": "candidate"
   },
@@ -3402,7 +3674,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_promise_check",
-    "lineno": 457,
+    "lineno": 482,
     "name": "test_promise_check",
     "nodeStatusHint": "candidate"
   },
@@ -3414,7 +3686,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_keyboard_interrupt",
-    "lineno": 508,
+    "lineno": 533,
     "name": "test_keyboard_interrupt",
     "nodeStatusHint": "candidate"
   },
@@ -3426,7 +3698,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_run_python_async_toplevel_await",
-    "lineno": 531,
+    "lineno": 556,
     "name": "test_run_python_async_toplevel_await",
     "nodeStatusHint": "candidate"
   },
@@ -3438,7 +3710,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_run_python_proxy_leak",
-    "lineno": 544,
+    "lineno": 569,
     "name": "test_run_python_proxy_leak",
     "nodeStatusHint": "candidate"
   },
@@ -3450,7 +3722,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_run_python_last_exc",
-    "lineno": 553,
+    "lineno": 578,
     "name": "test_run_python_last_exc",
     "nodeStatusHint": "candidate"
   },
@@ -3462,7 +3734,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_check_interrupt",
-    "lineno": 570,
+    "lineno": 595,
     "name": "test_check_interrupt",
     "nodeStatusHint": "candidate"
   },
@@ -3474,7 +3746,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_check_interrupt_no_gil",
-    "lineno": 624,
+    "lineno": 649,
     "name": "test_check_interrupt_no_gil",
     "nodeStatusHint": "candidate"
   },
@@ -3486,7 +3758,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_check_interrupt_custom_signal_handler",
-    "lineno": 661,
+    "lineno": 686,
     "name": "test_check_interrupt_custom_signal_handler",
     "nodeStatusHint": "candidate"
   },
@@ -3498,7 +3770,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_async_leak",
-    "lineno": 727,
+    "lineno": 752,
     "name": "test_async_leak",
     "nodeStatusHint": "candidate"
   },
@@ -3510,7 +3782,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_run_python_js_error",
-    "lineno": 746,
+    "lineno": 771,
     "name": "test_run_python_js_error",
     "nodeStatusHint": "candidate"
   },
@@ -3525,7 +3797,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_run_python_dom_error",
-    "lineno": 767,
+    "lineno": 792,
     "name": "test_run_python_dom_error",
     "nodeStatusHint": "xfail_node"
   },
@@ -3537,8 +3809,32 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_run_python_locals",
-    "lineno": 777,
+    "lineno": 802,
     "name": "test_run_python_locals",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_pyodide.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_pyodide.py::test_run_python_dedent",
+    "lineno": 822,
+    "name": "test_run_python_dedent",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_pyodide.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_pyodide.py::test_run_python_async_dedent",
+    "lineno": 843,
+    "name": "test_run_python_async_dedent",
     "nodeStatusHint": "candidate"
   },
   {
@@ -3551,7 +3847,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_create_once_callable",
-    "lineno": 798,
+    "lineno": 865,
     "name": "test_create_once_callable",
     "nodeStatusHint": "candidate"
   },
@@ -3565,7 +3861,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_create_proxy",
-    "lineno": 831,
+    "lineno": 898,
     "name": "test_create_proxy",
     "nodeStatusHint": "candidate"
   },
@@ -3579,7 +3875,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_create_proxy_capture_this",
-    "lineno": 883,
+    "lineno": 950,
     "name": "test_create_proxy_capture_this",
     "nodeStatusHint": "candidate"
   },
@@ -3593,7 +3889,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_create_proxy_roundtrip",
-    "lineno": 897,
+    "lineno": 964,
     "name": "test_create_proxy_roundtrip",
     "nodeStatusHint": "candidate"
   },
@@ -3607,7 +3903,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_return_destroyed_value",
-    "lineno": 913,
+    "lineno": 980,
     "name": "test_return_destroyed_value",
     "nodeStatusHint": "candidate"
   },
@@ -3617,7 +3913,7 @@
     "file": "src/tests/test_pyodide.py",
     "fixtures": [],
     "id": "src/tests/test_pyodide.py::test_docstrings_a",
-    "lineno": 926,
+    "lineno": 993,
     "name": "test_docstrings_a",
     "nodeStatusHint": "candidate"
   },
@@ -3629,7 +3925,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_docstrings_b",
-    "lineno": 940,
+    "lineno": 1007,
     "name": "test_docstrings_b",
     "nodeStatusHint": "candidate"
   },
@@ -3644,7 +3940,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_restore_state",
-    "lineno": 969,
+    "lineno": 1036,
     "name": "test_restore_state",
     "nodeStatusHint": "candidate"
   },
@@ -3656,10 +3952,10 @@
     ],
     "file": "src/tests/test_pyodide.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_pyodide.py::test_fatal_error",
-    "lineno": 1007,
+    "lineno": 1074,
     "name": "test_fatal_error",
     "nodeStatusHint": "candidate"
   },
@@ -3670,10 +3966,10 @@
     ],
     "file": "src/tests/test_pyodide.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_pyodide.py::test_exit_error",
-    "lineno": 1073,
+    "lineno": 1140,
     "name": "test_exit_error",
     "nodeStatusHint": "candidate"
   },
@@ -3685,7 +3981,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_reentrant_error",
-    "lineno": 1095,
+    "lineno": 1162,
     "name": "test_reentrant_error",
     "nodeStatusHint": "candidate"
   },
@@ -3699,7 +3995,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_js_stackframes",
-    "lineno": 1122,
+    "lineno": 1189,
     "name": "test_js_stackframes",
     "nodeStatusHint": "candidate"
   },
@@ -3708,10 +4004,10 @@
     "decorators": [],
     "file": "src/tests/test_pyodide.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_pyodide.py::test_reentrant_fatal",
-    "lineno": 1196,
+    "lineno": 1263,
     "name": "test_reentrant_fatal",
     "nodeStatusHint": "candidate"
   },
@@ -3723,7 +4019,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_weird_throws",
-    "lineno": 1221,
+    "lineno": 1288,
     "name": "test_weird_throws",
     "nodeStatusHint": "candidate"
   },
@@ -3735,11 +4031,11 @@
     ],
     "file": "src/tests/test_pyodide.py",
     "fixtures": [
-      "selenium_standalone",
+      "selenium_standalone_refresh",
       "to_throw"
     ],
     "id": "src/tests/test_pyodide.py::test_weird_fatals",
-    "lineno": 1261,
+    "lineno": 1328,
     "name": "test_weird_fatals",
     "nodeStatusHint": "candidate"
   },
@@ -3751,7 +4047,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_restore_error",
-    "lineno": 1288,
+    "lineno": 1355,
     "name": "test_restore_error",
     "nodeStatusHint": "candidate"
   },
@@ -3763,7 +4059,7 @@
       "selenium_standalone_noload"
     ],
     "id": "src/tests/test_pyodide.py::test_env",
-    "lineno": 1315,
+    "lineno": 1382,
     "name": "test_env",
     "nodeStatusHint": "candidate"
   },
@@ -3775,7 +4071,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_version_variable",
-    "lineno": 1331,
+    "lineno": 1398,
     "name": "test_version_variable",
     "nodeStatusHint": "candidate"
   },
@@ -3787,7 +4083,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_abiVersion_variable",
-    "lineno": 1349,
+    "lineno": 1416,
     "name": "test_abiVersion_variable",
     "nodeStatusHint": "candidate"
   },
@@ -3801,7 +4097,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_default_sys_path",
-    "lineno": 1386,
+    "lineno": 1453,
     "name": "test_default_sys_path",
     "nodeStatusHint": "candidate"
   },
@@ -3815,22 +4111,8 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_sys_path0",
-    "lineno": 1406,
+    "lineno": 1472,
     "name": "test_sys_path0",
-    "nodeStatusHint": "candidate"
-  },
-  {
-    "category": "python_core",
-    "decorators": [
-      "pytest.mark.requires_dynamic_linking"
-    ],
-    "file": "src/tests/test_pyodide.py",
-    "fixtures": [
-      "selenium_standalone_noload"
-    ],
-    "id": "src/tests/test_pyodide.py::test_fullstdlib",
-    "lineno": 1413,
-    "name": "test_fullstdlib",
     "nodeStatusHint": "candidate"
   },
   {
@@ -3841,7 +4123,7 @@
       "selenium_standalone_noload"
     ],
     "id": "src/tests/test_pyodide.py::test_loadPyodide_relative_index_url",
-    "lineno": 1433,
+    "lineno": 1478,
     "name": "test_loadPyodide_relative_index_url",
     "nodeStatusHint": "candidate"
   },
@@ -3855,7 +4137,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_run_js",
-    "lineno": 1443,
+    "lineno": 1488,
     "name": "test_run_js",
     "nodeStatusHint": "candidate"
   },
@@ -3869,7 +4151,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_pickle_jsexception",
-    "lineno": 1462,
+    "lineno": 1507,
     "name": "test_pickle_jsexception",
     "nodeStatusHint": "candidate"
   },
@@ -3881,7 +4163,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_raises_jsexception",
-    "lineno": 1470,
+    "lineno": 1515,
     "name": "test_raises_jsexception",
     "nodeStatusHint": "candidate"
   },
@@ -3895,7 +4177,7 @@
       "selenium_standalone"
     ],
     "id": "src/tests/test_pyodide.py::test_module_not_found_note",
-    "lineno": 1484,
+    "lineno": 1529,
     "name": "test_module_not_found_note",
     "nodeStatusHint": "candidate"
   },
@@ -3909,7 +4191,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_importhook_called_from_pytest",
-    "lineno": 1550,
+    "lineno": 1572,
     "name": "test_importhook_called_from_pytest",
     "nodeStatusHint": "candidate"
   },
@@ -3923,7 +4205,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_windows_to_linux_path_finder",
-    "lineno": 1571,
+    "lineno": 1593,
     "name": "test_windows_to_linux_path_finder",
     "nodeStatusHint": "candidate"
   },
@@ -3937,7 +4219,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_windows_to_linux_path_finder_edge_cases",
-    "lineno": 1627,
+    "lineno": 1649,
     "name": "test_windows_to_linux_path_finder_edge_cases",
     "nodeStatusHint": "candidate"
   },
@@ -3951,7 +4233,7 @@
       "selenium_standalone"
     ],
     "id": "src/tests/test_pyodide.py::test_windows_to_linux_path_import",
-    "lineno": 1645,
+    "lineno": 1667,
     "name": "test_windows_to_linux_path_import",
     "nodeStatusHint": "candidate"
   },
@@ -3963,7 +4245,7 @@
       "selenium_standalone_noload"
     ],
     "id": "src/tests/test_pyodide.py::test_args",
-    "lineno": 1675,
+    "lineno": 1697,
     "name": "test_args",
     "nodeStatusHint": "candidate"
   },
@@ -3975,7 +4257,7 @@
       "selenium_standalone_noload"
     ],
     "id": "src/tests/test_pyodide.py::test_args_OO",
-    "lineno": 1703,
+    "lineno": 1724,
     "name": "test_args_OO",
     "nodeStatusHint": "candidate"
   },
@@ -3990,7 +4272,7 @@
       "tmp_path"
     ],
     "id": "src/tests/test_pyodide.py::test_relative_index_url",
-    "lineno": 1718,
+    "lineno": 1739,
     "name": "test_relative_index_url",
     "nodeStatusHint": "candidate"
   },
@@ -4004,7 +4286,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_index_url_calculation_source_map",
-    "lineno": 1764,
+    "lineno": 1785,
     "name": "test_index_url_calculation_source_map",
     "nodeStatusHint": "candidate"
   },
@@ -4022,7 +4304,7 @@
       "import_stmt"
     ],
     "id": "src/tests/test_pyodide.py::test_default_index_url_calculation_node",
-    "lineno": 1808,
+    "lineno": 1829,
     "name": "test_default_index_url_calculation_node",
     "nodeStatusHint": "candidate"
   },
@@ -4036,7 +4318,7 @@
       "selenium_standalone_noload"
     ],
     "id": "src/tests/test_pyodide.py::test_csp",
-    "lineno": 1838,
+    "lineno": 1859,
     "name": "test_csp",
     "nodeStatusHint": "xfail_node"
   },
@@ -4052,7 +4334,7 @@
       "httpserver"
     ],
     "id": "src/tests/test_pyodide.py::test_static_import",
-    "lineno": 1851,
+    "lineno": 1872,
     "name": "test_static_import",
     "nodeStatusHint": "xfail_node"
   },
@@ -4064,7 +4346,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_python_error",
-    "lineno": 1937,
+    "lineno": 1960,
     "name": "test_python_error",
     "nodeStatusHint": "candidate"
   },
@@ -4076,7 +4358,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_python_version",
-    "lineno": 1951,
+    "lineno": 1974,
     "name": "test_python_version",
     "nodeStatusHint": "candidate"
   },
@@ -4092,7 +4374,7 @@
       "runtime"
     ],
     "id": "src/tests/test_pyodide.py::test_custom_python_stdlib_URL",
-    "lineno": 1966,
+    "lineno": 1989,
     "name": "test_custom_python_stdlib_URL",
     "nodeStatusHint": "candidate"
   },
@@ -4104,7 +4386,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_pickle_internal_error",
-    "lineno": 1987,
+    "lineno": 2009,
     "name": "test_pickle_internal_error",
     "nodeStatusHint": "candidate"
   },
@@ -4119,7 +4401,7 @@
       "run_python"
     ],
     "id": "src/tests/test_pyodide.py::test_runpython_filename",
-    "lineno": 2003,
+    "lineno": 2025,
     "name": "test_runpython_filename",
     "nodeStatusHint": "candidate"
   },
@@ -4134,7 +4416,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_hiwire_invalid_ref",
-    "lineno": 2053,
+    "lineno": 2075,
     "name": "test_hiwire_invalid_ref",
     "nodeStatusHint": "candidate"
   },
@@ -4146,7 +4428,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_system_exit",
-    "lineno": 2104,
+    "lineno": 2129,
     "name": "test_system_exit",
     "nodeStatusHint": "candidate"
   },
@@ -4160,7 +4442,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_bug_4861",
-    "lineno": 2122,
+    "lineno": 2147,
     "name": "test_bug_4861",
     "nodeStatusHint": "candidate"
   },
@@ -4174,7 +4456,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyodide.py::test_lockfile_api",
-    "lineno": 2143,
+    "lineno": 2168,
     "name": "test_lockfile_api",
     "nodeStatusHint": "candidate"
   },
@@ -4186,7 +4468,7 @@
       "selenium_standalone_noload"
     ],
     "id": "src/tests/test_pyodide.py::test_fs_init",
-    "lineno": 2153,
+    "lineno": 2178,
     "name": "test_fs_init",
     "nodeStatusHint": "candidate"
   },
@@ -4198,7 +4480,7 @@
       "selenium_standalone_noload"
     ],
     "id": "src/tests/test_pyodide.py::test_compat_null_to_none",
-    "lineno": 2173,
+    "lineno": 2198,
     "name": "test_compat_null_to_none",
     "nodeStatusHint": "candidate"
   },
@@ -4407,13 +4689,27 @@
   },
   {
     "category": "network",
+    "decorators": [
+      "run_in_pyodide"
+    ],
+    "file": "src/tests/test_pyodide_http.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_pyodide_http.py::test_FetchResponse_empty_string",
+    "lineno": 323,
+    "name": "test_FetchResponse_empty_string",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "network",
     "decorators": [],
     "file": "src/tests/test_pyodide_http.py",
     "fixtures": [
       "monkeypatch"
     ],
     "id": "src/tests/test_pyodide_http.py::test_xhr_not_in_browser",
-    "lineno": 580,
+    "lineno": 593,
     "name": "test_xhr_not_in_browser",
     "nodeStatusHint": "candidate"
   },
@@ -4427,7 +4723,7 @@
       "xhr_test_server"
     ],
     "id": "src/tests/test_pyodide_http.py::test_xhr_basic_get",
-    "lineno": 417,
+    "lineno": 430,
     "name": "test_xhr_basic_get",
     "nodeStatusHint": "candidate"
   },
@@ -4441,7 +4737,7 @@
       "xhr_test_server"
     ],
     "id": "src/tests/test_pyodide_http.py::test_xhr_post_json",
-    "lineno": 440,
+    "lineno": 453,
     "name": "test_xhr_post_json",
     "nodeStatusHint": "candidate"
   },
@@ -4455,7 +4751,7 @@
       "xhr_test_server"
     ],
     "id": "src/tests/test_pyodide_http.py::test_xhr_custom_headers",
-    "lineno": 461,
+    "lineno": 474,
     "name": "test_xhr_custom_headers",
     "nodeStatusHint": "candidate"
   },
@@ -4469,7 +4765,7 @@
       "xhr_test_server"
     ],
     "id": "src/tests/test_pyodide_http.py::test_xhr_basic_auth",
-    "lineno": 474,
+    "lineno": 487,
     "name": "test_xhr_basic_auth",
     "nodeStatusHint": "candidate"
   },
@@ -4483,7 +4779,7 @@
       "xhr_test_server"
     ],
     "id": "src/tests/test_pyodide_http.py::test_xhr_url_params",
-    "lineno": 495,
+    "lineno": 508,
     "name": "test_xhr_url_params",
     "nodeStatusHint": "candidate"
   },
@@ -4497,7 +4793,7 @@
       "xhr_test_server"
     ],
     "id": "src/tests/test_pyodide_http.py::test_xhr_error_status",
-    "lineno": 508,
+    "lineno": 521,
     "name": "test_xhr_error_status",
     "nodeStatusHint": "candidate"
   },
@@ -4511,7 +4807,7 @@
       "xhr_test_server"
     ],
     "id": "src/tests/test_pyodide_http.py::test_xhr_response_properties",
-    "lineno": 530,
+    "lineno": 543,
     "name": "test_xhr_response_properties",
     "nodeStatusHint": "candidate"
   },
@@ -4525,7 +4821,7 @@
       "xhr_test_server"
     ],
     "id": "src/tests/test_pyodide_http.py::test_xhr_all_methods",
-    "lineno": 559,
+    "lineno": 572,
     "name": "test_xhr_all_methods",
     "nodeStatusHint": "candidate"
   },
@@ -4692,6 +4988,20 @@
   {
     "category": "python",
     "decorators": [
+      "pytest.mark.xfail_browsers(safari=\"No support for Symbol.dispose yet\")"
+    ],
+    "file": "src/tests/test_pyproxy.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_pyproxy.py::test_pyproxy_get_buffer_dispose",
+    "lineno": 349,
+    "name": "test_pyproxy_get_buffer_dispose",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
       "run_in_pyodide"
     ],
     "file": "src/tests/test_pyproxy.py",
@@ -4699,7 +5009,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_get_empty_buffer",
-    "lineno": 349,
+    "lineno": 382,
     "name": "test_get_empty_buffer",
     "nodeStatusHint": "candidate"
   },
@@ -4715,7 +5025,7 @@
       "array_type"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_get_buffer_type_argument",
-    "lineno": 387,
+    "lineno": 420,
     "name": "test_pyproxy_get_buffer_type_argument",
     "nodeStatusHint": "candidate"
   },
@@ -4729,7 +5039,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_mixins1",
-    "lineno": 424,
+    "lineno": 457,
     "name": "test_pyproxy_mixins1",
     "nodeStatusHint": "candidate"
   },
@@ -4741,7 +5051,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_mixins2",
-    "lineno": 516,
+    "lineno": 549,
     "name": "test_pyproxy_mixins2",
     "nodeStatusHint": "candidate"
   },
@@ -4755,7 +5065,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_mixins31",
-    "lineno": 543,
+    "lineno": 576,
     "name": "test_pyproxy_mixins31",
     "nodeStatusHint": "candidate"
   },
@@ -4772,7 +5082,7 @@
       "writable"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_mixins32",
-    "lineno": 643,
+    "lineno": 676,
     "name": "test_pyproxy_mixins32",
     "nodeStatusHint": "candidate"
   },
@@ -4786,7 +5096,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_mixins41",
-    "lineno": 690,
+    "lineno": 723,
     "name": "test_pyproxy_mixins41",
     "nodeStatusHint": "candidate"
   },
@@ -4800,7 +5110,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_mixins42",
-    "lineno": 727,
+    "lineno": 760,
     "name": "test_pyproxy_mixins42",
     "nodeStatusHint": "candidate"
   },
@@ -4814,7 +5124,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_mixins5",
-    "lineno": 748,
+    "lineno": 781,
     "name": "test_pyproxy_mixins5",
     "nodeStatusHint": "candidate"
   },
@@ -4826,7 +5136,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_mixins6",
-    "lineno": 779,
+    "lineno": 812,
     "name": "test_pyproxy_mixins6",
     "nodeStatusHint": "candidate"
   },
@@ -4840,7 +5150,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_gc",
-    "lineno": 808,
+    "lineno": 841,
     "name": "test_pyproxy_gc",
     "nodeStatusHint": "candidate"
   },
@@ -4854,8 +5164,22 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_gc_destroy",
-    "lineno": 880,
+    "lineno": 913,
     "name": "test_pyproxy_gc_destroy",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "run_in_pyodide"
+    ],
+    "file": "src/tests/test_pyproxy.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_pyproxy.py::test_topy_shared_ref_refcount",
+    "lineno": 967,
+    "name": "test_topy_shared_ref_refcount",
     "nodeStatusHint": "candidate"
   },
   {
@@ -4866,7 +5190,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_implicit_copy",
-    "lineno": 933,
+    "lineno": 995,
     "name": "test_pyproxy_implicit_copy",
     "nodeStatusHint": "candidate"
   },
@@ -4880,7 +5204,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_errors",
-    "lineno": 951,
+    "lineno": 1013,
     "name": "test_errors",
     "nodeStatusHint": "candidate"
   },
@@ -4894,7 +5218,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_nogil",
-    "lineno": 1008,
+    "lineno": 1070,
     "name": "test_nogil",
     "nodeStatusHint": "candidate"
   },
@@ -4905,10 +5229,10 @@
     ],
     "file": "src/tests/test_pyproxy.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_pyproxy.py::test_fatal_error",
-    "lineno": 1063,
+    "lineno": 1125,
     "name": "test_fatal_error",
     "nodeStatusHint": "candidate"
   },
@@ -4922,7 +5246,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_call",
-    "lineno": 1141,
+    "lineno": 1203,
     "name": "test_pyproxy_call",
     "nodeStatusHint": "candidate"
   },
@@ -4934,7 +5258,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_call_relaxed",
-    "lineno": 1184,
+    "lineno": 1246,
     "name": "test_pyproxy_call_relaxed",
     "nodeStatusHint": "candidate"
   },
@@ -4946,7 +5270,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_call_with_options",
-    "lineno": 1208,
+    "lineno": 1270,
     "name": "test_pyproxy_call_with_options",
     "nodeStatusHint": "candidate"
   },
@@ -4958,7 +5282,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_borrow",
-    "lineno": 1265,
+    "lineno": 1327,
     "name": "test_pyproxy_borrow",
     "nodeStatusHint": "candidate"
   },
@@ -4970,7 +5294,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_coroutine_scheduling",
-    "lineno": 1289,
+    "lineno": 1351,
     "name": "test_coroutine_scheduling",
     "nodeStatusHint": "candidate"
   },
@@ -4982,7 +5306,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_apply",
-    "lineno": 1308,
+    "lineno": 1370,
     "name": "test_pyproxy_apply",
     "nodeStatusHint": "candidate"
   },
@@ -4994,7 +5318,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_this1",
-    "lineno": 1343,
+    "lineno": 1405,
     "name": "test_pyproxy_this1",
     "nodeStatusHint": "candidate"
   },
@@ -5006,7 +5330,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_this2",
-    "lineno": 1362,
+    "lineno": 1424,
     "name": "test_pyproxy_this2",
     "nodeStatusHint": "candidate"
   },
@@ -5020,7 +5344,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_async_iter1",
-    "lineno": 1406,
+    "lineno": 1468,
     "name": "test_async_iter1",
     "nodeStatusHint": "candidate"
   },
@@ -5034,7 +5358,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_async_iter2",
-    "lineno": 1433,
+    "lineno": 1495,
     "name": "test_async_iter2",
     "nodeStatusHint": "candidate"
   },
@@ -5048,7 +5372,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_gen",
-    "lineno": 1468,
+    "lineno": 1530,
     "name": "test_gen",
     "nodeStatusHint": "candidate"
   },
@@ -5062,7 +5386,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_gen_return",
-    "lineno": 1502,
+    "lineno": 1564,
     "name": "test_gen_return",
     "nodeStatusHint": "candidate"
   },
@@ -5076,7 +5400,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_gen_throw",
-    "lineno": 1567,
+    "lineno": 1629,
     "name": "test_gen_throw",
     "nodeStatusHint": "candidate"
   },
@@ -5090,7 +5414,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_async_gen1",
-    "lineno": 1634,
+    "lineno": 1696,
     "name": "test_async_gen1",
     "nodeStatusHint": "candidate"
   },
@@ -5104,7 +5428,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_async_gen2",
-    "lineno": 1668,
+    "lineno": 1730,
     "name": "test_async_gen2",
     "nodeStatusHint": "candidate"
   },
@@ -5118,7 +5442,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_async_gen_return",
-    "lineno": 1690,
+    "lineno": 1752,
     "name": "test_async_gen_return",
     "nodeStatusHint": "candidate"
   },
@@ -5132,7 +5456,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_async_gen_throw",
-    "lineno": 1755,
+    "lineno": 1817,
     "name": "test_async_gen_throw",
     "nodeStatusHint": "candidate"
   },
@@ -5146,7 +5470,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_roundtrip_no_destroy",
-    "lineno": 1822,
+    "lineno": 1884,
     "name": "test_roundtrip_no_destroy",
     "nodeStatusHint": "candidate"
   },
@@ -5160,7 +5484,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_multiple_interpreters",
-    "lineno": 1858,
+    "lineno": 1920,
     "name": "test_multiple_interpreters",
     "nodeStatusHint": "candidate"
   },
@@ -5174,7 +5498,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_index",
-    "lineno": 1868,
+    "lineno": 1930,
     "name": "test_pyproxy_of_list_index",
     "nodeStatusHint": "candidate"
   },
@@ -5188,7 +5512,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_join",
-    "lineno": 1883,
+    "lineno": 1945,
     "name": "test_pyproxy_of_list_join",
     "nodeStatusHint": "candidate"
   },
@@ -5202,7 +5526,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_slice",
-    "lineno": 1897,
+    "lineno": 1959,
     "name": "test_pyproxy_of_list_slice",
     "nodeStatusHint": "candidate"
   },
@@ -5216,7 +5540,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_indexOf",
-    "lineno": 1918,
+    "lineno": 1980,
     "name": "test_pyproxy_of_list_indexOf",
     "nodeStatusHint": "candidate"
   },
@@ -5230,7 +5554,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_lastIndexOf",
-    "lineno": 1938,
+    "lineno": 2000,
     "name": "test_pyproxy_of_list_lastIndexOf",
     "nodeStatusHint": "candidate"
   },
@@ -5244,7 +5568,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_forEach",
-    "lineno": 1958,
+    "lineno": 2020,
     "name": "test_pyproxy_of_list_forEach",
     "nodeStatusHint": "candidate"
   },
@@ -5258,7 +5582,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_map",
-    "lineno": 1986,
+    "lineno": 2048,
     "name": "test_pyproxy_of_list_map",
     "nodeStatusHint": "candidate"
   },
@@ -5272,7 +5596,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_filter",
-    "lineno": 2006,
+    "lineno": 2068,
     "name": "test_pyproxy_of_list_filter",
     "nodeStatusHint": "candidate"
   },
@@ -5286,7 +5610,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_reduce",
-    "lineno": 2025,
+    "lineno": 2087,
     "name": "test_pyproxy_of_list_reduce",
     "nodeStatusHint": "candidate"
   },
@@ -5300,7 +5624,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_reduceRight",
-    "lineno": 2040,
+    "lineno": 2102,
     "name": "test_pyproxy_of_list_reduceRight",
     "nodeStatusHint": "candidate"
   },
@@ -5314,7 +5638,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_some",
-    "lineno": 2055,
+    "lineno": 2117,
     "name": "test_pyproxy_of_list_some",
     "nodeStatusHint": "candidate"
   },
@@ -5328,7 +5652,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_every",
-    "lineno": 2071,
+    "lineno": 2133,
     "name": "test_pyproxy_of_list_every",
     "nodeStatusHint": "candidate"
   },
@@ -5342,7 +5666,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_at",
-    "lineno": 2087,
+    "lineno": 2149,
     "name": "test_pyproxy_of_list_at",
     "nodeStatusHint": "candidate"
   },
@@ -5356,7 +5680,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_concat",
-    "lineno": 2100,
+    "lineno": 2162,
     "name": "test_pyproxy_of_list_concat",
     "nodeStatusHint": "candidate"
   },
@@ -5370,7 +5694,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_includes",
-    "lineno": 2112,
+    "lineno": 2174,
     "name": "test_pyproxy_of_list_includes",
     "nodeStatusHint": "candidate"
   },
@@ -5384,7 +5708,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_entries",
-    "lineno": 2125,
+    "lineno": 2187,
     "name": "test_pyproxy_of_list_entries",
     "nodeStatusHint": "candidate"
   },
@@ -5398,7 +5722,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_find",
-    "lineno": 2138,
+    "lineno": 2200,
     "name": "test_pyproxy_of_list_find",
     "nodeStatusHint": "candidate"
   },
@@ -5412,7 +5736,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_sort",
-    "lineno": 2151,
+    "lineno": 2213,
     "name": "test_pyproxy_of_list_sort",
     "nodeStatusHint": "candidate"
   },
@@ -5426,7 +5750,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_reverse",
-    "lineno": 2208,
+    "lineno": 2270,
     "name": "test_pyproxy_of_list_reverse",
     "nodeStatusHint": "candidate"
   },
@@ -5442,7 +5766,7 @@
       "func"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_splice",
-    "lineno": 2236,
+    "lineno": 2298,
     "name": "test_pyproxy_of_list_splice",
     "nodeStatusHint": "candidate"
   },
@@ -5456,7 +5780,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_push",
-    "lineno": 2249,
+    "lineno": 2311,
     "name": "test_pyproxy_of_list_push",
     "nodeStatusHint": "candidate"
   },
@@ -5470,7 +5794,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_pop",
-    "lineno": 2276,
+    "lineno": 2338,
     "name": "test_pyproxy_of_list_pop",
     "nodeStatusHint": "candidate"
   },
@@ -5484,7 +5808,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_shift",
-    "lineno": 2292,
+    "lineno": 2354,
     "name": "test_pyproxy_of_list_shift",
     "nodeStatusHint": "candidate"
   },
@@ -5498,7 +5822,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_unshift",
-    "lineno": 2316,
+    "lineno": 2378,
     "name": "test_pyproxy_of_list_unshift",
     "nodeStatusHint": "candidate"
   },
@@ -5514,7 +5838,7 @@
       "func"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_copyWithin",
-    "lineno": 2352,
+    "lineno": 2414,
     "name": "test_pyproxy_of_list_copyWithin",
     "nodeStatusHint": "candidate"
   },
@@ -5530,7 +5854,7 @@
       "func"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_fill",
-    "lineno": 2373,
+    "lineno": 2435,
     "name": "test_pyproxy_of_list_fill",
     "nodeStatusHint": "candidate"
   },
@@ -5542,7 +5866,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_instanceof_function",
-    "lineno": 2385,
+    "lineno": 2447,
     "name": "test_pyproxy_instanceof_function",
     "nodeStatusHint": "candidate"
   },
@@ -5554,7 +5878,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_callable_prototype",
-    "lineno": 2460,
+    "lineno": 2522,
     "name": "test_pyproxy_callable_prototype",
     "nodeStatusHint": "candidate"
   },
@@ -5568,7 +5892,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_automatic_coroutine_scheduling",
-    "lineno": 2484,
+    "lineno": 2546,
     "name": "test_automatic_coroutine_scheduling",
     "nodeStatusHint": "candidate"
   },
@@ -5582,7 +5906,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_stringify_sequence",
-    "lineno": 2529,
+    "lineno": 2597,
     "name": "test_stringify_sequence",
     "nodeStatusHint": "candidate"
   },
@@ -5596,7 +5920,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_as_json_adaptor_heritability1",
-    "lineno": 2541,
+    "lineno": 2609,
     "name": "test_as_json_adaptor_heritability1",
     "nodeStatusHint": "candidate"
   },
@@ -5610,7 +5934,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_as_json_adaptor_heritability2",
-    "lineno": 2564,
+    "lineno": 2632,
     "name": "test_as_json_adaptor_heritability2",
     "nodeStatusHint": "candidate"
   },
@@ -5624,7 +5948,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_as_json_adaptor_ownkeys",
-    "lineno": 2608,
+    "lineno": 2676,
     "name": "test_as_json_adaptor_ownkeys",
     "nodeStatusHint": "candidate"
   },
@@ -5638,7 +5962,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_as_json_adaptor_get",
-    "lineno": 2629,
+    "lineno": 2697,
     "name": "test_as_json_adaptor_get",
     "nodeStatusHint": "candidate"
   },
@@ -5652,7 +5976,7 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_as_json_adaptor_set",
-    "lineno": 2650,
+    "lineno": 2718,
     "name": "test_as_json_adaptor_set",
     "nodeStatusHint": "candidate"
   },
@@ -5668,7 +5992,7 @@
       "o"
     ],
     "id": "src/tests/test_pyproxy.py::test_as_json_adaptor_stringify",
-    "lineno": 2686,
+    "lineno": 2754,
     "name": "test_as_json_adaptor_stringify",
     "nodeStatusHint": "candidate"
   },
@@ -5682,8 +6006,22 @@
       "selenium"
     ],
     "id": "src/tests/test_pyproxy.py::test_pyproxy_dict",
-    "lineno": 2696,
+    "lineno": 2764,
     "name": "test_pyproxy_dict",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "pytest.mark.xfail_browsers(safari=\"No support for Symbol.dispose yet\")"
+    ],
+    "file": "src/tests/test_pyproxy.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_pyproxy.py::test_pyproxy_using",
+    "lineno": 2813,
+    "name": "test_pyproxy_using",
     "nodeStatusHint": "candidate"
   },
   {
@@ -5874,7 +6212,7 @@
     ],
     "file": "src/tests/test_python.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_python.py::test_runpythonasync",
     "lineno": 167,
@@ -5886,7 +6224,7 @@
     "decorators": [],
     "file": "src/tests/test_python.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_python.py::test_runpythonasync_no_imports",
     "lineno": 177,
@@ -5898,7 +6236,7 @@
     "decorators": [],
     "file": "src/tests/test_python.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_python.py::test_runpythonasync_missing_import",
     "lineno": 186,
@@ -5910,7 +6248,7 @@
     "decorators": [],
     "file": "src/tests/test_python.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_python.py::test_runpythonasync_exception",
     "lineno": 196,
@@ -5924,7 +6262,7 @@
     ],
     "file": "src/tests/test_python.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_python.py::test_runpythonasync_exception_after_import",
     "lineno": 207,
@@ -5936,7 +6274,7 @@
     "decorators": [],
     "file": "src/tests/test_python.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_python.py::test_py",
     "lineno": 218,
@@ -5992,6 +6330,459 @@
     "lineno": 10,
     "name": "test_import_js",
     "nodeStatusHint": "xfail_node"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_connect",
+    "lineno": 58,
+    "name": "test_socket_connect",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_multiple_send_recv",
+    "lineno": 91,
+    "name": "test_socket_multiple_send_recv",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_large_data_transfer",
+    "lineno": 126,
+    "name": "test_socket_large_data_transfer",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_getpeername",
+    "lineno": 163,
+    "name": "test_socket_getpeername",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_getsockname",
+    "lineno": 191,
+    "name": "test_socket_getsockname",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_connection_refused",
+    "lineno": 218,
+    "name": "test_socket_connection_refused",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_recv_after_close",
+    "lineno": 240,
+    "name": "test_socket_recv_after_close",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_recv_after_close_chunked",
+    "lineno": 265,
+    "name": "test_socket_recv_after_close_chunked",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_fileno",
+    "lineno": 299,
+    "name": "test_socket_fileno",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_send_recv_partial",
+    "lineno": 329,
+    "name": "test_socket_send_recv_partial",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_create_multiple",
+    "lineno": 361,
+    "name": "test_socket_create_multiple",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_recv_eof",
+    "lineno": 398,
+    "name": "test_socket_recv_eof",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_send_after_remote_close",
+    "lineno": 429,
+    "name": "test_socket_send_after_remote_close",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_makefile",
+    "lineno": 458,
+    "name": "test_socket_makefile",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_asyncio_concurrent",
+    "lineno": 483,
+    "name": "test_socket_asyncio_concurrent",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_large_recv",
+    "lineno": 516,
+    "name": "test_socket_large_recv",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_double_close",
+    "lineno": 551,
+    "name": "test_socket_double_close",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_shutdown",
+    "lineno": 575,
+    "name": "test_socket_shutdown",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_shutdown_pairs",
+    "lineno": 599,
+    "name": "test_socket_shutdown_pairs",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_nonblocking_recv_with_buffered_data",
+    "lineno": 636,
+    "name": "test_socket_nonblocking_recv_with_buffered_data",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_nonblocking_recv_eagain_then_data",
+    "lineno": 665,
+    "name": "test_socket_nonblocking_recv_eagain_then_data",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_select_readable_on_eof",
+    "lineno": 708,
+    "name": "test_socket_select_readable_on_eof",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_recv_backpressure",
+    "lineno": 733,
+    "name": "test_socket_recv_backpressure",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_standalone"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_shutdown_non_nodesock",
+    "lineno": 771,
+    "name": "test_socket_shutdown_non_nodesock",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_settimeout_nonblocking",
+    "lineno": 796,
+    "name": "test_socket_settimeout_nonblocking",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_socket_settimeout_restore_blocking",
+    "lineno": 824,
+    "name": "test_socket_settimeout_restore_blocking",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_asyncio_sock_connect_recv_sendall",
+    "lineno": 855,
+    "name": "test_asyncio_sock_connect_recv_sendall",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_asyncio_create_connection_echo",
+    "lineno": 884,
+    "name": "test_asyncio_create_connection_echo",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_asyncio_create_connection_server_closes",
+    "lineno": 929,
+    "name": "test_asyncio_create_connection_server_closes",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_asyncio_open_connection",
+    "lineno": 966,
+    "name": "test_asyncio_open_connection",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_asyncio_open_connection_hostname",
+    "lineno": 993,
+    "name": "test_asyncio_open_connection_hostname",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_asyncio_sock_recv_into",
+    "lineno": 1017,
+    "name": "test_asyncio_sock_recv_into",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_asyncio_concurrent_connections",
+    "lineno": 1046,
+    "name": "test_asyncio_concurrent_connections",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock"
+    ],
+    "id": "src/tests/test_python_socket.py::test_asyncio_client_close_lifecycle",
+    "lineno": 1080,
+    "name": "test_asyncio_client_close_lifecycle",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "pytest.mark.skip_refcount_check"
+    ],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock",
+      "self_signed_cert"
+    ],
+    "id": "src/tests/test_python_socket.py::test_tls_starttls_send_recv",
+    "lineno": 1278,
+    "name": "test_tls_starttls_send_recv",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "pytest.mark.skip_refcount_check"
+    ],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock",
+      "self_signed_cert"
+    ],
+    "id": "src/tests/test_python_socket.py::test_tls_starttls_after_plaintext_greeting",
+    "lineno": 1310,
+    "name": "test_tls_starttls_after_plaintext_greeting",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "pytest.mark.skip_refcount_check"
+    ],
+    "file": "src/tests/test_python_socket.py",
+    "fixtures": [
+      "selenium_nodesock",
+      "self_signed_cert"
+    ],
+    "id": "src/tests/test_python_socket.py::test_tls_starttls_multiple_roundtrips",
+    "lineno": 1351,
+    "name": "test_tls_starttls_multiple_roundtrips",
+    "nodeStatusHint": "candidate"
   },
   {
     "category": "python",
@@ -6128,14 +6919,15 @@
   {
     "category": "python",
     "decorators": [
-      "requires_jspi"
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
     ],
     "file": "src/tests/test_snapshots.py",
     "fixtures": [
       "selenium_standalone_noload"
     ],
     "id": "src/tests/test_snapshots.py::test_syncify_in_snapshot_load",
-    "lineno": 256,
+    "lineno": 257,
     "name": "test_syncify_in_snapshot_load",
     "nodeStatusHint": "candidate"
   },
@@ -6149,7 +6941,7 @@
       "selenium_standalone_noload"
     ],
     "id": "src/tests/test_snapshots.py::test_make_snapshot_fetch",
-    "lineno": 278,
+    "lineno": 279,
     "name": "test_make_snapshot_fetch",
     "nodeStatusHint": "candidate"
   },
@@ -6161,14 +6953,29 @@
       "selenium_standalone_noload"
     ],
     "id": "src/tests/test_snapshots.py::test_snapshot_pyfetch",
-    "lineno": 300,
+    "lineno": 301,
     "name": "test_snapshot_pyfetch",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "python",
     "decorators": [
+      "run_in_pyodide"
+    ],
+    "file": "src/tests/test_ssl_stub.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_ssl_stub.py::test_ssl_import",
+    "lineno": 5,
+    "name": "test_ssl_import",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
       "requires_jspi",
+      "pytest.mark.requires_dynamic_linking",
       "run_in_pyodide"
     ],
     "file": "src/tests/test_stack_switching.py",
@@ -6176,7 +6983,7 @@
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_syncify_awaitable_types_accept",
-    "lineno": 9,
+    "lineno": 44,
     "name": "test_syncify_awaitable_types_accept",
     "nodeStatusHint": "candidate"
   },
@@ -6184,6 +6991,7 @@
     "category": "python",
     "decorators": [
       "requires_jspi",
+      "pytest.mark.requires_dynamic_linking",
       "run_in_pyodide"
     ],
     "file": "src/tests/test_stack_switching.py",
@@ -6191,7 +6999,7 @@
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_syncify_awaitable_type_errors",
-    "lineno": 32,
+    "lineno": 68,
     "name": "test_syncify_awaitable_type_errors",
     "nodeStatusHint": "candidate"
   },
@@ -6205,7 +7013,7 @@
       "selenium_standalone_noload"
     ],
     "id": "src/tests/test_stack_switching.py::test_syncify_not_supported",
-    "lineno": 56,
+    "lineno": 92,
     "name": "test_syncify_not_supported",
     "nodeStatusHint": "xfail_node"
   },
@@ -6213,6 +7021,7 @@
     "category": "python",
     "decorators": [
       "requires_jspi",
+      "pytest.mark.requires_dynamic_linking",
       "run_in_pyodide"
     ],
     "file": "src/tests/test_stack_switching.py",
@@ -6220,7 +7029,7 @@
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_syncify1",
-    "lineno": 83,
+    "lineno": 120,
     "name": "test_syncify1",
     "nodeStatusHint": "candidate"
   },
@@ -6228,6 +7037,7 @@
     "category": "package",
     "decorators": [
       "requires_jspi",
+      "pytest.mark.requires_dynamic_linking",
       "run_in_pyodide(packages=[\"pytest\"])"
     ],
     "file": "src/tests/test_stack_switching.py",
@@ -6235,7 +7045,7 @@
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_syncify2",
-    "lineno": 100,
+    "lineno": 138,
     "name": "test_syncify2",
     "nodeStatusHint": "candidate"
   },
@@ -6243,6 +7053,7 @@
     "category": "package",
     "decorators": [
       "requires_jspi",
+      "pytest.mark.requires_dynamic_linking",
       "run_in_pyodide(packages=[\"pytest\"])"
     ],
     "file": "src/tests/test_stack_switching.py",
@@ -6250,7 +7061,7 @@
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_syncify_error",
-    "lineno": 118,
+    "lineno": 157,
     "name": "test_syncify_error",
     "nodeStatusHint": "candidate"
   },
@@ -6258,6 +7069,7 @@
     "category": "python",
     "decorators": [
       "requires_jspi",
+      "pytest.mark.requires_dynamic_linking",
       "run_in_pyodide"
     ],
     "file": "src/tests/test_stack_switching.py",
@@ -6265,21 +7077,22 @@
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_syncify_null",
-    "lineno": 138,
+    "lineno": 178,
     "name": "test_syncify_null",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "python",
     "decorators": [
-      "requires_jspi"
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
     ],
     "file": "src/tests/test_stack_switching.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_syncify_no_suspender",
-    "lineno": 154,
+    "lineno": 195,
     "name": "test_syncify_no_suspender",
     "nodeStatusHint": "candidate"
   },
@@ -6295,7 +7108,7 @@
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_syncify_getset",
-    "lineno": 182,
+    "lineno": 223,
     "name": "test_syncify_getset",
     "nodeStatusHint": "candidate"
   },
@@ -6312,7 +7125,7 @@
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_syncify_ctypes",
-    "lineno": 212,
+    "lineno": 253,
     "name": "test_syncify_ctypes",
     "nodeStatusHint": "candidate"
   },
@@ -6328,49 +7141,52 @@
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_cpp_exceptions_and_syncify",
-    "lineno": 238,
+    "lineno": 279,
     "name": "test_cpp_exceptions_and_syncify",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "python",
     "decorators": [
-      "requires_jspi"
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
     ],
     "file": "src/tests/test_stack_switching.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_two_way_transfer",
-    "lineno": 282,
+    "lineno": 324,
     "name": "test_two_way_transfer",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "python",
     "decorators": [
-      "requires_jspi"
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
     ],
     "file": "src/tests/test_stack_switching.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_sync_async_mix",
-    "lineno": 318,
+    "lineno": 361,
     "name": "test_sync_async_mix",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "python",
     "decorators": [
-      "requires_jspi"
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
     ],
     "file": "src/tests/test_stack_switching.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_nested_syncify",
-    "lineno": 364,
+    "lineno": 408,
     "name": "test_nested_syncify",
     "nodeStatusHint": "candidate"
   },
@@ -6378,6 +7194,7 @@
     "category": "python",
     "decorators": [
       "requires_jspi",
+      "pytest.mark.requires_dynamic_linking",
       "run_in_pyodide"
     ],
     "file": "src/tests/test_stack_switching.py",
@@ -6385,35 +7202,37 @@
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_promise_methods",
-    "lineno": 425,
+    "lineno": 470,
     "name": "test_promise_methods",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "python",
     "decorators": [
-      "requires_jspi"
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
     ],
     "file": "src/tests/test_stack_switching.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_throw_from_switcher",
-    "lineno": 458,
+    "lineno": 504,
     "name": "test_throw_from_switcher",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "python",
     "decorators": [
-      "requires_jspi"
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
     ],
     "file": "src/tests/test_stack_switching.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_switch_from_except_block",
-    "lineno": 505,
+    "lineno": 552,
     "name": "test_switch_from_except_block",
     "nodeStatusHint": "candidate"
   },
@@ -6421,6 +7240,7 @@
     "category": "python",
     "decorators": [
       "pytest.mark.xfail_browsers(firefox=\"requires jspi\", safari=\"requires jspi\")",
+      "pytest.mark.requires_dynamic_linking",
       "pytest.mark.parametrize(\n    \"script\", [LEAK_SCRIPT1, LEAK_SCRIPT2, LEAK_SCRIPT3, LEAK_SCRIPT4]\n)"
     ],
     "file": "src/tests/test_stack_switching.py",
@@ -6429,7 +7249,7 @@
       "script"
     ],
     "id": "src/tests/test_stack_switching.py::test_memory_leak",
-    "lineno": 596,
+    "lineno": 644,
     "name": "test_memory_leak",
     "nodeStatusHint": "candidate"
   },
@@ -6437,6 +7257,7 @@
     "category": "python",
     "decorators": [
       "requires_jspi",
+      "pytest.mark.requires_dynamic_linking",
       "run_in_pyodide"
     ],
     "file": "src/tests/test_stack_switching.py",
@@ -6444,50 +7265,283 @@
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_run_until_complete",
-    "lineno": 628,
+    "lineno": 677,
     "name": "test_run_until_complete",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "python",
     "decorators": [
-      "requires_jspi"
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
     ],
     "file": "src/tests/test_stack_switching.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_can_run_sync",
-    "lineno": 653,
+    "lineno": 703,
     "name": "test_can_run_sync",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "python",
     "decorators": [
-      "requires_jspi"
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
     ],
     "file": "src/tests/test_stack_switching.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_async_promising_sync_error",
-    "lineno": 723,
+    "lineno": 774,
     "name": "test_async_promising_sync_error",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "python",
     "decorators": [
-      "requires_jspi"
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
     ],
     "file": "src/tests/test_stack_switching.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_stack_switching.py::test_async_promising_async_error",
-    "lineno": 749,
+    "lineno": 801,
     "name": "test_async_promising_async_error",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "pytest.mark.skip_refcount_check",
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
+    ],
+    "file": "src/tests/test_stack_switching.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_stack_switching.py::test_return_promising_no_crash",
+    "lineno": 829,
+    "name": "test_return_promising_no_crash",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
+    ],
+    "file": "src/tests/test_stack_switching.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_stack_switching.py::test_contextvars_ambient_context_survives_switch",
+    "lineno": 893,
+    "name": "test_contextvars_ambient_context_survives_switch",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
+    ],
+    "file": "src/tests/test_stack_switching.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_stack_switching.py::test_contextvars_survive_interleaved_switches",
+    "lineno": 937,
+    "name": "test_contextvars_survive_interleaved_switches",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
+    ],
+    "file": "src/tests/test_stack_switching.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_stack_switching.py::test_contextvars_task_writes_are_isolated",
+    "lineno": 979,
+    "name": "test_contextvars_task_writes_are_isolated",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
+    ],
+    "file": "src/tests/test_stack_switching.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_stack_switching.py::test_contextvars_released_after_task",
+    "lineno": 1028,
+    "name": "test_contextvars_released_after_task",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking",
+      "run_in_pyodide"
+    ],
+    "file": "src/tests/test_stack_switching.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_stack_switching.py::test_contextvars_concurrent_tasks",
+    "lineno": 1074,
+    "name": "test_contextvars_concurrent_tasks",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking",
+      "run_in_pyodide"
+    ],
+    "file": "src/tests/test_stack_switching.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_stack_switching.py::test_asyncio_running_loop_in_task",
+    "lineno": 1107,
+    "name": "test_asyncio_running_loop_in_task",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
+    ],
+    "file": "src/tests/test_stack_switching.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_stack_switching.py::test_task_does_not_invent_a_running_loop",
+    "lineno": 1130,
+    "name": "test_task_does_not_invent_a_running_loop",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
+    ],
+    "file": "src/tests/test_stack_switching.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_stack_switching.py::test_contextvars_three_interleaved_tasks",
+    "lineno": 1187,
+    "name": "test_contextvars_three_interleaved_tasks",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
+    ],
+    "file": "src/tests/test_stack_switching.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_stack_switching.py::test_contextvars_task_spawned_from_running_task",
+    "lineno": 1273,
+    "name": "test_contextvars_task_spawned_from_running_task",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
+    ],
+    "file": "src/tests/test_stack_switching.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_stack_switching.py::test_threading_local_shared_with_tasks",
+    "lineno": 1408,
+    "name": "test_threading_local_shared_with_tasks",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
+    ],
+    "file": "src/tests/test_stack_switching.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_stack_switching.py::test_task_inherits_asyncgen_hooks",
+    "lineno": 1464,
+    "name": "test_task_inherits_asyncgen_hooks",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking",
+      "pytest.mark.parametrize(\"hook\", [\"trace\", \"profile\"])"
+    ],
+    "file": "src/tests/test_stack_switching.py",
+    "fixtures": [
+      "selenium",
+      "hook"
+    ],
+    "id": "src/tests/test_stack_switching.py::test_task_inherits_trace_and_profile_hooks",
+    "lineno": 1523,
+    "name": "test_task_inherits_trace_and_profile_hooks",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
+    ],
+    "file": "src/tests/test_stack_switching.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_stack_switching.py::test_new_event_loop_inside_task",
+    "lineno": 1588,
+    "name": "test_new_event_loop_inside_task",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "requires_jspi",
+      "pytest.mark.requires_dynamic_linking"
+    ],
+    "file": "src/tests/test_stack_switching.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_stack_switching.py::test_signal_handler_runs_inside_promising_task",
+    "lineno": 1630,
+    "name": "test_signal_handler_runs_inside_promising_task",
     "nodeStatusHint": "candidate"
   },
   {
@@ -6496,7 +7550,7 @@
     "file": "src/tests/test_static_typing.py",
     "fixtures": [],
     "id": "src/tests/test_static_typing.py::test_self",
-    "lineno": 21,
+    "lineno": 23,
     "name": "test_self",
     "nodeStatusHint": "candidate"
   },
@@ -6506,7 +7560,7 @@
     "file": "src/tests/test_static_typing.py",
     "fixtures": [],
     "id": "src/tests/test_static_typing.py::test_create_proxy",
-    "lineno": 26,
+    "lineno": 28,
     "name": "test_create_proxy",
     "nodeStatusHint": "candidate"
   },
@@ -6516,7 +7570,7 @@
     "file": "src/tests/test_static_typing.py",
     "fixtures": [],
     "id": "src/tests/test_static_typing.py::test_generic",
-    "lineno": 36,
+    "lineno": 38,
     "name": "test_generic",
     "nodeStatusHint": "candidate"
   },
@@ -6526,7 +7580,7 @@
     "file": "src/tests/test_static_typing.py",
     "fixtures": [],
     "id": "src/tests/test_static_typing.py::test_callable_generic",
-    "lineno": 49,
+    "lineno": 51,
     "name": "test_callable_generic",
     "nodeStatusHint": "candidate"
   },
@@ -6536,7 +7590,7 @@
     "file": "src/tests/test_static_typing.py",
     "fixtures": [],
     "id": "src/tests/test_static_typing.py::test_decorator_usage",
-    "lineno": 64,
+    "lineno": 66,
     "name": "test_decorator_usage",
     "nodeStatusHint": "candidate"
   },
@@ -6590,9 +7644,9 @@
     "fixtures": [
       "selenium"
     ],
-    "id": "src/tests/test_stdlib_fixes.py::test_encodings_deepfrozen",
+    "id": "src/tests/test_stdlib_fixes.py::test_zoneinfo_uses_c_extension",
     "lineno": 95,
-    "name": "test_encodings_deepfrozen",
+    "name": "test_zoneinfo_uses_c_extension",
     "nodeStatusHint": "candidate"
   },
   {
@@ -6605,7 +7659,7 @@
       "selenium"
     ],
     "id": "src/tests/test_stdlib_fixes.py::test_zipimport_traceback",
-    "lineno": 244,
+    "lineno": 105,
     "name": "test_zipimport_traceback",
     "nodeStatusHint": "candidate"
   },
@@ -6619,7 +7673,7 @@
       "selenium"
     ],
     "id": "src/tests/test_stdlib_fixes.py::test_zipimport_check_non_stdlib",
-    "lineno": 280,
+    "lineno": 141,
     "name": "test_zipimport_check_non_stdlib",
     "nodeStatusHint": "candidate"
   },
@@ -6634,7 +7688,7 @@
       "selenium_standalone_noload"
     ],
     "id": "src/tests/test_streams.py::test_custom_stdin1",
-    "lineno": 9,
+    "lineno": 11,
     "name": "test_custom_stdin1",
     "nodeStatusHint": "candidate"
   },
@@ -6650,7 +7704,7 @@
       "runtime"
     ],
     "id": "src/tests/test_streams.py::test_custom_stdout1",
-    "lineno": 51,
+    "lineno": 52,
     "name": "test_custom_stdout1",
     "nodeStatusHint": "candidate"
   },
@@ -6864,6 +7918,35 @@
   {
     "category": "python",
     "decorators": [
+      "run_in_pyodide"
+    ],
+    "file": "src/tests/test_streams.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_streams.py::test_get_terminal_size",
+    "lineno": 630,
+    "name": "test_get_terminal_size",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "pytest.mark.xfail_browsers(chrome=\"Node only\", firefox=\"Node only\", safari=\"Node only\")"
+    ],
+    "file": "src/tests/test_streams.py",
+    "fixtures": [
+      "selenium",
+      "tmp_path"
+    ],
+    "id": "src/tests/test_streams.py::test_get_terminal_size_node",
+    "lineno": 659,
+    "name": "test_get_terminal_size_node",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
       "given(s=text())",
       "settings(deadline=10000)",
       "example(\"\\ufeff\")"
@@ -6927,6 +8010,34 @@
   {
     "category": "python",
     "decorators": [
+      "run_in_pyodide"
+    ],
+    "file": "src/tests/test_typeconversions.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_typeconversions.py::test_js2python_string_codepoints",
+    "lineno": 146,
+    "name": "test_js2python_string_codepoints",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "run_in_pyodide"
+    ],
+    "file": "src/tests/test_typeconversions.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_typeconversions.py::test_string_conversion_above_2gb",
+    "lineno": 187,
+    "name": "test_string_conversion_above_2gb",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
       "given(\n    n=st.one_of(\n        st.integers(),\n        st.floats(allow_nan=False),\n    )\n)",
       "std_hypothesis_settings",
       "example(2**53)",
@@ -6943,7 +8054,7 @@
       "n"
     ],
     "id": "src/tests/test_typeconversions.py::test_number_conversions",
-    "lineno": 159,
+    "lineno": 270,
     "name": "test_number_conversions",
     "nodeStatusHint": "candidate"
   },
@@ -6960,7 +8071,7 @@
       "n"
     ],
     "id": "src/tests/test_typeconversions.py::test_number_conversions_2",
-    "lineno": 176,
+    "lineno": 287,
     "name": "test_number_conversions_2",
     "nodeStatusHint": "candidate"
   },
@@ -6983,7 +8094,7 @@
       "n"
     ],
     "id": "src/tests/test_typeconversions.py::test_number_conversions_3",
-    "lineno": 202,
+    "lineno": 313,
     "name": "test_number_conversions_3",
     "nodeStatusHint": "candidate"
   },
@@ -6997,7 +8108,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_nan_conversions",
-    "lineno": 220,
+    "lineno": 331,
     "name": "test_nan_conversions",
     "nodeStatusHint": "candidate"
   },
@@ -7012,9 +8123,9 @@
       "selenium_module_scope",
       "n"
     ],
-    "id": "src/tests/test_typeconversions.py::test_bigint_conversions",
-    "lineno": 239,
-    "name": "test_bigint_conversions",
+    "id": "src/tests/test_typeconversions.py::test_bigint_conversions1",
+    "lineno": 350,
+    "name": "test_bigint_conversions1",
     "nodeStatusHint": "candidate"
   },
   {
@@ -7028,9 +8139,9 @@
       "selenium_module_scope",
       "n"
     ],
-    "id": "src/tests/test_typeconversions.py::test_big_int_conversions2",
-    "lineno": 280,
-    "name": "test_big_int_conversions2",
+    "id": "src/tests/test_typeconversions.py::test_bigint_conversions2",
+    "lineno": 397,
+    "name": "test_bigint_conversions2",
     "nodeStatusHint": "candidate"
   },
   {
@@ -7045,9 +8156,9 @@
       "n",
       "exp"
     ],
-    "id": "src/tests/test_typeconversions.py::test_big_int_conversions3",
-    "lineno": 312,
-    "name": "test_big_int_conversions3",
+    "id": "src/tests/test_typeconversions.py::test_bigint_conversions3",
+    "lineno": 429,
+    "name": "test_bigint_conversions3",
     "nodeStatusHint": "candidate"
   },
   {
@@ -7063,7 +8174,7 @@
       "obj"
     ],
     "id": "src/tests/test_typeconversions.py::test_hyp_py2js2py",
-    "lineno": 353,
+    "lineno": 478,
     "name": "test_hyp_py2js2py",
     "nodeStatusHint": "candidate"
   },
@@ -7080,7 +8191,7 @@
       "obj"
     ],
     "id": "src/tests/test_typeconversions.py::test_hyp_py2js2py_2",
-    "lineno": 379,
+    "lineno": 504,
     "name": "test_hyp_py2js2py_2",
     "nodeStatusHint": "candidate"
   },
@@ -7096,7 +8207,7 @@
       "a"
     ],
     "id": "src/tests/test_typeconversions.py::test_big_integer_py2js2py",
-    "lineno": 392,
+    "lineno": 517,
     "name": "test_big_integer_py2js2py",
     "nodeStatusHint": "candidate"
   },
@@ -7115,7 +8226,7 @@
       "obj"
     ],
     "id": "src/tests/test_typeconversions.py::test_hyp_tojs_no_crash",
-    "lineno": 410,
+    "lineno": 535,
     "name": "test_hyp_tojs_no_crash",
     "nodeStatusHint": "candidate"
   },
@@ -7131,11 +8242,11 @@
     ],
     "file": "src/tests/test_typeconversions.py",
     "fixtures": [
-      "selenium_standalone",
+      "selenium_standalone_refresh",
       "obj"
     ],
     "id": "src/tests/test_typeconversions.py::test_hypothesis",
-    "lineno": 437,
+    "lineno": 562,
     "name": "test_hypothesis",
     "nodeStatusHint": "candidate"
   },
@@ -7152,7 +8263,7 @@
       "js"
     ],
     "id": "src/tests/test_typeconversions.py::test_python2js1",
-    "lineno": 460,
+    "lineno": 585,
     "name": "test_python2js1",
     "nodeStatusHint": "candidate"
   },
@@ -7166,7 +8277,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_python2js2",
-    "lineno": 471,
+    "lineno": 596,
     "name": "test_python2js2",
     "nodeStatusHint": "candidate"
   },
@@ -7180,7 +8291,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_python2js3",
-    "lineno": 487,
+    "lineno": 612,
     "name": "test_python2js3",
     "nodeStatusHint": "candidate"
   },
@@ -7194,7 +8305,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_python2js4",
-    "lineno": 503,
+    "lineno": 628,
     "name": "test_python2js4",
     "nodeStatusHint": "candidate"
   },
@@ -7208,7 +8319,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_python2js5",
-    "lineno": 520,
+    "lineno": 645,
     "name": "test_python2js5",
     "nodeStatusHint": "candidate"
   },
@@ -7220,7 +8331,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_python2js_track_proxies",
-    "lineno": 545,
+    "lineno": 670,
     "name": "test_python2js_track_proxies",
     "nodeStatusHint": "candidate"
   },
@@ -7234,7 +8345,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_wrong_way_track_proxies",
-    "lineno": 576,
+    "lineno": 701,
     "name": "test_wrong_way_track_proxies",
     "nodeStatusHint": "candidate"
   },
@@ -7246,7 +8357,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_wrong_way_conversions1",
-    "lineno": 617,
+    "lineno": 742,
     "name": "test_wrong_way_conversions1",
     "nodeStatusHint": "candidate"
   },
@@ -7260,7 +8371,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_wrong_way_conversions2",
-    "lineno": 643,
+    "lineno": 768,
     "name": "test_wrong_way_conversions2",
     "nodeStatusHint": "candidate"
   },
@@ -7274,7 +8385,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_wrong_way_conversions3",
-    "lineno": 659,
+    "lineno": 784,
     "name": "test_wrong_way_conversions3",
     "nodeStatusHint": "candidate"
   },
@@ -7288,7 +8399,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_wrong_way_conversions4",
-    "lineno": 675,
+    "lineno": 800,
     "name": "test_wrong_way_conversions4",
     "nodeStatusHint": "candidate"
   },
@@ -7302,7 +8413,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_dict_converter1",
-    "lineno": 685,
+    "lineno": 810,
     "name": "test_dict_converter1",
     "nodeStatusHint": "candidate"
   },
@@ -7316,7 +8427,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_dict_converter2",
-    "lineno": 707,
+    "lineno": 832,
     "name": "test_dict_converter2",
     "nodeStatusHint": "candidate"
   },
@@ -7330,7 +8441,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_dict_converter3",
-    "lineno": 727,
+    "lineno": 852,
     "name": "test_dict_converter3",
     "nodeStatusHint": "candidate"
   },
@@ -7344,7 +8455,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_dict_converter4",
-    "lineno": 748,
+    "lineno": 873,
     "name": "test_dict_converter4",
     "nodeStatusHint": "candidate"
   },
@@ -7359,7 +8470,7 @@
       "formula"
     ],
     "id": "src/tests/test_typeconversions.py::test_python2js_long_ints",
-    "lineno": 772,
+    "lineno": 897,
     "name": "test_python2js_long_ints",
     "nodeStatusHint": "candidate"
   },
@@ -7373,7 +8484,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_python2js_long_ints2",
-    "lineno": 777,
+    "lineno": 902,
     "name": "test_python2js_long_ints2",
     "nodeStatusHint": "candidate"
   },
@@ -7385,7 +8496,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_pythonexc2js",
-    "lineno": 793,
+    "lineno": 918,
     "name": "test_pythonexc2js",
     "nodeStatusHint": "candidate"
   },
@@ -7399,7 +8510,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_js2python_null",
-    "lineno": 800,
+    "lineno": 925,
     "name": "test_js2python_null",
     "nodeStatusHint": "candidate"
   },
@@ -7413,7 +8524,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_json_dumps_null",
-    "lineno": 814,
+    "lineno": 939,
     "name": "test_json_dumps_null",
     "nodeStatusHint": "candidate"
   },
@@ -7427,7 +8538,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_js2python_basic",
-    "lineno": 827,
+    "lineno": 952,
     "name": "test_js2python_basic",
     "nodeStatusHint": "candidate"
   },
@@ -7444,7 +8555,7 @@
       "is_truthy"
     ],
     "id": "src/tests/test_typeconversions.py::test_js2python_bool",
-    "lineno": 889,
+    "lineno": 1014,
     "name": "test_js2python_bool",
     "nodeStatusHint": "candidate"
   },
@@ -7461,7 +8572,7 @@
       "pytype"
     ],
     "id": "src/tests/test_typeconversions.py::test_typed_arrays",
-    "lineno": 910,
+    "lineno": 1035,
     "name": "test_typed_arrays",
     "nodeStatusHint": "candidate"
   },
@@ -7475,7 +8586,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_array_buffer",
-    "lineno": 923,
+    "lineno": 1048,
     "name": "test_array_buffer",
     "nodeStatusHint": "candidate"
   },
@@ -7489,7 +8600,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_recursive_list_to_js",
-    "lineno": 955,
+    "lineno": 1080,
     "name": "test_recursive_list_to_js",
     "nodeStatusHint": "candidate"
   },
@@ -7503,7 +8614,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_recursive_dict_to_js",
-    "lineno": 964,
+    "lineno": 1089,
     "name": "test_recursive_dict_to_js",
     "nodeStatusHint": "candidate"
   },
@@ -7517,7 +8628,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_dict_subclass_to_js",
-    "lineno": 973,
+    "lineno": 1098,
     "name": "test_dict_subclass_to_js",
     "nodeStatusHint": "candidate"
   },
@@ -7529,7 +8640,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_list_js2py2js",
-    "lineno": 996,
+    "lineno": 1121,
     "name": "test_list_js2py2js",
     "nodeStatusHint": "candidate"
   },
@@ -7541,7 +8652,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_dict_js2py2js",
-    "lineno": 1001,
+    "lineno": 1126,
     "name": "test_dict_js2py2js",
     "nodeStatusHint": "candidate"
   },
@@ -7553,7 +8664,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_error_js2py2js",
-    "lineno": 1006,
+    "lineno": 1131,
     "name": "test_error_js2py2js",
     "nodeStatusHint": "candidate"
   },
@@ -7565,7 +8676,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_error_py2js2py",
-    "lineno": 1015,
+    "lineno": 1140,
     "name": "test_error_py2js2py",
     "nodeStatusHint": "candidate"
   },
@@ -7577,7 +8688,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_list_py2js2py",
-    "lineno": 1020,
+    "lineno": 1145,
     "name": "test_list_py2js2py",
     "nodeStatusHint": "candidate"
   },
@@ -7589,7 +8700,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_dict_py2js2py",
-    "lineno": 1025,
+    "lineno": 1150,
     "name": "test_dict_py2js2py",
     "nodeStatusHint": "candidate"
   },
@@ -7603,7 +8714,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_jsproxy_attribute_error",
-    "lineno": 1031,
+    "lineno": 1156,
     "name": "test_jsproxy_attribute_error",
     "nodeStatusHint": "candidate"
   },
@@ -7615,7 +8726,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_javascript_error",
-    "lineno": 1059,
+    "lineno": 1184,
     "name": "test_javascript_error",
     "nodeStatusHint": "candidate"
   },
@@ -7629,7 +8740,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_javascript_error_back_to_js",
-    "lineno": 1073,
+    "lineno": 1198,
     "name": "test_javascript_error_back_to_js",
     "nodeStatusHint": "candidate"
   },
@@ -7641,7 +8752,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_memoryview_conversion",
-    "lineno": 1085,
+    "lineno": 1210,
     "name": "test_memoryview_conversion",
     "nodeStatusHint": "candidate"
   },
@@ -7653,7 +8764,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_python2js_with_depth",
-    "lineno": 1110,
+    "lineno": 1235,
     "name": "test_python2js_with_depth",
     "nodeStatusHint": "candidate"
   },
@@ -7669,7 +8780,7 @@
       "ty"
     ],
     "id": "src/tests/test_typeconversions.py::test_tojs1",
-    "lineno": 1138,
+    "lineno": 1263,
     "name": "test_tojs1",
     "nodeStatusHint": "candidate"
   },
@@ -7683,7 +8794,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_tojs2",
-    "lineno": 1151,
+    "lineno": 1276,
     "name": "test_tojs2",
     "nodeStatusHint": "candidate"
   },
@@ -7695,7 +8806,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_tojs4",
-    "lineno": 1167,
+    "lineno": 1292,
     "name": "test_tojs4",
     "nodeStatusHint": "candidate"
   },
@@ -7707,31 +8818,35 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_tojs5",
-    "lineno": 1185,
+    "lineno": 1310,
     "name": "test_tojs5",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "python",
-    "decorators": [],
+    "decorators": [
+      "run_in_pyodide"
+    ],
     "file": "src/tests/test_typeconversions.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_tojs6",
-    "lineno": 1203,
+    "lineno": 1329,
     "name": "test_tojs6",
     "nodeStatusHint": "candidate"
   },
   {
     "category": "python",
-    "decorators": [],
+    "decorators": [
+      "run_in_pyodide"
+    ],
     "file": "src/tests/test_typeconversions.py",
     "fixtures": [
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_tojs7",
-    "lineno": 1223,
+    "lineno": 1352,
     "name": "test_tojs7",
     "nodeStatusHint": "candidate"
   },
@@ -7746,7 +8861,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_tojs8",
-    "lineno": 1248,
+    "lineno": 1382,
     "name": "test_tojs8",
     "nodeStatusHint": "candidate"
   },
@@ -7760,7 +8875,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_tojs9",
-    "lineno": 1262,
+    "lineno": 1396,
     "name": "test_tojs9",
     "nodeStatusHint": "candidate"
   },
@@ -7772,7 +8887,7 @@
       "selenium_standalone_noload"
     ],
     "id": "src/tests/test_typeconversions.py::test_tojs_literalmap",
-    "lineno": 1276,
+    "lineno": 1410,
     "name": "test_tojs_literalmap",
     "nodeStatusHint": "candidate"
   },
@@ -7786,7 +8901,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_to_py1",
-    "lineno": 1325,
+    "lineno": 1459,
     "name": "test_to_py1",
     "nodeStatusHint": "candidate"
   },
@@ -7800,7 +8915,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_to_py2",
-    "lineno": 1345,
+    "lineno": 1479,
     "name": "test_to_py2",
     "nodeStatusHint": "candidate"
   },
@@ -7814,7 +8929,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_to_py3",
-    "lineno": 1365,
+    "lineno": 1499,
     "name": "test_to_py3",
     "nodeStatusHint": "candidate"
   },
@@ -7831,7 +8946,7 @@
       "msg"
     ],
     "id": "src/tests/test_typeconversions.py::test_to_py4",
-    "lineno": 1394,
+    "lineno": 1528,
     "name": "test_to_py4",
     "nodeStatusHint": "candidate"
   },
@@ -7845,7 +8960,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_to_py_default_converter",
-    "lineno": 1410,
+    "lineno": 1544,
     "name": "test_to_py_default_converter",
     "nodeStatusHint": "candidate"
   },
@@ -7859,7 +8974,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_to_py_default_converter2",
-    "lineno": 1452,
+    "lineno": 1586,
     "name": "test_to_py_default_converter2",
     "nodeStatusHint": "candidate"
   },
@@ -7871,7 +8986,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_to_js_default_converter",
-    "lineno": 1491,
+    "lineno": 1625,
     "name": "test_to_js_default_converter",
     "nodeStatusHint": "candidate"
   },
@@ -7885,7 +9000,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_to_js_default_converter2",
-    "lineno": 1527,
+    "lineno": 1661,
     "name": "test_to_js_default_converter2",
     "nodeStatusHint": "candidate"
   },
@@ -7899,7 +9014,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_to_js_eager_converter",
-    "lineno": 1567,
+    "lineno": 1701,
     "name": "test_to_js_eager_converter",
     "nodeStatusHint": "candidate"
   },
@@ -7911,7 +9026,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_buffer_format_string",
-    "lineno": 1612,
+    "lineno": 1746,
     "name": "test_buffer_format_string",
     "nodeStatusHint": "candidate"
   },
@@ -7923,7 +9038,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_dict_converter_cache1",
-    "lineno": 1681,
+    "lineno": 1815,
     "name": "test_dict_converter_cache1",
     "nodeStatusHint": "candidate"
   },
@@ -7937,7 +9052,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_dict_converter_cache2",
-    "lineno": 1693,
+    "lineno": 1827,
     "name": "test_dict_converter_cache2",
     "nodeStatusHint": "candidate"
   },
@@ -7951,7 +9066,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_dict_and_default_converter",
-    "lineno": 1704,
+    "lineno": 1838,
     "name": "test_dict_and_default_converter",
     "nodeStatusHint": "candidate"
   },
@@ -7965,7 +9080,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_bind_attrs",
-    "lineno": 1721,
+    "lineno": 1855,
     "name": "test_bind_attrs",
     "nodeStatusHint": "candidate"
   },
@@ -7979,7 +9094,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_bind_call_convert",
-    "lineno": 1746,
+    "lineno": 1880,
     "name": "test_bind_call_convert",
     "nodeStatusHint": "candidate"
   },
@@ -7993,7 +9108,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_bind_call_bind_return_value",
-    "lineno": 1775,
+    "lineno": 1909,
     "name": "test_bind_call_bind_return_value",
     "nodeStatusHint": "candidate"
   },
@@ -8007,7 +9122,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_bind_future_convert_result",
-    "lineno": 1799,
+    "lineno": 1933,
     "name": "test_bind_future_convert_result",
     "nodeStatusHint": "candidate"
   },
@@ -8021,7 +9136,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_bind_future_bind_result",
-    "lineno": 1826,
+    "lineno": 1960,
     "name": "test_bind_future_bind_result",
     "nodeStatusHint": "candidate"
   },
@@ -8035,7 +9150,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_bind3",
-    "lineno": 1857,
+    "lineno": 1991,
     "name": "test_bind3",
     "nodeStatusHint": "candidate"
   },
@@ -8049,7 +9164,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_bind_async1",
-    "lineno": 1914,
+    "lineno": 2048,
     "name": "test_bind_async1",
     "nodeStatusHint": "candidate"
   },
@@ -8063,7 +9178,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_bind_async2",
-    "lineno": 1938,
+    "lineno": 2072,
     "name": "test_bind_async2",
     "nodeStatusHint": "candidate"
   },
@@ -8077,7 +9192,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_bind_async3",
-    "lineno": 1968,
+    "lineno": 2102,
     "name": "test_bind_async3",
     "nodeStatusHint": "candidate"
   },
@@ -8091,7 +9206,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_bind_pre_convert",
-    "lineno": 2003,
+    "lineno": 2137,
     "name": "test_bind_pre_convert",
     "nodeStatusHint": "candidate"
   },
@@ -8104,8 +9219,22 @@
     "fixtures": [
       "selenium"
     ],
+    "id": "src/tests/test_typeconversions.py::test_converter_copy_refcount",
+    "lineno": 2163,
+    "name": "test_converter_copy_refcount",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "run_in_pyodide"
+    ],
+    "file": "src/tests/test_typeconversions.py",
+    "fixtures": [
+      "selenium"
+    ],
     "id": "src/tests/test_typeconversions.py::test_bind_construct",
-    "lineno": 2029,
+    "lineno": 2202,
     "name": "test_bind_construct",
     "nodeStatusHint": "candidate"
   },
@@ -8119,7 +9248,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_bind_py_json",
-    "lineno": 2068,
+    "lineno": 2241,
     "name": "test_bind_py_json",
     "nodeStatusHint": "candidate"
   },
@@ -8133,7 +9262,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_bind_class",
-    "lineno": 2084,
+    "lineno": 2257,
     "name": "test_bind_class",
     "nodeStatusHint": "candidate"
   },
@@ -8147,7 +9276,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_bind__call__",
-    "lineno": 2112,
+    "lineno": 2285,
     "name": "test_bind__call__",
     "nodeStatusHint": "candidate"
   },
@@ -8161,7 +9290,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_bind_getattr",
-    "lineno": 2142,
+    "lineno": 2315,
     "name": "test_bind_getattr",
     "nodeStatusHint": "candidate"
   },
@@ -8175,7 +9304,7 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_to_js_no_leak",
-    "lineno": 2182,
+    "lineno": 2355,
     "name": "test_to_js_no_leak",
     "nodeStatusHint": "candidate"
   },
@@ -8189,8 +9318,36 @@
       "selenium"
     ],
     "id": "src/tests/test_typeconversions.py::test_js_callable_not_function",
-    "lineno": 2191,
+    "lineno": 2364,
     "name": "test_js_callable_not_function",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "run_in_pyodide"
+    ],
+    "file": "src/tests/test_typeconversions.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_typeconversions.py::test_js_bigint",
+    "lineno": 2382,
+    "name": "test_js_bigint",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "run_in_pyodide"
+    ],
+    "file": "src/tests/test_typeconversions.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_typeconversions.py::test_js_bigint_construct_typed_array",
+    "lineno": 2615,
+    "name": "test_js_bigint_construct_typed_array",
     "nodeStatusHint": "candidate"
   },
   {
@@ -8210,10 +9367,36 @@
     "decorators": [],
     "file": "src/tests/test_webloop.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium"
+    ],
+    "id": "src/tests/test_webloop.py::test_asyncio_sleep_overflowing_delay",
+    "lineno": 37,
+    "name": "test_asyncio_sleep_overflowing_delay",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [
+      "run_in_pyodide"
+    ],
+    "file": "src/tests/test_webloop.py",
+    "fixtures": [
+      "selenium"
+    ],
+    "id": "src/tests/test_webloop.py::test_call_later_skips_scheduling_for_infinite_delay",
+    "lineno": 56,
+    "name": "test_call_later_skips_scheduling_for_infinite_delay",
+    "nodeStatusHint": "candidate"
+  },
+  {
+    "category": "python",
+    "decorators": [],
+    "file": "src/tests/test_webloop.py",
+    "fixtures": [
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_webloop.py::test_cancel_handle",
-    "lineno": 37,
+    "lineno": 78,
     "name": "test_cancel_handle",
     "nodeStatusHint": "candidate"
   },
@@ -8225,7 +9408,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_cancel_unhandled",
-    "lineno": 57,
+    "lineno": 98,
     "name": "test_cancel_unhandled",
     "nodeStatusHint": "candidate"
   },
@@ -8237,7 +9420,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_return_result",
-    "lineno": 76,
+    "lineno": 117,
     "name": "test_return_result",
     "nodeStatusHint": "candidate"
   },
@@ -8249,7 +9432,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_capture_exception",
-    "lineno": 99,
+    "lineno": 140,
     "name": "test_capture_exception",
     "nodeStatusHint": "candidate"
   },
@@ -8261,7 +9444,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_await_js_promise",
-    "lineno": 122,
+    "lineno": 163,
     "name": "test_await_js_promise",
     "nodeStatusHint": "candidate"
   },
@@ -8273,7 +9456,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_call_soon",
-    "lineno": 138,
+    "lineno": 179,
     "name": "test_call_soon",
     "nodeStatusHint": "candidate"
   },
@@ -8285,7 +9468,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_contextvars",
-    "lineno": 155,
+    "lineno": 196,
     "name": "test_contextvars",
     "nodeStatusHint": "candidate"
   },
@@ -8297,7 +9480,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_asyncio_exception",
-    "lineno": 177,
+    "lineno": 218,
     "name": "test_asyncio_exception",
     "nodeStatusHint": "candidate"
   },
@@ -8311,7 +9494,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_run_in_executor",
-    "lineno": 198,
+    "lineno": 239,
     "name": "test_run_in_executor",
     "nodeStatusHint": "candidate"
   },
@@ -8322,10 +9505,10 @@
     ],
     "file": "src/tests/test_webloop.py",
     "fixtures": [
-      "selenium_standalone"
+      "selenium_standalone_refresh"
     ],
     "id": "src/tests/test_webloop.py::test_webloop_exception_handler",
-    "lineno": 216,
+    "lineno": 257,
     "name": "test_webloop_exception_handler",
     "nodeStatusHint": "candidate"
   },
@@ -8337,7 +9520,7 @@
     "file": "src/tests/test_webloop.py",
     "fixtures": [],
     "id": "src/tests/test_webloop.py::test_pyodide_future",
-    "lineno": 255,
+    "lineno": 296,
     "name": "test_pyodide_future",
     "nodeStatusHint": "candidate"
   },
@@ -8351,7 +9534,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_pyodide_future2",
-    "lineno": 361,
+    "lineno": 424,
     "name": "test_pyodide_future2",
     "nodeStatusHint": "candidate"
   },
@@ -8365,7 +9548,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_pyodide_task",
-    "lineno": 378,
+    "lineno": 441,
     "name": "test_pyodide_task",
     "nodeStatusHint": "candidate"
   },
@@ -8379,7 +9562,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_inprogress",
-    "lineno": 423,
+    "lineno": 486,
     "name": "test_inprogress",
     "nodeStatusHint": "candidate"
   },
@@ -8393,7 +9576,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_zero_timeout",
-    "lineno": 522,
+    "lineno": 585,
     "name": "test_zero_timeout",
     "nodeStatusHint": "candidate"
   },
@@ -8407,7 +9590,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_create_task_context",
-    "lineno": 539,
+    "lineno": 602,
     "name": "test_create_task_context",
     "nodeStatusHint": "candidate"
   },
@@ -8421,7 +9604,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_shutdown_closes_gens",
-    "lineno": 558,
+    "lineno": 621,
     "name": "test_shutdown_closes_gens",
     "nodeStatusHint": "candidate"
   },
@@ -8435,7 +9618,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_shutdown_idempotent",
-    "lineno": 583,
+    "lineno": 646,
     "name": "test_shutdown_idempotent",
     "nodeStatusHint": "candidate"
   },
@@ -8449,7 +9632,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_shutdown_with_cancelled_tasks",
-    "lineno": 608,
+    "lineno": 671,
     "name": "test_shutdown_with_cancelled_tasks",
     "nodeStatusHint": "candidate"
   },
@@ -8463,7 +9646,7 @@
       "selenium"
     ],
     "id": "src/tests/test_webloop.py::test_warning_after_shutdown",
-    "lineno": 645,
+    "lineno": 708,
     "name": "test_warning_after_shutdown",
     "nodeStatusHint": "candidate"
   },
@@ -8472,8 +9655,7 @@
     "decorators": [],
     "file": "src/tests/test_webloop_webworker.py",
     "fixtures": [
-      "selenium_webworker_standalone",
-      "script_type"
+      "selenium_webworker_standalone"
     ],
     "id": "src/tests/test_webloop_webworker.py::test_webworker_zero_timeout1",
     "lineno": 8,
@@ -8487,8 +9669,7 @@
     ],
     "file": "src/tests/test_webloop_webworker.py",
     "fixtures": [
-      "selenium_webworker_standalone",
-      "script_type"
+      "selenium_webworker_standalone"
     ],
     "id": "src/tests/test_webloop_webworker.py::test_webworker_zero_timeout2",
     "lineno": 21,
@@ -8502,8 +9683,7 @@
     ],
     "file": "src/tests/test_webworker.py",
     "fixtures": [
-      "selenium_webworker_standalone",
-      "script_type"
+      "selenium_webworker_standalone"
     ],
     "id": "src/tests/test_webworker.py::test_runwebworker_different_package_name",
     "lineno": 7,
@@ -8517,11 +9697,10 @@
     ],
     "file": "src/tests/test_webworker.py",
     "fixtures": [
-      "selenium_webworker_standalone",
-      "script_type"
+      "selenium_webworker_standalone"
     ],
     "id": "src/tests/test_webworker.py::test_runwebworker_no_imports",
-    "lineno": 21,
+    "lineno": 19,
     "name": "test_runwebworker_no_imports",
     "nodeStatusHint": "candidate"
   },
@@ -8532,11 +9711,10 @@
     ],
     "file": "src/tests/test_webworker.py",
     "fixtures": [
-      "selenium_webworker_standalone",
-      "script_type"
+      "selenium_webworker_standalone"
     ],
     "id": "src/tests/test_webworker.py::test_runwebworker_missing_import",
-    "lineno": 32,
+    "lineno": 30,
     "name": "test_runwebworker_missing_import",
     "nodeStatusHint": "candidate"
   },
@@ -8547,11 +9725,10 @@
     ],
     "file": "src/tests/test_webworker.py",
     "fixtures": [
-      "selenium_webworker_standalone",
-      "script_type"
+      "selenium_webworker_standalone"
     ],
     "id": "src/tests/test_webworker.py::test_runwebworker_exception",
-    "lineno": 44,
+    "lineno": 42,
     "name": "test_runwebworker_exception",
     "nodeStatusHint": "candidate"
   },
@@ -8562,11 +9739,10 @@
     ],
     "file": "src/tests/test_webworker.py",
     "fixtures": [
-      "selenium_webworker_standalone",
-      "script_type"
+      "selenium_webworker_standalone"
     ],
     "id": "src/tests/test_webworker.py::test_runwebworker_exception_after_import",
-    "lineno": 56,
+    "lineno": 54,
     "name": "test_runwebworker_exception_after_import",
     "nodeStatusHint": "candidate"
   },
@@ -8578,11 +9754,10 @@
     "file": "src/tests/test_webworker.py",
     "fixtures": [
       "selenium_webworker_standalone",
-      "httpserver",
-      "script_type"
+      "httpserver"
     ],
     "id": "src/tests/test_webworker.py::test_runwebworker_micropip",
-    "lineno": 71,
+    "lineno": 67,
     "name": "test_runwebworker_micropip",
     "nodeStatusHint": "candidate"
   }

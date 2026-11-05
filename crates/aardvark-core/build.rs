@@ -231,8 +231,8 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 fn generate_docs_placeholders(out_dir: &Path) -> Result<()> {
     const ASM_PLACEHOLDER: &str = r#"// docs.rs placeholder - Pyodide assets are unavailable in documentation builds.
 var Module = { API: {} };
-var _createPyodideModule = function () { throw new Error("Pyodide runtime is unavailable in docs.rs builds"); };
-globalThis._createPyodideModule = _createPyodideModule;
+async function _createPyodideModule() { throw new Error("Pyodide runtime is unavailable in docs.rs builds"); }
+export default _createPyodideModule;
 const API=Module.API;
 reportUndefinedSymbols();
 crypto.getRandomValues(Module, []);
@@ -254,8 +254,8 @@ eval(UTF8ToString(ptr));
 }
 "#;
 
-    fs::write(out_dir.join("pyodide.asm.js"), ASM_PLACEHOLDER)
-        .context("write docs placeholder pyodide.asm.js")?;
+    fs::write(out_dir.join("pyodide.asm.mjs"), ASM_PLACEHOLDER)
+        .context("write docs placeholder pyodide.asm.mjs")?;
     fs::write(out_dir.join("pyodide.mjs"), MJS_PLACEHOLDER)
         .context("write docs placeholder pyodide.mjs")?;
     fs::write(out_dir.join("pyodide.js"), JS_PLACEHOLDER)
@@ -307,7 +307,7 @@ fn copy_packages_script(out_dir: &Path) -> Result<()> {
 }
 
 fn generate_patched_pyodide(out_dir: &Path) -> Result<()> {
-    let original_path = out_dir.join("pyodide.asm.js");
+    let original_path = out_dir.join("pyodide.asm.mjs");
     let target_path = out_dir.join("pyodide.asm.patched.js");
     let source = read_text_file_limited(
         &original_path,
@@ -336,11 +336,11 @@ fn apply_pyodide_replacements(source: &str) -> Result<String> {
 
     let required_replacements: [(&str, String); 8] = [
         (
-            "var _createPyodideModule",
-            format!("{PRELUDE}export const _createPyodideModule"),
+            "async function _createPyodideModule(",
+            format!("{PRELUDE}export async function _createPyodideModule("),
         ),
         (
-            "globalThis._createPyodideModule = _createPyodideModule;",
+            "export default _createPyodideModule;",
             String::new(),
         ),
         ("new WebAssembly.Module", "newWasmModule".into()),
@@ -472,7 +472,7 @@ fn generate_distribution_manifest(out_dir: &Path, variant: PyodideVariant) -> Re
 fn required_distribution_files() -> &'static [&'static str] {
     &[
         "pyodide.asm.wasm",
-        "pyodide.asm.js",
+        "pyodide.asm.mjs",
         "pyodide.asm.patched.js",
         "pyodide_builtin_wrappers.js",
         "pyodide_bootstrap.js",

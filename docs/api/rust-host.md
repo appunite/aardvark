@@ -18,13 +18,13 @@ Enable `pyodide-staging` in setup tools that need to prepare runtime assets:
 
 ```toml
 [dependencies]
-aardvark-core = { version = "=0.2.1", features = ["pyodide-staging"] }
+aardvark-core = { version = "=0.3.0", features = ["pyodide-staging"] }
 ```
 
 ## Preparing [Pyodide](https://pyodide.org/) assets
 
 Before initialising a Python runtime, stage the pinned Aardvark Pyodide
-distribution on disk. The distribution contains the upstream Pyodide 0.29.4
+distribution on disk. The distribution contains the upstream Pyodide 314.0.7
 runtime files, package files, Aardvark adapter scripts, a manifest, and a
 compatibility fingerprint.
 
@@ -65,7 +65,7 @@ The CLI remains available as a developer helper and calls the same library API:
 
 ```bash
 cargo run -p aardvark-cli -- assets stage --variant full
-PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v0.29.4-full' | sort | tail -n 1)"
+PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v314.0.7-full' | sort | tail -n 1)"
 test -n "$PYODIDE_DIST_DIR"
 cargo run -p aardvark-cli -- assets verify "$PYODIDE_DIST_DIR"
 ```

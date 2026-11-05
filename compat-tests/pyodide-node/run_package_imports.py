@@ -17,7 +17,7 @@ UPSTREAM_TEST_ID = "packages/_tests/test_packages_common.py::test_import"
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--version", default="0.29.4")
+    parser.add_argument("--version", default="314.0.7")
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--dist-dir", type=Path)
     parser.add_argument("--expectations", type=Path)

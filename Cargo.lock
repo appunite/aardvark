@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "aardvark-cli"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "aardvark-core",
  "anyhow",
@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "aardvark-compat-runner"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "aardvark-core",
  "anyhow",
@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "aardvark-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "blake3",

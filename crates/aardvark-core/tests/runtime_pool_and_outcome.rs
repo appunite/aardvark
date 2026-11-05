@@ -136,7 +136,7 @@ run_js("typeof pyodide === 'object' && pyodide.version")
 "#,
     )?;
 
-    assert_eq!(output.json, Some(json!("0.29.4")));
+    assert_eq!(output.json, Some(json!("314.0.7")));
     assert!(output.exception_type.is_none());
     Ok(())
 }

@@ -13,12 +13,12 @@ pub fn loader_mjs() -> &'static str {
     include_str!(concat!(env!("OUT_DIR"), "/pyodide/pyodide.mjs"))
 }
 
-/// Returns the asm.js shim required by Pyodide's loader.
-pub fn pyodide_asm_js() -> &'static str {
-    include_str!(concat!(env!("OUT_DIR"), "/pyodide/pyodide.asm.js"))
+/// Returns the Emscripten ES module (`pyodide.asm.mjs`) shipped by Pyodide.
+pub fn pyodide_asm_mjs() -> &'static str {
+    include_str!(concat!(env!("OUT_DIR"), "/pyodide/pyodide.asm.mjs"))
 }
 
-/// Returns the ES module variant of `pyodide.asm.js` with ES module compatibility patches applied.
+/// Returns the patched variant of `pyodide.asm.mjs` with ES module compatibility patches applied.
 pub fn pyodide_asm_patched_js() -> &'static str {
     include_str!(concat!(env!("OUT_DIR"), "/pyodide/pyodide.asm.patched.js"))
 }

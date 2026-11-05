@@ -1,7 +1,7 @@
 # Local Aardvark expectations for Pyodide's lockfile-driven package import test.
 #
 # Mirrors upstream:
-# third_party/pyodide/0.29.4/packages/_tests/test_packages_common.py
+# third_party/pyodide/314.0.7/packages/_tests/test_packages_common.py
 
 [upstream_xfail]
 "soupsieve" = "Upstream xfail: importing soupsieve without installing beautifulsoup4 fails"

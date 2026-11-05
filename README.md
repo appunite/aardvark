@@ -25,7 +25,7 @@ The CLI is intended for local smoke tests and debugging; production setups shoul
 
 ```
 cargo run -p aardvark-cli -- assets stage --variant full
-PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v0.29.4-full' | sort | tail -n 1)"
+PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v314.0.7-full' | sort | tail -n 1)"
 test -n "$PYODIDE_DIST_DIR"
 AARDVARK_PYODIDE_DIST_DIR="$PYODIDE_DIST_DIR" \
   cargo run -p aardvark-cli -- \
@@ -50,7 +50,7 @@ their entrypoint and package requirements in the manifest.
 ### Preparing [Pyodide](https://pyodide.org/) assets
 
 The runtime never downloads wheels on demand. Package loading uses a staged
-Aardvark Pyodide distribution, which combines the upstream Pyodide 0.29.4
+Aardvark Pyodide distribution, which combines the upstream Pyodide 314.0.7
 release with Aardvark adapter scripts and a manifest containing file hashes plus
 a compatibility fingerprint.
 
@@ -59,7 +59,7 @@ installing `aardvark-cli`:
 
 ```toml
 [dependencies]
-aardvark-core = { version = "=0.2.1", features = ["pyodide-staging"] }
+aardvark-core = { version = "=0.3.0", features = ["pyodide-staging"] }
 ```
 
 ```rust
@@ -82,7 +82,7 @@ library API:
 
 ```
 cargo run -p aardvark-cli -- assets stage --variant full
-PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v0.29.4-full' | sort | tail -n 1)"
+PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v314.0.7-full' | sort | tail -n 1)"
 test -n "$PYODIDE_DIST_DIR"
 cargo run -p aardvark-cli -- assets verify "$PYODIDE_DIST_DIR"
 ```

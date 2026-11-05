@@ -33,7 +33,7 @@ the daily workflow.
   ```
 - Workspace tests without the slower integration crate:
   ```bash
-  PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v0.29.4-full' | sort | tail -n 1)"
+  PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v314.0.7-full' | sort | tail -n 1)"
   test -n "$PYODIDE_DIST_DIR"
   AARDVARK_PYODIDE_DIST_DIR="$PYODIDE_DIST_DIR" \
     cargo test --workspace --exclude integration-tests
@@ -48,8 +48,8 @@ the daily workflow.
 
 - Local Pyodide compatibility harness:
   ```bash
-  python3 compat-tests/pyodide-node/run_local.py --version 0.29.4
-  python3 compat-tests/pyodide-node/run_package_imports.py --version 0.29.4
+  python3 compat-tests/pyodide-node/run_local.py --version 314.0.7
+  python3 compat-tests/pyodide-node/run_package_imports.py --version 314.0.7
   ```
   This is a local Node-shaped Pyodide parity check, not a CI gate and not a
   browser conformance suite.
@@ -57,7 +57,7 @@ the daily workflow.
 ### Smoke Testing the CLI
 
 ```
-PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v0.29.4-full' | sort | tail -n 1)"
+PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v314.0.7-full' | sort | tail -n 1)"
 test -n "$PYODIDE_DIST_DIR"
 AARDVARK_PYODIDE_DIST_DIR="$PYODIDE_DIST_DIR" \
   cargo run -p aardvark-cli -- \

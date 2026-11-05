@@ -98,7 +98,7 @@ fn host_mode_name(mode: Mode) -> Result<&'static str> {
 
 pub(super) fn host_modes_for_scenario(scenario: Scenario) -> &'static [Mode] {
     match scenario {
-        // Pyodide 0.29.4 pins matplotlib 3.8.4 for Python 3.13.2. That exact
+        // Pyodide pins exact matplotlib/numpy/scipy builds for its Python. That exact
         // native CPython package set is not generally wheel-installable, so the
         // default full matrix avoids producing a misleading or host-dependent row.
         Scenario::Matplotlib | Scenario::NumpyMatmul | Scenario::ScipySgemm => &[],

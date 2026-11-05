@@ -1,7 +1,7 @@
 [
   {
     "id": "src/tests/test_python.py::test_print",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_python.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_python.py",
     "op": "runPython",
     "code": "print('This should be logged')",
     "expect": null,
@@ -9,308 +9,308 @@
   },
   {
     "id": "src/tests/test_stdlib_fixes.py::test_threading_import/import_thread",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_stdlib_fixes.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_stdlib_fixes.py",
     "op": "runPython",
     "code": "from threading import Thread\nThread is not None",
     "expect": true
   },
   {
     "id": "src/tests/test_stdlib_fixes.py::test_threading_import/lock_context",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_stdlib_fixes.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_stdlib_fixes.py",
     "op": "runPython",
     "code": "from threading import Lock\nwith Lock():\n    value = 7\nvalue",
     "expect": 7
   },
   {
     "id": "src/tests/test_asyncio.py::test_eval_code_await_fetch/local_async_smoke",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_asyncio.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_asyncio.py",
     "op": "runPythonAsync",
     "code": "import asyncio\nawait asyncio.sleep(0)\n42",
     "expect": 42
   },
   {
     "id": "src/tests/test_asyncio.py::test_eval_code_async_simple",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_asyncio.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_asyncio.py",
     "op": "runPython",
     "code": "from pyodide.code import eval_code_async\nc = eval_code_async('1+92')\ntry:\n    c.send(None)\nexcept StopIteration as exc:\n    result = exc.value\nresult",
     "expect": 93
   },
   {
     "id": "src/tests/test_pyodide.py::test_python_version",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyodide.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyodide.py",
     "op": "runPython",
     "code": "import sys\n[sys.version_info.major, sys.version_info.minor]",
-    "expect": [3, 13]
+    "expect": [3, 14]
   },
   {
     "id": "src/tests/test_pyodide.py::test_find_imports",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyodide.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyodide.py",
     "op": "runPython",
     "code": "from pyodide.code import find_imports\nres = find_imports('''\nimport numpy as np\nfrom scipy import sparse\nimport matplotlib.pyplot as plt\n''')\nres_bad = find_imports('''\nimport numpy as np\nfrom scipy import sparse\nimport matplotlib.pyplot as plt\nfor x in [1,2,3]\n''')\n[sorted(res), res_bad]",
     "expect": [["matplotlib", "matplotlib.pyplot", "numpy", "scipy"], []]
   },
   {
     "id": "src/tests/test_pyodide.py::test_ffi_import_star",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyodide.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyodide.py",
     "op": "runPython",
     "code": "exec('from pyodide.ffi import *', {})\nTrue",
     "expect": true
   },
   {
     "id": "src/tests/test_pyodide.py::test_pyimport1",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyodide.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyodide.py",
     "op": "runPython",
     "code": "from _pyodide._base import pyimport_impl\n[pyimport_impl('pyodide').__name__, pyimport_impl('pyodide.console').__name__, pyimport_impl('pyodide.console.BANNER').startswith('Python ')]",
     "expect": ["pyodide", "pyodide.console", true]
   },
   {
     "id": "src/tests/test_pyodide.py::test_pyimport2",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyodide.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyodide.py",
     "op": "runJs",
     "code": "let platform = pyodide.pyimport('platform');\ntry {\n  assert(() => platform.machine() === 'wasm32');\n  assert(() => !pyodide.globals.has('platform'));\n  assertThrows(() => pyodide.pyimport('platform;'), 'PythonError', \"ModuleNotFoundError: No module named 'platform;'\");\n  return true;\n} finally {\n  platform.destroy();\n}",
     "expect": true
   },
   {
     "id": "src/tests/test_pyodide.py::test_code_runner/local_core",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyodide.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyodide.py",
     "op": "runPython",
     "code": "from pyodide.code import CodeRunner, should_quiet\nimport ast\nchecks = []\nchecks.append(should_quiet('1+1;'))\nchecks.append(not should_quiet('1+1#;'))\nchecks.append(not should_quiet('5-2  # comment with trailing semicolon ;'))\nchecks.append(CodeRunner('1+1').compile().run() == 2)\nchecks.append(CodeRunner('1+1\\n1+1').compile().run() == 2)\nchecks.append(CodeRunner('x + 7').compile().run({'x': 3}) == 10)\ncr = CodeRunner('x + 7')\nl = cr.ast.body[0].value.left\ncr.ast.body[0].value.left = ast.BinOp(left=l, op=ast.Mult(), right=ast.Constant(value=2))\nchecks.append(cr.compile().run({'x': 3}) == 13)\nall(checks)",
     "expect": true
   },
   {
     "id": "src/tests/test_pyodide.py::test_promise_check/non_promise_values",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyodide.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyodide.py",
     "op": "runJs",
     "code": "return [\n  pyodide._api.isPromise(0),\n  pyodide._api.isPromise({a: 2}),\n  pyodide._api.isPromise(() => {}),\n  pyodide._api.isPromise(Promise),\n  pyodide._api.isPromise(new Map()),\n];",
     "expect": [false, false, false, false, false]
   },
   {
     "id": "src/tests/test_pyodide.py::test_promise_check/promise_values",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyodide.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyodide.py",
     "op": "runJs",
     "code": "return [\n  pyodide._api.isPromise(Promise.resolve()),\n  pyodide._api.isPromise(new Promise((resolve, reject) => {})),\n];",
     "expect": [true, true]
   },
   {
     "id": "src/tests/test_pyodide.py::test_promise_check/pyproxy_not_promise",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyodide.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyodide.py",
     "op": "runJs",
     "code": "let d = pyodide.runPython(\"{}\");\ntry {\n  return pyodide._api.isPromise(d);\n} finally {\n  d.destroy();\n}",
     "expect": false
   },
   {
     "id": "src/tests/test_pyodide.py::test_run_python_proxy_leak/local_empty_async_smoke",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyodide.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyodide.py",
     "op": "runJs",
     "code": "pyodide.runPython(\"\");\nawait pyodide.runPythonAsync(\"\");\nreturn true;",
     "expect": true
   },
   {
     "id": "src/tests/test_pyodide.py::test_check_interrupt/local_basic",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyodide.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyodide.py",
     "op": "runJs",
     "code": "try {\n  pyodide.setInterruptBuffer(undefined);\n  pyodide.checkInterrupt();\n  let buffer = new Uint8Array(1);\n  let x = 0;\n  pyodide.setInterruptBuffer(buffer);\n  function test(){\n    buffer[0] = 2;\n    pyodide.checkInterrupt();\n    x = 1;\n  }\n  self.test = test;\n  let err;\n  try {\n    pyodide.runPython(`\n      from js import test\n      try:\n          test()\n      finally:\n          del test\n    `);\n  } catch(e){\n    err = e;\n  }\n  return x === 0 && err.message.includes('KeyboardInterrupt');\n} finally {\n  pyodide.setInterruptBuffer(undefined);\n  delete self.test;\n}",
     "expect": true
   },
   {
     "id": "src/tests/test_pyodide.py::test_run_python_js_error",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyodide.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyodide.py",
     "op": "runJs",
     "code": "function throwError(){ throw new Error('blah!'); }\nself.throwError = throwError;\ntry {\n  pyodide.runPython(`\n      from js import throwError\n      from unittest import TestCase\n      from pyodide.ffi import JsException\n      raises = TestCase().assertRaisesRegex\n      with raises(JsException, 'blah!'):\n          throwError()\n  `);\n  return true;\n} finally {\n  delete self.throwError;\n}",
     "expect": true
   },
   {
     "id": "src/tests/test_pyodide.py::test_run_python_locals",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyodide.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyodide.py",
     "op": "runJs",
     "code": "let dict = pyodide.globals.get('dict');\nlet locals = dict([['x', 7]]);\nlet globals = dict([['x', 5], ['y', 29]]);\ndict.destroy();\ntry {\n  let result = pyodide.runPython('z = 13; x + y', {locals, globals});\n  assert(() => locals.get('z') === 13);\n  assert(() => locals.has('x'));\n  let result2 = pyodide.runPython('del x; x + y', {locals, globals});\n  assert(() => !locals.has('x'));\n  assert(() => result === 7 + 29);\n  assert(() => result2 === 5 + 29);\n  return true;\n} finally {\n  locals.destroy();\n  globals.destroy();\n}",
     "expect": true
   },
   {
     "id": "src/tests/test_pyodide.py::test_run_js",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyodide.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyodide.py",
     "op": "runPython",
     "code": "from unittest import TestCase\nfrom pyodide.code import run_js\nraises = TestCase().assertRaises\nwith raises(TypeError):\n    run_js(3)\nvalue = [run_js('(x)=> x+1')(7), run_js('[1,2,3]')[2]]\nrun_js('globalThis.x = 77')\nfrom js import x\nvalue + [x]",
     "expect": [8, 3, 77]
   },
   {
     "id": "src/tests/test_pyodide.py::test_pickle_jsexception",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyodide.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyodide.py",
     "op": "runPython",
     "code": "import pickle\nfrom pyodide.code import run_js\npickle.dumps(run_js(\"new Error('hi');\"))\nTrue",
     "expect": true
   },
   {
     "id": "src/tests/test_pyodide.py::test_raises_jsexception",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyodide.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyodide.py",
     "op": "runPython",
     "code": "from unittest import TestCase\nfrom pyodide.code import run_js\nfrom pyodide.ffi import JsException\nraises = TestCase().assertRaisesRegex\nwith raises(JsException, 'Error: hi'):\n    run_js(\"throw new Error('hi');\")\nTrue",
     "expect": true
   },
   {
     "id": "src/tests/test_jsproxy.py::test_jsproxy_bool/plain_object",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_jsproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_jsproxy.py",
     "op": "runPython",
     "code": "from pyodide.code import run_js\nbool(run_js('({a: 1})'))",
     "expect": true
   },
   {
     "id": "src/tests/test_jsproxy.py::test_jsproxy_getattr",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_jsproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_jsproxy.py",
     "op": "runJs",
     "code": "self.a = { x : 2, y : \"9\", typeof : 7 };\nlet pyresult = pyodide.runPython(`\n    from js import a\n    [ a.x, a.y, a.typeof ]\n`);\nlet result = pyresult.toJs();\npyresult.destroy();\nreturn result;",
     "expect": [2, "9", "object"]
   },
   {
     "id": "src/tests/test_pyproxy.py::test_pyproxy_class/local_properties",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runPython",
     "code": "from pyodide.code import run_js\nclass Foo:\n    bar = 42\n    def get_value(self, value):\n        return value * 64\nf = Foo()\nrun_js('''\n(f) => {\n    assert(() => f.type === \"Foo\");\n    let f_get_value = f.get_value;\n    assert(() => f_get_value(2) === 128);\n    f_get_value.destroy();\n    assert(() => f.bar === 42);\n    assert(() => 'bar' in f);\n    f.baz = 32;\n    assert(() => f.baz === 32);\n}\n''')(f)\nhas_baz_after_set = hasattr(f, 'baz')\nf_props = run_js('''\n(f) => {\n    let f_props = Object.getOwnPropertyNames(f);\n    delete f.baz;\n    return f_props;\n}\n''')(f).to_py()\nhas_baz_after_delete = hasattr(f, 'baz')\nrequired = {'__class__', '__delattr__', '__dict__', '__dir__', '__doc__', '__eq__', '__format__', '__ge__', '__getattribute__', '__gt__', '__hash__', '__init__', '__init_subclass__', '__le__', '__lt__', '__module__', '__ne__', '__new__', '__reduce__', '__reduce_ex__', '__repr__', '__setattr__', '__sizeof__', '__str__', '__subclasshook__', '__weakref__', 'bar', 'baz', 'get_value'}\n[has_baz_after_set, has_baz_after_delete, required.difference(f_props) == set()]",
     "expect": [true, false, true]
   },
   {
     "id": "src/tests/test_pyproxy.py::test_pyproxy_tostring",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runPython",
     "code": "from pathlib import Path\nfrom pyodide.code import run_js\nfrom pyodide_js._api import setPyProxyToStringMethod\npyproxy_to_string = run_js('(e) => e.toString()')\np = Path('a/b/c')\nresult = [pyproxy_to_string(p)]\nsetPyProxyToStringMethod(True)\nresult.append(pyproxy_to_string(p))\nsetPyProxyToStringMethod(False)\nresult.append(pyproxy_to_string(p))\nresult",
     "expect": ["a/b/c", "PosixPath('a/b/c')", "a/b/c"]
   },
   {
     "id": "src/tests/test_pyproxy.py::test_del_builtin",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runPython",
     "code": "try:\n    del open\nexcept NameError:\n    deleted_builtin_raised = True\nelse:\n    deleted_builtin_raised = False\nfrom pyodide.code import run_js\nopen_exists = run_js('''\nlet open = pyodide.globals.get(\"open\");\nlet result = !!open;\nopen.destroy();\nresult\n''')\nname_value = run_js(\"pyodide.globals.get('__name__')\")\n[deleted_builtin_raised, open_exists, name_value]",
     "expect": [true, true, "__main__"]
   },
   {
     "id": "src/tests/test_pyproxy.py::test_in_globals",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runPython",
     "code": "yyyyy = 7\nfrom pyodide.code import run_js\nrun_js('''\n(() => {\n  let result = [];\n  result.push(pyodide.globals.has(\"xxxxx\"));\n  result.push(pyodide.globals.has(\"yyyyy\"));\n  result.push(pyodide.globals.has(\"globals\"));\n  result.push(pyodide.globals.has(\"open\"));\n  return result;\n})()\n''').to_py()",
     "expect": [false, true, true, true]
   },
   {
     "id": "src/tests/test_pyproxy.py::test_pyproxy_copy",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runJs",
     "code": "let d = pyodide.runPython(\"list(range(10))\");\nlet e = d.copy();\nd.destroy();\nassert(() => e.length === 10);\ne.destroy();\nreturn true;",
     "expect": true
   },
   {
     "id": "src/tests/test_pyproxy.py::test_pyproxy_destroy",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runPython",
     "code": "from pyodide.code import run_js\nclass Foo:\n    def get_value(self, value):\n        return value * 64\nf = Foo()\nrun_js('''\n(f) => {\n    assert(() => f.get_value(1) === 64);\n    f.destroy();\n    assertThrows(() => f.get_value(1), \"Error\", \"already been destroyed\");\n}\n''')(f)\nTrue",
     "expect": true
   },
   {
     "id": "src/tests/test_pyproxy.py::test_pyproxy_refcount",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runPython",
     "code": "from pyodide.code import run_js\nrun_js('''\nfunction getRefCount(){\n  return pyodide.runPython('sys.getrefcount(pyfunc)');\n}\nself.jsfunc = function (f) { f(); };\ntry {\n  pyodide.runPython(`\n      import sys\n      from js import jsfunc\n      def pyfunc(*args, **kwargs):\n          print(*args, **kwargs)\n  `);\n  assert(() => getRefCount() === 2);\n  pyodide.runPython(`jsfunc(pyfunc)`);\n  assert(() => getRefCount() === 2);\n  pyodide.runPython(`jsfunc(pyfunc); jsfunc(pyfunc)`);\n  assert(() => getRefCount() === 2);\n  pyodide.runPython(`del jsfunc`);\n} finally {\n  delete self.jsfunc;\n}\n''')\nTrue",
     "expect": true
   },
   {
     "id": "src/tests/test_pyproxy.py::test_pyproxy_iter",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runPython",
     "code": "from collections import ChainMap\nfrom pyodide.code import run_js\ndef test_generator():\n    yield from range(10)\nc = test_generator()\nty, l = run_js('(c) => [c.type, [...c]]')(c)\nfirst = [ty, l.to_py()]\nc = ChainMap({'a': 2, 'b': 3})\nty, l = run_js('(c) => [c.type, [...c]]')(c)\nsecond = [ty, sorted(l)]\ndef test_generator2():\n    acc = 0\n    for i in range(10):\n        r = yield acc\n        acc += i * r\nc = test_generator2()\nresult, result2 = run_js('''\n(c) => {\n  let {done, value} = c.next();\n  let result = [];\n  while(!done){\n    result.push(value);\n    ({done, value} = c.next(value + 1));\n  }\n  function* test(){\n    let acc = 0;\n    for(let i=0; i < 10; i++){\n      let r = yield acc;\n      acc += i * r;\n    }\n  }\n  c = test();\n  ({done, value} = c.next());\n  let result2 = [];\n  while(!done){\n    result2.push(value);\n    ({done, value} = c.next(value + 1));\n  }\n  return [result, result2];\n}\n''')(c)\n[first, second, result.to_py(), result2.to_py(), result.to_py() == result2.to_py()]",
     "expect": [["generator", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]], ["ChainMap", ["a", "b"]], [0, 0, 1, 5, 23, 119, 719, 5039, 40319, 362879], [0, 0, 1, 5, 23, 119, 719, 5039, 40319, 362879], true]
   },
   {
     "id": "src/tests/test_pyproxy.py::test_pyproxy_get_buffer",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runJs",
     "code": "pyodide.runPython(`\n    from sys import getrefcount\n    z1 = memoryview(bytes(range(24))).cast('b', [8,3])\n    z2 = z1[-1::-1]\n`);\nfor (let x of ['z1', 'z2']) {\n  pyodide.runPython(`assert getrefcount(${x}) == 2`);\n  let proxy = pyodide.globals.get(x);\n  pyodide.runPython(`assert getrefcount(${x}) == 3`);\n  let z = proxy.getBuffer();\n  pyodide.runPython(`assert getrefcount(${x}) == 4`);\n  proxy.destroy();\n  pyodide.runPython(`assert getrefcount(${x}) == 3`);\n  for (let idx1 = 0; idx1 < 8; idx1++) {\n    for (let idx2 = 0; idx2 < 3; idx2++) {\n      let v1 = z.data[z.offset + z.strides[0] * idx1 + z.strides[1] * idx2];\n      let v2 = pyodide.runPython(`repr(${x}[${idx1}, ${idx2}])`);\n      if (v1.toString() !== v2) {\n        throw new Error(`Discrepancy ${x}[${idx1}, ${idx2}]: ${v1} != ${v2}`);\n      }\n    }\n  }\n  z.release();\n  pyodide.runPython(`assert getrefcount(${x}) == 2`);\n}\nreturn true;",
     "expect": true
   },
   {
     "id": "src/tests/test_pyproxy.py::test_get_empty_buffer",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runPython",
     "code": "from array import array\nfrom pyodide.code import run_js\na = array('Q')\nrun_js('''\n(a) => {\n  let b = a.getBuffer();\n  b.release();\n}\n''')(a)\nTrue",
     "expect": true
   },
   {
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_index",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runPython",
     "code": "from pyodide.code import run_js\npylist = [9, 8, 7]\njslist = run_js('''\n(p) => [p[0], p[1], p[2]]\n''')(pylist)\njslist.to_py()",
     "expect": [9, 8, 7]
   },
   {
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_join",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runPython",
     "code": "from pyodide.code import run_js\nfrom pyodide.ffi import to_js\na = ['Wind', 'Water', 'Fire']\najs = to_js(a)\nfunc = run_js('((a, k) => a.join(k))')\n[func(a, None), func(ajs, None), func(a, ', '), func(ajs, ', '), func(a, ' '), func(ajs, ' ')]",
     "expect": ["Wind,Water,Fire", "Wind,Water,Fire", "Wind, Water, Fire", "Wind, Water, Fire", "Wind Water Fire", "Wind Water Fire"]
   },
   {
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_slice",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runPython",
     "code": "from pyodide.code import run_js\nfrom pyodide.ffi import to_js\na = ['ant', 'bison', 'camel', 'duck', 'elephant']\najs = to_js(a)\nfunc_strs = ['a.slice(2)', 'a.slice(2, 4)', 'a.slice(1, 5)', 'a.slice(-2)', 'a.slice(2, -1)', 'a.slice()']\n[(run_js(f'(a) => {func_str}')(a).to_py(), run_js(f'(a) => {func_str}')(ajs).to_py()) for func_str in func_strs]",
     "expect": [[["camel", "duck", "elephant"], ["camel", "duck", "elephant"]], [["camel", "duck"], ["camel", "duck"]], [["bison", "camel", "duck", "elephant"], ["bison", "camel", "duck", "elephant"]], [["duck", "elephant"], ["duck", "elephant"]], [["camel", "duck"], ["camel", "duck"]], [["ant", "bison", "camel", "duck", "elephant"], ["ant", "bison", "camel", "duck", "elephant"]]]
   },
   {
     "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_indexOf",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runPython",
     "code": "from pyodide.code import run_js\nfrom pyodide.ffi import to_js\na = ['ant', 'bison', 'camel', 'duck', 'bison']\najs = to_js(a)\nfunc_strs = [\"beasts.indexOf('bison')\", \"beasts.indexOf('bison', 2)\", \"beasts.indexOf('bison', -4)\", \"beasts.indexOf('bison', 3)\", \"beasts.indexOf('giraffe')\"]\n[(run_js(f'(beasts) => {func_str}')(a), run_js(f'(beasts) => {func_str}')(ajs)) for func_str in func_strs]",
     "expect": [[1, 1], [4, 4], [1, 1], [4, 4], [-1, -1]]
   },
   {
-    "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_map_filter_reduce/local_group",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "id": "src/tests/test_pyproxy.py::local_list_map_filter_reduce_group",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runPython",
     "code": "from pyodide.code import run_js\nfrom pyodide.ffi import to_js\na = ['a', 'b', 'c']\najs = to_js(a)\nmap_func = run_js('''\n(a) => a.map(function (elt, idx, list){ return [elt, idx, this[elt]] }, {a: 6, b: 9, c: 22})\n''')\nfilter_a = list(range(20, 0, -2))\nfilter_ajs = to_js(filter_a)\nfilter_func = run_js('(a) => a.filter(function (elt, idx){ return elt + idx > 12 })')\nreduce_func = run_js('(a) => a.reduce((l, r) => l + 2*r)')\n[\n  map_func(a).to_py(), map_func(ajs).to_py(),\n  filter_func(filter_a).to_py(), filter_func(filter_ajs).to_py(),\n  reduce_func(filter_a), reduce_func(filter_ajs),\n]",
     "expect": [[["a", 0, 6], ["b", 1, 9], ["c", 2, 22]], [["a", 0, 6], ["b", 1, 9], ["c", 2, 22]], [20, 18, 16, 14, 12, 10, 8, 6], [20, 18, 16, 14, 12, 10, 8, 6], 200, 200]
   },
   {
-    "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_some_every_at_includes/local_group",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "id": "src/tests/test_pyproxy.py::local_list_some_every_at_includes_group",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runPython",
     "code": "from pyodide.code import run_js\nfrom pyodide.ffi import to_js\nsome = run_js('(a) => a.some((element, idx) => (element + idx) % 2 === 0)')\nevery = run_js('(a) => a.every((element, idx) => (element + idx) % 2 === 0)')\narrays = [[1,2,3,4,5], [2,3,4,5], [1,3,5], [1,4,5], [4,5]]\na = [5, 12, 8, 130, 44]\najs = to_js(a)\nat = run_js('(a, idx) => a.at(idx)')\nincludes_a = [5, 12, 8, 130, 44, 6, 7, 7]\nincludes_ajs = to_js(includes_a)\nincludes = run_js('(a, n) => a.includes(n)')\n[\n  [[some(x), some(to_js(x))] for x in arrays],\n  [[every(x), every(to_js(x))] for x in arrays],\n  [[at(a, idx), at(ajs, idx)] for idx in [2, 3, 4, -2, -3, -4, 5, 7, -7]],\n  [[includes(includes_a, n), includes(includes_ajs, n)] for n in range(4,10)],\n]",
     "expect": [[ [false, false], [true, true], [true, true], [false, false], [true, true] ], [ [false, false], [true, true], [false, false], [false, false], [true, true] ], [ [8, 8], [130, 130], [44, 44], [130, 130], [8, 8], [12, 12], [null, null], [null, null], [null, null] ], [ [false, false], [true, true], [true, true], [true, true], [true, true], [false, false] ]]
   },
   {
-    "id": "src/tests/test_pyproxy.py::test_pyproxy_of_list_reverse_push_pop/local_group",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "id": "src/tests/test_pyproxy.py::local_list_reverse_push_pop_group",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runPython",
     "code": "from pyodide.code import run_js\nfrom pyodide.ffi import to_js\na = [3, 2, 4, 1, 5]\najs = to_js(a)\nreverse = run_js('((a) => a.reverse())')\nreverse_identity = reverse(a) is a\nreverse(ajs)\npush_a = [4,5,6]\npush_ajs = to_js(push_a)\npush = run_js('(a) => a.push(1, 2, 3)')\npush_result = [push(push_a), push(push_ajs), push_a, push_ajs.to_py()]\npop = run_js('((a) => a.pop())')\npop_empty = []\npop_empty_js = to_js(pop_empty)\npop_full = ['broccoli', 'cauliflower', 'cabbage', 'kale', 'tomato']\npop_full_js = to_js(pop_full)\n[reverse_identity, ajs.to_py(), a, push_result, [pop(pop_empty), pop(pop_empty_js), pop_empty, pop_empty_js.to_py()], [pop(pop_full), pop(pop_full_js), pop_full, pop_full_js.to_py()]]",
     "expect": [true, [5, 1, 4, 2, 3], [5, 1, 4, 2, 3], [6, 6, [4, 5, 6, 1, 2, 3], [4, 5, 6, 1, 2, 3]], [null, null, [], []], ["tomato", "tomato", ["broccoli", "cauliflower", "cabbage", "kale"], ["broccoli", "cauliflower", "cabbage", "kale"]]]
   },
   {
-    "id": "src/tests/test_stdlib_fixes.py::test_encodings_deepfrozen/local_core_encodings",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_stdlib_fixes.py",
+    "id": "src/tests/test_stdlib_fixes.py::local_core_encodings",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_stdlib_fixes.py",
     "op": "runPython",
     "code": "import codecs\nimport encodings\nimport encodings.aliases\nimport encodings.ascii\nimport encodings.cp437\nimport encodings.utf_8\nmodules = [encodings, encodings.utf_8, encodings.aliases, encodings.cp437, encodings.ascii]\n[all('frozen' not in repr(mod) for mod in modules), codecs.lookup('utf-8').name, codecs.lookup('cp437').name]",
     "expect": [true, "utf-8", "cp437"]
   },
   {
     "id": "src/tests/test_stdlib_fixes.py::test_multiprocessing",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_stdlib_fixes.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_stdlib_fixes.py",
     "op": "runPython",
     "code": "from multiprocessing import Process, cpu_count\nres = cpu_count()\ndef func():\n    return\nprocess = Process(target=func)\ntry:\n    process.start()\nexcept OSError as exc:\n    result = [isinstance(res, int), res > 0, 'Function not implemented' in str(exc)]\nresult",
     "expect": [true, true, true]
   },
   {
     "id": "src/tests/test_typeconversions.py::test_nan_conversions",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_typeconversions.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_typeconversions.py",
     "op": "runPython",
     "code": "from pyodide.code import run_js\nfrom math import isnan\njsnan = run_js('NaN')\nres = run_js('''\nlet mathmod = pyodide.pyimport(\"math\");\nconst res = Number.isNaN(mathmod.nan);\nmathmod.destroy();\nres\n''')\n[isnan(jsnan), res]",
     "expect": [true, true]
   },
   {
     "id": "src/tests/test_typeconversions.py::test_wrong_way_conversions1",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_typeconversions.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_typeconversions.py",
     "op": "runPython",
     "code": "from pyodide.code import run_js\nrun_js('''\nassert(() => pyodide.toPy(5) === 5);\nassert(() => pyodide.toPy(5n) === 5n);\nassert(() => pyodide.toPy(\"abc\") === \"abc\");\nclass Test {};\nlet t = new Test();\nassert(() => pyodide.toPy(t) === t);\nself.a1 = [1,2,3];\nself.b1 = pyodide.toPy(a1);\nself.a2 = { a : 1, b : 2, c : 3};\nself.b2 = pyodide.toPy(a2);\npyodide.runPython(`\n    from js import a1, b1, a2, b2\n    assert a1.to_py() == b1\n    assert a2.to_py() == b2\n`);\nself.b1.destroy();\nself.b2.destroy();\ndelete self.a1; delete self.a2; delete self.b1; delete self.b2;\n''')\nTrue",
     "expect": true
   },
   {
     "id": "src/tests/test_package_loading.py::test_load_failure_retry/load_micropip_success",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_package_loading.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_package_loading.py",
     "op": "runPython",
     "packages": ["micropip"],
     "requiresDist": true,
@@ -319,7 +319,7 @@
   },
   {
     "id": "src/tests/test_package_loading.py::test_list_loaded_urls/aardvark_load_package_metadata",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_package_loading.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_package_loading.py",
     "op": "runJs",
     "packages": ["micropip"],
     "requiresDist": true,
@@ -328,7 +328,7 @@
   },
   {
     "id": "src/tests/test_python.py::local_api_and_async_group",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_python.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_python.py",
     "op": "runJs",
     "codeLines": [
       "pyodide.runPython('v = 0.123');",
@@ -355,25 +355,25 @@
       "`);",
       "return [version, asyncValue, funcValue, unknownAttr];"
     ],
-    "expect": [["0.29.4", "0.29.4"], 42, 42, true]
+    "expect": [["314.0.7", "314.0.7"], 42, 42, true]
   },
   {
     "id": "src/tests/test_python.py::test_runpythonasync_missing_import",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_python.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_python.py",
     "op": "runPythonAsync",
     "code": "import foo",
     "expectErrorContains": ["ModuleNotFoundError", "foo"]
   },
   {
     "id": "src/tests/test_python.py::test_runpythonasync_exception",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_python.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_python.py",
     "op": "runPythonAsync",
     "code": "42 / 0",
     "expectErrorContains": "ZeroDivisionError"
   },
   {
     "id": "src/tests/test_asyncio.py::local_promise_eval_group",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_asyncio.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_asyncio.py",
     "op": "runPythonAsync",
     "codeLines": [
       "import asyncio",
@@ -415,7 +415,7 @@
   },
   {
     "id": "src/tests/test_asyncio.py::local_error_and_pyproxy_group",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_asyncio.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_asyncio.py",
     "op": "runJs",
     "codeLines": [
       "self.async_js_raises = async function(){ throw new Error('This is an error message!'); };",
@@ -451,7 +451,7 @@
   },
   {
     "id": "src/tests/test_typeconversions.py::local_string_number_bigint_group",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_typeconversions.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_typeconversions.py",
     "op": "runPython",
     "codeLines": [
       "from pyodide.code import run_js",
@@ -519,7 +519,7 @@
   },
   {
     "id": "src/tests/test_typeconversions.py::local_python_to_js_core_group",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_typeconversions.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_typeconversions.py",
     "op": "runPython",
     "codeLines": [
       "from pyodide.code import run_js",
@@ -561,7 +561,7 @@
   },
   {
     "id": "src/tests/test_typeconversions.py::local_proxy_tracking_and_dict_converter_group",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_typeconversions.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_typeconversions.py",
     "op": "runPython",
     "codeLines": [
       "import json",
@@ -648,14 +648,14 @@
   },
   {
     "id": "src/tests/test_typeconversions.py::test_pythonexc2js",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_typeconversions.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_typeconversions.py",
     "op": "runJs",
     "code": "return pyodide.runPython(\"5 / 0\")",
     "expectErrorContains": "ZeroDivisionError"
   },
   {
     "id": "src/tests/test_typeconversions.py::local_js_to_python_buffer_group",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_typeconversions.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_typeconversions.py",
     "op": "runPython",
     "codeLines": [
       "from collections import ChainMap",
@@ -700,7 +700,7 @@
   },
   {
     "id": "src/tests/test_jsproxy.py::local_basic_object_call_group",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_jsproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_jsproxy.py",
     "op": "runJs",
     "codeLines": [
       "self.a = { x: 2, y: '9' };",
@@ -788,7 +788,7 @@
   },
   {
     "id": "src/tests/test_pyproxy.py::local_buffer_mixin_call_group",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runPython",
     "codeLines": [
       "from math import isclose, isnan",
@@ -923,7 +923,7 @@
   },
   {
     "id": "src/tests/test_pyproxy.py::local_borrow_apply_this_group",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runJs",
     "codeLines": [
       "let borrowOk = (() => {",
@@ -1020,7 +1020,7 @@
   },
   {
     "id": "src/tests/test_pyproxy.py::test_pyproxy_call_with_options/error_message",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_pyproxy.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_pyproxy.py",
     "op": "runJs",
     "codeLines": [
       "pyodide.runPython(`",
@@ -1035,7 +1035,7 @@
   },
   {
     "id": "src/tests/test_bz2.py::test_bz2",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_bz2.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_bz2.py",
     "op": "runPython",
     "codeLines": [
       "import bz2",
@@ -1048,7 +1048,7 @@
   },
   {
     "id": "src/tests/test_common.py::test_install_files_simple/local_guest",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_common.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_common.py",
     "op": "runPython",
     "codeLines": [
       "from pathlib import Path",
@@ -1069,7 +1069,7 @@
   },
   {
     "id": "src/tests/test_streams.py::test_custom_stdin_stdout2",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_streams.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_streams.py",
     "op": "runJs",
     "codeLines": [
       "const stdinStringsGen = [",
@@ -1147,7 +1147,7 @@
   },
   {
     "id": "src/tests/test_streams.py::local_stdin_variants",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_streams.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_streams.py",
     "op": "runPython",
     "codeLines": [
       "import sys",
@@ -1206,7 +1206,7 @@
   },
   {
     "id": "src/tests/test_streams.py::test_stdin_error/local_error_flag",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_streams.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_streams.py",
     "op": "runPython",
     "codeLines": [
       "from pyodide_js import setStdin",
@@ -1226,7 +1226,7 @@
   },
   {
     "id": "src/tests/test_streams.py::test_custom_stdio_write",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_streams.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_streams.py",
     "op": "runJs",
     "codeLines": [
       "class MyWriter {",
@@ -1254,7 +1254,7 @@
   },
   {
     "id": "src/tests/test_filesystem.py::test_fs_dup/local_core",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_filesystem.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_filesystem.py",
     "op": "runPython",
     "codeLines": [
       "from os import close, dup",
@@ -1271,7 +1271,7 @@
   },
   {
     "id": "src/tests/test_webloop.py::local_core_group",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_webloop.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_webloop.py",
     "op": "runPythonAsync",
     "codeLines": [
       "import asyncio",
@@ -1318,7 +1318,7 @@
   },
   {
     "id": "src/tests/test_webloop.py::local_task_and_shutdown_group",
-    "source": "third_party/pyodide/0.29.4/src/tests/test_webloop.py",
+    "source": "third_party/pyodide/314.0.7/src/tests/test_webloop.py",
     "op": "runJs",
     "codeLines": [
       "let result = await pyodide.runPythonAsync(String.raw`",

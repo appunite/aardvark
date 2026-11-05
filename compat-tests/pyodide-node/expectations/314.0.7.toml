@@ -1,7 +1,7 @@
-# Local Aardvark expectations for the upstream Pyodide 0.29.4 Node corpus.
+# Local Aardvark expectations for the upstream Pyodide 314.0.7 Node corpus.
 #
 # This file is intentionally human-maintained. The local runner starts with the
-# cases in ../cases/0.29.4.json; as more upstream tests are adopted, every
+# cases in ../cases/314.0.7.json; as more upstream tests are adopted, every
 # non-pass should land in one of the sections below with a reason.
 
 [pass]
@@ -10,7 +10,7 @@
 "src/tests/test_stdlib_fixes.py::test_threading_import/lock_context" = "threading Lock context manager works without starting a thread"
 "src/tests/test_asyncio.py::test_eval_code_await_fetch/local_async_smoke" = "Pyodide runPythonAsync-style snippets are awaited through the Aardvark compat runner"
 "src/tests/test_asyncio.py::test_eval_code_async_simple" = "basic eval_code_async coroutine behavior matches upstream"
-"src/tests/test_pyodide.py::test_python_version" = "Aardvark embeds the same Python version as upstream Pyodide 0.29.4"
+"src/tests/test_pyodide.py::test_python_version" = "Aardvark embeds the same Python version as upstream Pyodide 314.0.7"
 "src/tests/test_pyodide.py::test_find_imports" = "pyodide.code import discovery matches upstream for valid and invalid snippets"
 "src/tests/test_pyodide.py::test_ffi_import_star" = "pyodide.ffi wildcard imports work in the guest"
 "src/tests/test_pyodide.py::test_pyimport1" = "Python-side pyimport implementation resolves Pyodide modules"
@@ -42,10 +42,10 @@
 "src/tests/test_pyproxy.py::test_pyproxy_of_list_join" = "PyProxy-backed Python lists match JS Array join behavior"
 "src/tests/test_pyproxy.py::test_pyproxy_of_list_slice" = "PyProxy-backed Python lists match JS Array slice behavior"
 "src/tests/test_pyproxy.py::test_pyproxy_of_list_indexOf" = "PyProxy-backed Python lists match JS Array indexOf behavior"
-"src/tests/test_pyproxy.py::test_pyproxy_of_list_map_filter_reduce/local_group" = "PyProxy-backed Python lists match JS Array map/filter/reduce behavior"
-"src/tests/test_pyproxy.py::test_pyproxy_of_list_some_every_at_includes/local_group" = "PyProxy-backed Python lists match JS Array predicate/access helpers"
-"src/tests/test_pyproxy.py::test_pyproxy_of_list_reverse_push_pop/local_group" = "PyProxy-backed Python lists match JS Array reverse/push/pop mutation behavior"
-"src/tests/test_stdlib_fixes.py::test_encodings_deepfrozen/local_core_encodings" = "core encoding modules and codec lookup behave like upstream without frozen-module leakage"
+"src/tests/test_pyproxy.py::local_list_map_filter_reduce_group" = "PyProxy-backed Python lists match JS Array map/filter/reduce behavior"
+"src/tests/test_pyproxy.py::local_list_some_every_at_includes_group" = "PyProxy-backed Python lists match JS Array predicate/access helpers"
+"src/tests/test_pyproxy.py::local_list_reverse_push_pop_group" = "PyProxy-backed Python lists match JS Array reverse/push/pop mutation behavior"
+"src/tests/test_stdlib_fixes.py::local_core_encodings" = "core encoding modules and codec lookup behave like upstream without frozen-module leakage"
 "src/tests/test_stdlib_fixes.py::test_multiprocessing" = "multiprocessing imports and the expected unavailable process-start behavior match upstream"
 "src/tests/test_typeconversions.py::test_nan_conversions" = "NaN conversion and Python-to-JS module access match upstream"
 "src/tests/test_typeconversions.py::test_wrong_way_conversions1" = "pyodide.toPy primitive and container conversions match upstream"

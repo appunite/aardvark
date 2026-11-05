@@ -36,7 +36,7 @@ flowchart LR
 
 **Limitations**
 
-- Manifests only support the bundled [Pyodide](https://pyodide.org/) version (currently `0.29.4`). Requests for a different version fail fast.
+- Manifests only support the bundled [Pyodide](https://pyodide.org/) version (currently `314.0.7`). Requests for a different version fail fast.
 - Package installation still hits the local filesystem. Ensure hosts point `AARDVARK_PYODIDE_DIST_DIR` at a prepared distribution.
 
 ## Snapshots

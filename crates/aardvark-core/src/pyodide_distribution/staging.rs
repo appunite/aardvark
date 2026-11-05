@@ -215,7 +215,7 @@ fn copy_adapter_assets(output_dir: &Path) -> Result<()> {
 }
 
 fn generate_patched_pyodide(output_dir: &Path) -> Result<()> {
-    let source_path = output_dir.join("pyodide.asm.js");
+    let source_path = output_dir.join("pyodide.asm.mjs");
     let target_path = output_dir.join("pyodide.asm.patched.js");
     let source = read_text_file_limited(
         &source_path,
@@ -246,11 +246,11 @@ fn apply_pyodide_replacements(source: &str) -> Result<String> {
 
     let required_replacements: [(&str, String); 8] = [
         (
-            "var _createPyodideModule",
-            format!("{PRELUDE}export const _createPyodideModule"),
+            "async function _createPyodideModule(",
+            format!("{PRELUDE}export async function _createPyodideModule("),
         ),
         (
-            "globalThis._createPyodideModule = _createPyodideModule;",
+            "export default _createPyodideModule;",
             String::new(),
         ),
         ("new WebAssembly.Module", "newWasmModule".into()),
