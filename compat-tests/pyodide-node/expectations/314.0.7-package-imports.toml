@@ -8,6 +8,8 @@
 "test-cpp-exceptions2" = "Upstream xfail: intentional"
 "matplotlib-inline" = "Upstream xfail: circular dependency with IPython"
 "numpy-tests" = "Upstream xfail: test-only package"
+"psycopg-c" = "Upstream xfail: the psycopg package should be imported before psycopg_c"
+"psycopg-binary" = "Upstream xfail: the psycopg package should be imported before psycopg_binary"
 
 [node_unsupported]
 "cmyt" = "Upstream Node xfail: package fails to load and is not supported on Node"

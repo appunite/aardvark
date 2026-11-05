@@ -291,7 +291,7 @@
     "id": "src/tests/test_stdlib_fixes.py::test_multiprocessing",
     "source": "third_party/pyodide/314.0.7/src/tests/test_stdlib_fixes.py",
     "op": "runPython",
-    "code": "from multiprocessing import Process, cpu_count\nres = cpu_count()\ndef func():\n    return\nprocess = Process(target=func)\ntry:\n    process.start()\nexcept OSError as exc:\n    result = [isinstance(res, int), res > 0, 'Function not implemented' in str(exc)]\nresult",
+    "code": "from multiprocessing import Process, cpu_count\nres = cpu_count()\ndef func():\n    return\nprocess = Process(target=func)\ntry:\n    process.start()\nexcept ModuleNotFoundError as exc:\n    result = [isinstance(res, int), res > 0, \"No module named '_multiprocessing'\" in str(exc)]\nresult",
     "expect": [true, true, true]
   },
   {
