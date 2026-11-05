@@ -205,10 +205,9 @@ function createModuleConfig(options, stdlibBytes, wasmBytes, lockfile) {
     },
   };
   if (snapshot && snapshot.length) {
-    const pageSize = 64 * 1024;
-    const aligned = Math.ceil(snapshot.length / pageSize) * pageSize;
+    // Heap sizing for the restore happens in pyodide_bootstrap.js; the 314
+    // wasm owns its memory and ignores INITIAL_MEMORY.
     moduleConfig.noInitialRun = true;
-    moduleConfig.INITIAL_MEMORY = aligned;
   }
 
   moduleConfig.preRun.push(prepareFileSystem(stdlibBytes));

@@ -1,0 +1,15 @@
+# Local Aardvark expectations for Pyodide's lockfile-driven package import test.
+#
+# Mirrors upstream:
+# third_party/pyodide/0.29.4/packages/_tests/test_packages_common.py
+
+[upstream_xfail]
+"soupsieve" = "Upstream xfail: importing soupsieve without installing beautifulsoup4 fails"
+"test-cpp-exceptions2" = "Upstream xfail: intentional"
+"matplotlib-inline" = "Upstream xfail: circular dependency with IPython"
+"numpy-tests" = "Upstream xfail: test-only package"
+
+[node_unsupported]
+"cmyt" = "Upstream Node xfail: package fails to load and is not supported on Node"
+"yt" = "Upstream Node xfail: package fails to load and is not supported on Node"
+"galpy" = "Upstream Node xfail: package fails to load and is not supported on Node"

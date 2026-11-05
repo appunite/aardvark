@@ -12,8 +12,8 @@ third_party/pyodide/314.0.7/
 ```
 
 It is pinned to the Pyodide `314.0.7` release commit used by Aardvark's staged
-distribution. When upgrading Pyodide, replace the checkout and rename the versioned
-`cases/`, `expectations/` and `inventory/` files to match.
+distribution. Future Pyodide updates should add a new versioned checkout instead
+of overwriting this one.
 
 ## Commands
 

@@ -1953,6 +1953,17 @@ export async function loadPyRunnerPyodide(options = {}) {
     if (!api.config.BUILD_ID) {
       api.config.BUILD_ID = api.config.buildId;
     }
+    // Pyodide 314's wasm owns its memory, so Module.INITIAL_MEMORY no longer
+    // sizes the fresh heap. Grow it to the snapshot heap (bytes after the
+    // header offset stored in word 1) before restoreSnapshot copies it in.
+    const snapshotHeapBytes =
+      snapshotBytes.byteLength -
+      new DataView(snapshotBytes.buffer, snapshotBytes.byteOffset, 8).getUint32(4, true);
+    if (snapshotHeapBytes > module.HEAP8.length) {
+      if (!module.growMemory(snapshotHeapBytes)) {
+        throw new Error(`failed to grow wasm memory to ${snapshotHeapBytes} bytes for snapshot restore`);
+      }
+    }
     const attemptRestore = () => api.restoreSnapshot(snapshotBytes);
     try {
       snapshotConfig = attemptRestore();
