@@ -744,7 +744,15 @@ fn scan_zip_package_features(path: &Path) -> Result<PackageFeatures> {
         if entry.is_dir() {
             continue;
         }
-        let name = entry.name().to_owned();
+        let name = entry
+            .name()
+            .map_err(|err| {
+                PyRunnerError::Init(format!(
+                    "invalid zip entry {index} name in {}: {err}",
+                    path.display()
+                ))
+            })?
+            .into_owned();
         if !is_feature_scan_candidate(&name) {
             if name.to_ascii_lowercase().contains("openblas") {
                 features.openblas = true;
