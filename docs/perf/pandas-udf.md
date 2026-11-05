@@ -112,6 +112,52 @@ numbers suggest it could bring per-isolate setup from ~1.4 s down toward
 - Fixed cost of a worker process with one pandas isolate is ~0.6–0.75 GiB. This
   includes the runtime used to capture the warm state.
 
+## Pyodide 314 re-measurement (HAV-3466)
+
+Same machine, method and rows as above, after upgrading to Pyodide 314.0.7
+(Python 3.14.2, Emscripten 5.0.3). Release build of `aardvark-perf` at
+`173b717`, distribution `aardvark-0.3.0-pyodide-v314.0.7-full` (pandas 3.0.2,
+numpy 2.4.6). Native rows use CPython 3.14.2 with the same pinned packages.
+
+| Row | 0.29.4 | 314.0.7 | Change |
+| --- | --: | --: | --: |
+| Cold, echo (avg ms) | 818 | 913 | +12% |
+| Cold, pandas `none` (avg ms) | 2 361 | 2 630 | +11% |
+| Cold, pandas `high` (avg ms) | 2 420 | 2 671 | +10% |
+| Cold, pandas peak RSS (MiB) | 596 | 715 | +20% |
+| Persistent warm-call, `medium` (avg ms) | 2.5 | 3.1 | +24% |
+| Persistent warm-call, `high` (avg ms) | 18.3 | 20.3 | +11% |
+| Registry retained handler, `medium` (avg / p95 ms) | 3.9 / 10.6 | 5.2 / 14.1 | +33% |
+| Native CPython warm, `medium` (avg ms) | 1.2 | 1.5 | noise |
+| Native CPython warm, `high` (avg ms) | 7.5 | 8.5 | +13% |
+| Native CPython fresh process, `medium` (avg ms) | 155 | 164 | +6% |
+| echo persistent warm-call (avg ms) | 0.1 | 0.1 | = |
+| Restore warm snapshot + run, echo (avg ms) | 163 | 131 | −20% |
+| Restore warm snapshot + run, pandas (avg ms) | 1 733 | 1 802 | +4% |
+| Warmed host pool of 1, pandas (ms) | 1 698 | 1 761 | +4% |
+| Warmed host pool of 2, pandas (ms) | 3 125 | 3 299 | +6% |
+| Warmed host pool of 4, pandas (ms) | 5 826 | 6 352 | +9% |
+| Warmed host pool of 4, echo (ms) | 484 | 422 | −13% |
+| Pool of 1 / 2 / 4, pandas peak RSS (MiB) | 744 / 1 023 / 1 541 | 871 / 1 144 / 1 624 | +80–130 |
+
+Takeaways:
+
+- 314 is about 10% slower to boot and import pandas, and warm pandas calls
+  are 10–25% slower. On 1M rows native CPython 3.14 + pandas 3.0 slowed by a
+  similar 13%, so that delta tracks the Python/pandas upgrade. On 10k rows
+  Aardvark slowed more than native (+0.6 ms). Absolute warm latency (3 ms /
+  20 ms) is still fine for UDFs.
+- Snapshot restore itself got faster (echo 163 → 131 ms).
+- The fixed cost per worker grew by ~120 MiB. The marginal pandas isolate
+  is about the same: ~250 MiB at peak ((1 624 − 871) / 3), ~165 MiB steady.
+  The capacity estimate below still holds with the fixed term at ~0.85 GiB.
+- Pyodide 314 no longer sizes the heap from `INITIAL_MEMORY`, which broke
+  restoring any warm snapshot larger than the default heap (every pandas
+  snapshot row). Fixed in this upgrade by growing memory before the restore.
+- Native-extension preimport into the warm snapshot still fails on 314 with
+  the same `table index is out of bounds` error. The follow-up below still
+  applies.
+
 ## Capacity estimate
 
 Sizing rule for a node, per worker process:

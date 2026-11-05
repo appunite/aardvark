@@ -8,7 +8,7 @@ from sklearn.metrics import accuracy_score
 def train_model():
     data = load_iris()
     x, y = data.data, data.target
-    model = LogisticRegression(max_iter=200, solver="liblinear")
+    model = LogisticRegression(max_iter=200)
     model.fit(x, y)
     preds = model.predict(x)
     return float(accuracy_score(y, preds))

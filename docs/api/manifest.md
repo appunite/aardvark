@@ -18,7 +18,7 @@
 "runtime": {
   "language": "python",
   "pyodide": {
-    "version": "0.29.4",
+    "version": "314.0.7",
     "profile": "blas",
     "preloadImports": ["main"]
   }
@@ -72,7 +72,7 @@ Distribution profiles are selected before Pyodide/V8 isolate creation. They are 
   "packages": ["numpy", "pandas"],
   "runtime": {
     "language": "python",
-    "pyodide": {"version": "0.29.4", "profile": "default"}
+    "pyodide": {"version": "314.0.7", "profile": "default"}
   },
   "resources": {
     "cpu": {"defaultLimitMs": 8000},

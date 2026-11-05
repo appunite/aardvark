@@ -41,15 +41,15 @@ the OS.
 ## Requirements
 
 - `uv` for ephemeral Python environments: <https://docs.astral.sh/uv/>
-- `mise` (or any toolchain manager capable of installing Python 3.13.2) – we use
+- `mise` (or any toolchain manager capable of installing Python 3.14.2) – we use
   it in documentation for reproducible instructions.
 - [Pyodide](https://pyodide.org/) assets already staged (see [Host Integration – Preparing Pyodide assets](../api/rust-host.md#preparing-pyodide-assets)).
 
-Ensure a matching CPython is available ([Pyodide](https://pyodide.org/) 0.29.4 targets Python 3.13.2):
+Ensure a matching CPython is available ([Pyodide](https://pyodide.org/) 314.0.7 targets Python 3.14.2):
 
 ```sh
-mise install python@3.13.2
-mise exec python@3.13.2 -- python --version
+mise install python@3.14.2
+mise exec python@3.14.2 -- python --version
 ```
 
 ## Running the Benchmarks
@@ -61,7 +61,7 @@ pinned Aardvark/Pyodide versions). A quick setup looks like:
 
 ```sh
 cargo run -p aardvark-cli -- assets stage --variant full
-export PYODIDE_DIST_DIR="$(find "$PWD/.aardvark/pyodide-distributions" -maxdepth 1 -type d -name 'aardvark-*-pyodide-v0.29.4-full' | sort | tail -n 1)"
+export PYODIDE_DIST_DIR="$(find "$PWD/.aardvark/pyodide-distributions" -maxdepth 1 -type d -name 'aardvark-*-pyodide-v314.0.7-full' | sort | tail -n 1)"
 test -n "$PYODIDE_DIST_DIR"
 cargo run -p aardvark-cli -- assets verify "$PYODIDE_DIST_DIR"
 ```
@@ -74,10 +74,10 @@ $ make help
 Available targets:
   make perf-all     Run the full perf suite (JSON/CSV artefacts).
   make perf-md      Generate Markdown summary (runs perf-all first).
-  make setup-python Install Python 3.13.2 via mise (used by host runner).
+  make setup-python Install Python 3.14.2 via mise (used by host runner).
 Variables:
-  PYODIDE_VERSION=0.29.4
-  PYODIDE_DIST_DIR=/.../.aardvark/pyodide-distributions/aardvark-${AARDVARK_VERSION}-pyodide-v0.29.4-full
+  PYODIDE_VERSION=314.0.7
+  PYODIDE_DIST_DIR=/.../.aardvark/pyodide-distributions/aardvark-${AARDVARK_VERSION}-pyodide-v314.0.7-full
   ITERATIONS=25
 ```
 
@@ -135,9 +135,9 @@ AARDVARK_PYODIDE_DIST_DIR=$PYODIDE_DIST_DIR cargo run -p aardvark-perf -- scenar
 The harness shells out through `uv`, but host Python versions and package
 versions are pinned from the active staged Pyodide lockfile. For each scenario,
 the host runner requests the direct packages plus their transitive Pyodide
-`depends` closure. For example, with Pyodide 0.29.4 the host runner requests
-Python 3.13.2 and package specifiers such as `numpy==2.2.5`,
-`pandas==2.3.3`, and `python-dateutil==2.9.0.post0`. Exact host baselines can
+`depends` closure. For example, with Pyodide 314.0.7 the host runner requests
+Python 3.14.2 and package specifiers such as `numpy==2.4.6`,
+`pandas==3.0.2`, and `python-dateutil==2.9.0.post0`. Exact host baselines can
 only run when the Pyodide-pinned package versions are also installable in the
 native CPython environment; the default `all` matrix skips Matplotlib host rows
 for this reason.
@@ -159,12 +159,12 @@ The host modes are intentionally separate:
 The effective command shape is:
 
 ```sh
-uv run --python 3.13.2 \
-  --with numpy==2.2.5 \
-  --with pandas==2.3.3 \
+uv run --python 3.14.2 \
+  --with numpy==2.4.6 \
+  --with pandas==3.0.2 \
   --with python-dateutil==2.9.0.post0 \
   --with six==1.17.0 \
-  --with pytz==2025.2 \
+  --with pytz==2026.1.post1 \
   python perf/fixtures/run_host.py \
     --scenario pandas \
     --profile medium \

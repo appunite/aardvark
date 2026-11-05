@@ -7,17 +7,21 @@ const DEFAULT_ENV = {
 
 const NOOP = () => {};
 
-const SENTINEL_BYTES = new Uint8Array([
+// Pyodide 314 JsvError helper module: exports `Jsv_GetError_import` and
+// `JsvError_Check`, which the main wasm imports from `env`. Same bytes as the
+// upstream loader (pyodide.mjs `getJsvErrorImport`).
+const JSV_ERROR_BYTES = new Uint8Array([
     0,  97, 115, 109,   1,   0,   0,   0,   1,  12,   3,  95,
     0,  96,   0,   1, 111,  96,   1, 111,   1, 127,   3,   3,
-    2,   1,   2,   7,  33,   2,  15,  99, 114, 101,  97, 116,
-  101,  95, 115, 101, 110, 116, 105, 110, 101, 108,   0,   0,
-   11, 105, 115,  95, 115, 101, 110, 116, 105, 110, 101, 108,
-    0,   1,  10,  19,   2,   7,   0, 251,   1,   0, 251,  27,
-   11,   9,   0,  32,   0, 251,  26, 251,  20,   0,  11,
+    2,   1,   2,   7,  40,   2,  19,  74, 115, 118,  95,  71,
+  101, 116,  69, 114, 114, 111, 114,  95, 105, 109, 112, 111,
+  114, 116,   0,   0,  14,  74, 115, 118,  69, 114, 114, 111,
+  114,  95,  67, 104, 101,  99, 107,   0,   1,  10,  19,   2,
+    7,   0, 251,   1,   0, 251,  27,  11,   9,   0,  32,   0,
+  251,  26, 251,  20,   0,  11,
 ]);
-const SENTINEL_EXPORTS = new WebAssembly.Instance(
-  new WebAssembly.Module(SENTINEL_BYTES),
+const JSV_ERROR_EXPORTS = new WebAssembly.Instance(
+  new WebAssembly.Module(JSV_ERROR_BYTES),
 ).exports;
 
 function ensureTrailingSlash(url) {
@@ -119,7 +123,7 @@ function createModuleConfig(options, stdlibBytes, wasmBytes, lockfile) {
     hasLockfile: !!lockfile,
   });
 
-  const versionTag = globalThis.__pyRunnerPyodideVersion ?? "0.29.4";
+  const versionTag = globalThis.__pyRunnerPyodideVersion ?? "314.0.7";
   const defaultPackageBaseUrl = `https://cdn.jsdelivr.net/pyodide/v${versionTag}/full/`;
   const packageBaseUrl = packageBaseUrlOverride ?? defaultPackageBaseUrl;
 
@@ -182,10 +186,9 @@ function createModuleConfig(options, stdlibBytes, wasmBytes, lockfile) {
       console.log("[emscripten_setup] instantiateWasm called");
       try {
         const module = new WebAssembly.Module(wasmBytes);
-        const instance = new WebAssembly.Instance(module, {
-          ...imports,
-          sentinel: SENTINEL_EXPORTS,
-        });
+        imports.env.Jsv_GetError_import = JSV_ERROR_EXPORTS.Jsv_GetError_import;
+        imports.env.JsvError_Check = JSV_ERROR_EXPORTS.JsvError_Check;
+        const instance = new WebAssembly.Instance(module, imports);
         console.log("[emscripten_setup] instantiateWasm success");
         successCallback(instance, module);
       } catch (error) {
@@ -202,10 +205,9 @@ function createModuleConfig(options, stdlibBytes, wasmBytes, lockfile) {
     },
   };
   if (snapshot && snapshot.length) {
-    const pageSize = 64 * 1024;
-    const aligned = Math.ceil(snapshot.length / pageSize) * pageSize;
+    // Heap sizing for the restore happens in pyodide_bootstrap.js; the 314
+    // wasm owns its memory and ignores INITIAL_MEMORY.
     moduleConfig.noInitialRun = true;
-    moduleConfig.INITIAL_MEMORY = aligned;
   }
 
   moduleConfig.preRun.push(prepareFileSystem(stdlibBytes));

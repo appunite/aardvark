@@ -70,6 +70,11 @@ fn manifest_preload_imports_enter_warm_state() -> Result<()> {
 }
 
 #[test]
+fn warm_state_restores_heap_larger_than_initial_memory() -> Result<()> {
+    verify_warm_state_restores_heap_larger_than_initial_memory()
+}
+
+#[test]
 fn rawctx_adapter_roundtrip() -> Result<()> {
     verify_rawctx_adapter_roundtrip()
 }
@@ -136,7 +141,7 @@ run_js("typeof pyodide === 'object' && pyodide.version")
 "#,
     )?;
 
-    assert_eq!(output.json, Some(json!("0.29.4")));
+    assert_eq!(output.json, Some(json!("314.0.7")));
     assert!(output.exception_type.is_none());
     Ok(())
 }
@@ -392,6 +397,58 @@ fn verify_warm_state_imports_overlay() -> Result<()> {
         outcome.is_success(),
         "expected success outcome after reload"
     );
+    Ok(())
+}
+
+// Pyodide 314's wasm owns its memory, so the fresh heap ignores the
+// snapshot size; restore must grow it before copying the snapshot in.
+#[allow(clippy::field_reassign_with_default)]
+fn verify_warm_state_restores_heap_larger_than_initial_memory() -> Result<()> {
+    let manifest = r#"{
+        "schemaVersion": "1.0",
+        "entrypoint": "main:handler",
+        "runtime": {
+            "language": "python",
+            "pyodide": {"preloadImports": ["ballast"]}
+        }
+    }"#;
+    let bundle = bundle_with_files_and_manifest(
+        &[
+            (
+                "main.py",
+                r#"
+import builtins
+
+def handler():
+    return len(builtins.__aardvark_ballast)
+"#,
+            ),
+            (
+                "ballast.py",
+                r#"
+import builtins
+builtins.__aardvark_ballast = bytearray(b"x" * (128 * 1024 * 1024))
+"#,
+            ),
+        ],
+        manifest,
+    );
+
+    let mut capture_config = PyRuntimeConfig::default();
+    capture_config.snapshot.save_to = Some(PathBuf::from("target/large-heap.snapshot"));
+    let mut runtime = PyRuntime::new_for_bundle(capture_config, &bundle)?;
+    let (_session, _) = runtime.prepare_session_with_manifest(bundle.clone())?;
+    let warm_state = runtime.capture_warm_state()?;
+
+    let config = PyRuntimeConfig {
+        warm_state: Some(warm_state),
+        ..PyRuntimeConfig::default()
+    };
+    let mut restored = PyRuntime::new_for_bundle(config, &bundle)?;
+    let (session, _) = restored.prepare_session_with_manifest(bundle)?;
+    let outcome = restored.run_session(&session)?;
+    assert!(outcome.is_success(), "expected restored large-heap run");
+    assert_eq!(payload_text(&outcome), (128 * 1024 * 1024).to_string());
     Ok(())
 }
 

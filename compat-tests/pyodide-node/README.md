@@ -8,10 +8,10 @@ upstream Pyodide Node test surface. It intentionally does not define a CI gate.
 The upstream Pyodide checkout lives at:
 
 ```text
-third_party/pyodide/0.29.4/
+third_party/pyodide/314.0.7/
 ```
 
-It is pinned to the Pyodide `0.29.4` release commit used by Aardvark's staged
+It is pinned to the Pyodide `314.0.7` release commit used by Aardvark's staged
 distribution. Future Pyodide updates should add a new versioned checkout instead
 of overwriting this one.
 
@@ -20,19 +20,19 @@ of overwriting this one.
 Generate a static inventory of upstream tests:
 
 ```bash
-python3 compat-tests/pyodide-node/collect_inventory.py --version 0.29.4
+python3 compat-tests/pyodide-node/collect_inventory.py --version 314.0.7
 ```
 
 Run the first local Aardvark compatibility corpus:
 
 ```bash
-python3 compat-tests/pyodide-node/run_local.py --version 0.29.4
+python3 compat-tests/pyodide-node/run_local.py --version 314.0.7
 ```
 
 Run Pyodide's lockfile-driven package import matrix:
 
 ```bash
-python3 compat-tests/pyodide-node/run_package_imports.py --version 0.29.4
+python3 compat-tests/pyodide-node/run_package_imports.py --version 314.0.7
 ```
 
 By default the runner resets the Aardvark runtime before each adopted case,
@@ -45,7 +45,7 @@ runtime JS assets such as `crates/aardvark-core/src/js/pyodide_bootstrap.js`:
 ```bash
 cargo run -p aardvark-cli -- assets stage --variant full --force
 python3 compat-tests/pyodide-node/run_local.py \
-  --version 0.29.4 \
+  --version 314.0.7 \
   --timeout-seconds 120
 ```
 
@@ -67,7 +67,7 @@ For each adopted upstream test id, Aardvark should either:
 The expectations file for this version is:
 
 ```text
-compat-tests/pyodide-node/expectations/0.29.4.toml
+compat-tests/pyodide-node/expectations/314.0.7.toml
 ```
 
 No skipped or failing adopted case should remain unclassified.
@@ -92,7 +92,7 @@ every declared module name. Packages Pyodide marks xfail or unsupported on Node
 are classified in:
 
 ```text
-compat-tests/pyodide-node/expectations/0.29.4-package-imports.toml
+compat-tests/pyodide-node/expectations/314.0.7-package-imports.toml
 ```
 
 Package entries without declared imports are reported as `no_imports`; they are

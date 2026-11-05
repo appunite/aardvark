@@ -11,7 +11,7 @@ runtime. The following steps get you ready to develop locally.
 - **Node.js** *(optional)*: Pinned in `.mise.toml` for ad-hoc JavaScript
   inspection. The checked-in build does not have root npm scripts, and `cargo
   build` embeds JavaScript assets directly.
-- **Python 3.13**: Used by the perf host runner and helper scripts. `mise
+- **Python 3.14**: Used by the perf host runner and helper scripts. `mise
   install` installs the pinned version.
 - **wasm-pack** *(optional)*: Handy when inspecting [Pyodide](https://pyodide.org/) builds, but not part
   of the default build.
@@ -37,7 +37,7 @@ runtime. The following steps get you ready to develop locally.
 
    ```bash
    cargo run -p aardvark-cli -- assets stage --variant full
-   PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v0.29.4-full' | sort | tail -n 1)"
+   PYODIDE_DIST_DIR="$(find .aardvark/pyodide-distributions -maxdepth 1 -type d -name 'aardvark-*-pyodide-v314.0.7-full' | sort | tail -n 1)"
    test -n "$PYODIDE_DIST_DIR"
    cargo run -p aardvark-cli -- assets verify "$PYODIDE_DIST_DIR"
    ```

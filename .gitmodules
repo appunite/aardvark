@@ -1,3 +1,6 @@
+[submodule "third_party/pyodide/314.0.7"]
+	path = third_party/pyodide/314.0.7
+	url = https://github.com/pyodide/pyodide.git
 [submodule "third_party/pyodide/0.29.4"]
 	path = third_party/pyodide/0.29.4
 	url = https://github.com/pyodide/pyodide.git

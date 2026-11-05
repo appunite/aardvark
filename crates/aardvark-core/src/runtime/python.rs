@@ -73,8 +73,8 @@ impl PythonEngine {
             self.distribution.read_binary_asset("pyodide.asm.wasm")?,
         );
         js.insert_text_asset(
-            "pyodide.asm.js",
-            self.distribution.read_text_asset("pyodide.asm.js")?,
+            "pyodide.asm.mjs",
+            self.distribution.read_text_asset("pyodide.asm.mjs")?,
         );
         js.insert_text_asset(
             "pyodide.asm.patched.js",

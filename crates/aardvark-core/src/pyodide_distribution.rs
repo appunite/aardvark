@@ -467,7 +467,7 @@ fn normalize_path(path: &Path) -> PathBuf {
 fn embedded_text_asset(name: &str) -> Result<&'static str> {
     match name {
         DISTRIBUTION_MANIFEST => Ok(assets::distribution_manifest_json()),
-        "pyodide.asm.js" => Ok(assets::pyodide_asm_js()),
+        "pyodide.asm.mjs" => Ok(assets::pyodide_asm_mjs()),
         "pyodide.asm.patched.js" => Ok(assets::pyodide_asm_patched_js()),
         "pyodide_builtin_wrappers.js" => Ok(assets::builtin_wrappers_js()),
         "pyodide_bootstrap.js" => Ok(assets::bootstrap_js()),

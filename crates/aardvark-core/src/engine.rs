@@ -632,7 +632,7 @@ mod tests {
             let second_root = temp.path().join("second");
             fs::create_dir(&first_root).expect("create first root");
             fs::create_dir(&second_root).expect("create second root");
-            let package_name = "numpy-2.2.5-cp313-cp313-pyemscripten_2025_0_wasm32.whl";
+            let package_name = "numpy-2.4.6-cp314-cp314-pyemscripten_2026_0_wasm32.whl";
             fs::write(first_root.join(package_name), [11_u8]).expect("write first package");
             fs::write(second_root.join(package_name), [22_u8]).expect("write second package");
 
@@ -646,7 +646,7 @@ mod tests {
             runtime.set_package_root(Some(root.to_path_buf()));
             let source = format!(
                 r#"
-const response = globalThis.__pyRunnerNativeFetch("https://cdn.jsdelivr.net/pyodide/v0.29.4/full/{package_name}");
+const response = globalThis.__pyRunnerNativeFetch("https://cdn.jsdelivr.net/pyodide/v314.0.7/full/{package_name}");
 if (!response || response.status !== 200 || !response.body) {{
   throw new Error("expected native package fetch response");
 }}
@@ -664,10 +664,10 @@ if (response.body[0] !== {expected}) {{
     #[test]
     fn pyodide_package_asset_url_matches_pyodide_archives_only() {
         assert!(is_pyodide_package_asset_url(
-            "https://cdn.jsdelivr.net/pyodide/v0.29.4/full/numpy-2.2.5-cp313-cp313-pyodide_2025_0_wasm32.whl"
+            "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/numpy-2.4.6-cp314-cp314-pyemscripten_2026_0_wasm32.whl"
         ));
         assert!(is_pyodide_package_asset_url(
-            "https://github.com/pyodide/pyodide/releases/download/0.29.4/pyodide-core-0.29.4.tar.bz2"
+            "https://github.com/pyodide/pyodide/releases/download/314.0.7/pyodide-core-314.0.7.tar.bz2"
         ));
         assert!(!is_pyodide_package_asset_url(
             "https://cdn.jsdelivr.net/npm/some-package/dist/archive.tar.gz"

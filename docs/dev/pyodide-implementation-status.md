@@ -5,16 +5,18 @@ today. It is a status note, not a complete upstream conformance claim.
 
 ## Upstream Base
 
-- Aardvark targets Pyodide `0.29.4`.
+- Aardvark targets Pyodide `314.0.7` (Python 3.14.2, Emscripten 5.0.3,
+  `pyemscripten_2026_0` wheels).
 - The local upstream checkout is a git submodule at
-  `third_party/pyodide/0.29.4/`.
-- That checkout is pinned to Pyodide tag `0.29.4`, commit
-  `d178a7e14644eb17dfd7bd91dc21b19078868381`.
+  `third_party/pyodide/314.0.7/`.
+- That checkout is pinned to Pyodide tag `314.0.7`, commit
+  `b1e4fcc2488962f6360a97f19b9982d6fdb5d16f`. The previous `0.29.4` checkout
+  and its compat files stay alongside for reference.
 - Runtime assets are staged under an ignored local distribution directory whose
   name includes the current Aardvark workspace package version:
 
 ```text
-.aardvark/pyodide-distributions/aardvark-${AARDVARK_VERSION}-pyodide-v0.29.4-full
+.aardvark/pyodide-distributions/aardvark-${AARDVARK_VERSION}-pyodide-v314.0.7-full
 ```
 
 The staging CLI and local compatibility runners derive this default path from
@@ -33,6 +35,8 @@ Aardvark embeds Pyodide inside the in-process V8 runtime. The bootstrap path is:
 
 1. Rust creates a `JsRuntime` isolate.
 2. Core Pyodide JS and WASM assets are loaded from the staged distribution.
+   Aardvark patches the upstream ES module `pyodide.asm.mjs` into
+   `pyodide.asm.patched.js` and imports `_createPyodideModule` from it.
 3. Aardvark injects the Emscripten setup shim and `pyodide_bootstrap.js`.
 4. The bootstrap exposes host hooks for package loading, filesystem policy,
    network policy, diagnostics, timers, and reset.
@@ -78,11 +82,11 @@ compat-tests/pyodide-node/
 Current local evidence:
 
 - Adopted runtime corpus:
-  `python3 compat-tests/pyodide-node/run_local.py --version 0.29.4 --timeout-seconds 120`
+  `python3 compat-tests/pyodide-node/run_local.py --version 314.0.7 --timeout-seconds 120`
   reports `69` passed cases and no failures.
 - Package import matrix:
-  `python3 compat-tests/pyodide-node/run_package_imports.py --version 0.29.4 --timeout-seconds 180`
-  reports `293` pass, `68` no-import metadata entries, `6` upstream-expected
+  `python3 compat-tests/pyodide-node/run_package_imports.py --version 314.0.7 --timeout-seconds 180`
+  reports `279` pass, `59` no-import metadata entries, `8` upstream-expected
   xfail entries, and no Aardvark failures.
 - Workspace verification has also passed with:
 
@@ -92,15 +96,16 @@ cargo clippy -p aardvark-core -p aardvark-cli -p aardvark-compat-runner --all-ta
 cargo test --workspace
 ```
 
-The six expected package xfails match upstream or upstream Node behavior:
-`cmyt`, `galpy`, `matplotlib-inline`, `numpy-tests`, `soupsieve`, and `yt`.
+The eight expected package xfails match upstream or upstream Node behavior:
+`cmyt`, `galpy`, `matplotlib-inline`, `numpy-tests`, `psycopg-binary`,
+`psycopg-c`, `soupsieve`, and `yt`.
 
 ## What This Proves
 
 We can currently say:
 
-- Aardvark passes the adopted local Pyodide `0.29.4` Node-shaped runtime corpus.
-- Aardvark can load the full staged Pyodide `0.29.4` lockfile package set far
+- Aardvark passes the adopted local Pyodide `314.0.7` Node-shaped runtime corpus.
+- Aardvark can load the full staged Pyodide `314.0.7` lockfile package set far
   enough to import every package-declared module that upstream marks as
   supported in Node.
 - The known package import exceptions are classified against upstream
