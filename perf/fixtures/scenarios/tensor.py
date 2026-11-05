@@ -59,13 +59,21 @@ def entrypoint(input=None, tensor_payload=None, tensor=None):
     if raw_tensor is None:
         source = getattr(builtins, "__aardvark_rawctx_inputs", None)
         if isinstance(source, dict):
+            # RawCtx call: an absent tensor input still publishes a buffer.
             raw_tensor = _tensor_from_raw(source.get("tensor"))
+            if raw_tensor is None:
+                raw_tensor = np.empty(0, dtype=np.float32)
     if raw_tensor is None:
         json_input = input
         if json_input is None:
             json_input = getattr(builtins, "__aardvark_input", None)
         raw_tensor = _tensor_from_json(json_input)
-        return main(raw_tensor)
+        result = main(raw_tensor)
+        # Aardvark offloads float arrays of 4096+ elements to a shared buffer;
+        # smaller ndarrays are not JSON-serialisable, so return a list.
+        if result.size < 4096:
+            return result.tolist()
+        return result
 
     result = main(raw_tensor)
     return _publish_raw(result)

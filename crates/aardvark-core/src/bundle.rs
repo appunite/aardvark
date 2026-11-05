@@ -139,9 +139,11 @@ impl Bundle {
             if file.is_dir() {
                 continue;
             }
-            let normalized = normalize_entry_path(file.name()).map_err(|err| {
-                PyRunnerError::Bundle(format!("invalid entry '{}': {err}", file.name()))
-            })?;
+            let name = file
+                .name()
+                .map_err(|err| PyRunnerError::Bundle(format!("invalid entry name: {err}")))?;
+            let normalized = normalize_entry_path(&name)
+                .map_err(|err| PyRunnerError::Bundle(format!("invalid entry '{name}': {err}")))?;
             let declared_size = file.size();
             ensure_limit(
                 BundleLimitKind::EntryBytes,

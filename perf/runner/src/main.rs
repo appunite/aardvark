@@ -175,22 +175,43 @@ fn main() -> Result<()> {
                     Scenario::Matplotlib,
                 ] {
                     for mode in aardvark_modes_for_scenario(scenario) {
-                        results.push(bench_aardvark(
-                            scenario,
-                            *mode,
-                            AardvarkBenchOptions {
-                                iterations,
-                                profile,
-                                include_samples: samples,
-                                pyodide_profile: pyodide_profile.as_deref(),
-                                warm_preimports: &warm_preimports,
-                                manifest_preload_imports: &manifest_preload_imports,
-                                setup_pool_desired_size,
-                            },
-                        )?);
+                        results.push(
+                            bench_aardvark(
+                                scenario,
+                                *mode,
+                                AardvarkBenchOptions {
+                                    iterations,
+                                    profile,
+                                    include_samples: samples,
+                                    pyodide_profile: pyodide_profile.as_deref(),
+                                    warm_preimports: &warm_preimports,
+                                    manifest_preload_imports: &manifest_preload_imports,
+                                    setup_pool_desired_size,
+                                },
+                            )
+                            .with_context(|| {
+                                format!(
+                                    "scenario {} / profile {} / mode {} failed",
+                                    scenario.name(),
+                                    profile.name(),
+                                    mode.name()
+                                )
+                            })?,
+                        );
                     }
                     for mode in host_modes_for_scenario(scenario) {
-                        results.push(bench_host(scenario, *mode, iterations, profile)?);
+                        results.push(
+                            bench_host(scenario, *mode, iterations, profile).with_context(
+                                || {
+                                    format!(
+                                        "scenario {} / profile {} / mode {} failed",
+                                        scenario.name(),
+                                        profile.name(),
+                                        mode.name()
+                                    )
+                                },
+                            )?,
+                        );
                     }
                 }
             }

@@ -26,6 +26,11 @@ fn validate_json_outcome(
     outcome: &aardvark_core::ExecutionOutcome,
 ) -> Result<()> {
     if matches!(scenario, Scenario::Tensor) {
+        // The runtime only offloads JSON array results to a shared buffer at
+        // 4096+ elements; smaller tensors come back as a plain JSON list.
+        if let Some(ResultPayload::Json(value)) = outcome.payload() {
+            return validate_tensor_json_list(profile, value);
+        }
         return validate_tensor_buffer_outcome("tensor JSON", profile, outcome);
     }
 
@@ -117,13 +122,39 @@ fn validate_json_outcome(
     Ok(())
 }
 
+fn validate_tensor_json_list(profile: LoadProfile, value: &serde_json::Value) -> Result<()> {
+    let Some(items) = value.as_array() else {
+        return Err(anyhow!(
+            "tensor JSON payload was neither a shared buffer nor a list"
+        ));
+    };
+    let expected_len = perf::tensor_length(profile);
+    if items.len() != expected_len {
+        return Err(anyhow!(
+            "tensor JSON list length {} did not match expected {}",
+            items.len(),
+            expected_len
+        ));
+    }
+    if items
+        .iter()
+        .any(|item| !item.as_f64().is_some_and(f64::is_finite))
+    {
+        return Err(anyhow!("tensor JSON list contained a non-finite value"));
+    }
+    Ok(())
+}
+
 fn validate_tensor_buffer_outcome(
     label: &str,
     profile: LoadProfile,
     outcome: &aardvark_core::ExecutionOutcome,
 ) -> Result<()> {
     let Some(ResultPayload::SharedBuffers(buffers)) = outcome.payload() else {
-        return Err(anyhow!("{label} payload was not a shared buffer"));
+        return Err(anyhow!(
+            "{label} payload was not a shared buffer (got {})",
+            outcome.payload().map_or("missing", ResultPayload::kind)
+        ));
     };
     if buffers.len() != 1 {
         return Err(anyhow!(
