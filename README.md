@@ -288,6 +288,37 @@ The core library is published as `aardvark-core`. Before cutting a build:
 - Ensure `AARDVARK_PYODIDE_DIST_DIR` points at a verified distribution available on the target system; the crate never downloads wheels at runtime.
 - Regenerate the bundle manifest schema if new fields were added.
 
+### Release process
+
+Releases are manual; CI only runs tests.
+
+1. In the PR that ships the change, bump `version` in the root `Cargo.toml`
+   (every crate inherits it via `version.workspace = true`) and the
+   `aardvark-core = { version = "=…" }` snippet above.
+2. Squash-merge to `master`.
+3. Tag the merge commit and create the GitHub release:
+
+       gh release create vX.Y.Z --target master --generate-notes
+
+4. From a clean checkout of the tag, publish the crate (only `aardvark-core` is
+   publishable; `aardvark-cli` and `aardvark-compat-runner` set `publish = false`):
+
+       cargo publish -p aardvark-core --dry-run
+       cargo publish -p aardvark-core
+
+   A published version can only be yanked, never replaced.
+
+**Who can publish:** crates.io owners of `aardvark-core` are individual owners
+plus the GitHub team `appunite/rust`. Joining that team is enough to publish:
+sign in to crates.io with GitHub, grant the crates.io OAuth app access to the
+`appunite` org, create an API token with the `publish-update` scope, and run
+`cargo login`. Check current owners with `cargo owner --list aardvark-core`.
+
+If linking fails with `tapi error: malformed file … unknown architecture` on
+macOS, your Command Line Tools are older than the SDK `xcrun` selects. Update
+them, or point `SDKROOT` at a matching SDK under
+`/Library/Developer/CommandLineTools/SDKs/`.
+
 ## Limitations and Open Work
 
 - Windows builds are not supported or tested.
