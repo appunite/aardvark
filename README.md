@@ -59,7 +59,7 @@ installing `aardvark-cli`:
 
 ```toml
 [dependencies]
-aardvark-core = { version = "=0.3.0", features = ["pyodide-staging"] }
+aardvark-core = { version = "=0.3.1", features = ["pyodide-staging"] }
 ```
 
 ```rust

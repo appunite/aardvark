@@ -71,33 +71,12 @@ The warm snapshot today does not include pandas: restore is fast (~0.18 s), but
 each isolate still installs and imports numpy/pandas on top of it (~1.5 s).
 Pool warmup runs **serially**, about 1.4–1.7 s per pandas isolate.
 
-### Snapshot with pandas pre-imported: currently broken
+### Snapshot with pandas pre-imported
 
-Every path that captures the warm snapshot after importing a native extension
-fails on the first call after restore:
-
-```
-RuntimeError: table index is out of bounds
-    at wasm://wasm/...:wasm-function[...]
-    at callPyObjectKwargs (pyodide.asm.patched.js)
-```
-
-- Reproduces with `--warm-preimport numpy` alone in `aardvark-json-warm`. In
-  the registry and pooled modes, numpy alone fails earlier, while the warm
-  state is captured (`python snippet execution failed`). numpy + pandas
-  reaches the table-index error.
-- A pure-stdlib preimport (`--warm-preimport json`) works.
-- Affected modes: `aardvark-json-warm`, `-persistent-warm-call-no-stdio`,
-  `-registry-retained-handler-no-stdio` and `-warmed-host-pooled-...`, at
-  pool sizes 1, 2 and 4.
-
-The memory image restores, but the WebAssembly function-table entries that the
-dynamically loaded `.so` side modules registered do not. So the first call into
-numpy C code jumps to a missing table slot. Neither the snapshot code nor
-`docs/architecture/packages-and-snapshots.md` covers this case. Without a fix
-we cannot measure how much a pandas-preimported snapshot would help. The echo
-numbers suggest it could bring per-isolate setup from ~1.4 s down toward
-~0.1–0.2 s.
+This used to fail with `RuntimeError: table index is out of bounds` on the
+first call after restore. Since HAV-3682 it restores and runs. See
+[Warm snapshots with pandas pre-imported](#warm-snapshots-with-pandas-pre-imported-hav-3682)
+below for the fix and the numbers.
 
 ### Memory per isolate (warmed host pool, medium profile)
 
@@ -154,9 +133,62 @@ Takeaways:
 - Pyodide 314 no longer sizes the heap from `INITIAL_MEMORY`, which broke
   restoring any warm snapshot larger than the default heap (every pandas
   snapshot row). Fixed in this upgrade by growing memory before the restore.
-- Native-extension preimport into the warm snapshot still fails on 314 with
-  the same `table index is out of bounds` error. The follow-up below still
-  applies.
+- Native-extension preimport into the warm snapshot still failed on 314 with
+  the same `table index is out of bounds` error. Fixed by HAV-3682, below.
+
+## Warm snapshots with pandas pre-imported (HAV-3682)
+
+A warm snapshot can now pre-import numpy and pandas. The heap image never held
+the `.so` side modules that numpy and pandas load (their wasm instances and
+function-table slots). The snapshot now records them and the restore puts them
+back at the same memory and table bases (see
+`docs/architecture/packages-and-snapshots.md`). Regression test:
+`integration-tests/tests/warm_snapshot_native_extensions.rs`.
+
+Setup: Intel Core i5-10500T (6 cores / 12 threads), 14 GiB RAM, Linux
+7.0. Release build of `aardvark-perf` on the HAV-3682 branch, distribution
+`aardvark-0.3.0-pyodide-v314.0.7-full` restaged with adapter version 2.
+This machine is about 2.5x slower than the M4 Max above, so the "before"
+column was re-measured here on the same build: it is the same warm snapshot
+without `--warm-preimport`. "After" adds
+`--warm-preimport numpy --warm-preimport pandas`. pandas scenario, `medium`
+profile.
+
+| Path | Before ms | After ms | Change |
+| --- | --: | --: | --: |
+| Restore warm snapshot + run (`aardvark-json-warm`, avg of 10) | 4 678 | 768 | −84% |
+| ↳ of which prepare (restore, overlay, side-module replay) | 450 | 558 | |
+| ↳ of which run (before: includes importing numpy and pandas) | 4 228 | 211 | |
+| Warmed host, pool of 1 (setup + first live call, avg of 3) | 4 672 | 679 | −85% |
+| Warmed host, pool of 2 | 8 771 | 1 185 | −86% |
+| Warmed host, pool of 4 | 16 047 | 2 350 | −85% |
+| Persistent warm-call, p50 (3 interleaved runs of 50) | 7.9–9.2 | 10.6–14.3 | +3–5 ms |
+| Registry retained handler, p50 (10 calls) | 13.8 | 13.7 | = |
+
+| Peak RSS MiB | Before | After |
+| --- | --: | --: |
+| Restore warm snapshot + run | 996 | 869 |
+| Warmed host, pool of 1 / 2 / 4 | 868 / 1 078 / 1 592 | 911 / 1 097 / 1 752 |
+
+Takeaways:
+
+- **Each extra pandas isolate now costs ~0.56 s instead of ~3.8 s** on this
+  machine ((2 350 − 679) / 3 vs (16 047 − 4 672) / 3). Scaled to the M4 Max
+  that is roughly 0.2 s instead of 1.4–1.7 s. Restarting or recycling an
+  isolate no longer costs a full pandas import.
+- The remaining per-isolate time is the restore itself: copying the heap,
+  importing the overlay and re-instantiating 54 numpy/pandas side modules,
+  which compiles them again. Caching the compiled modules across isolates is
+  the next lever if this matters.
+- Inside the UDF the replayed modules run at full speed. Timed in the handler,
+  a pure-Python loop, a 120×120 matmul, a ufunc and a 10k-row groupby all
+  match the non-pre-imported isolate within noise.
+- Persistent warm-calls are 3–5 ms slower per call with the pandas snapshot.
+  The time is spent outside the handler, in the persistent-isolate call path,
+  and the registry retained-handler path doesn't show it. Cause not yet
+  identified; see the follow-ups.
+- Peak memory per extra isolate is ~280 MiB (vs ~240 MiB without
+  pre-import), because each isolate now holds the pandas heap from the start.
 
 ## Capacity estimate
 
@@ -169,11 +201,16 @@ RAM ≈ 0.75 GiB + 0.27 GiB × isolates      (peak-based, pandas loaded)
 Each isolate runs one call at a time on one thread, so throughput comes from the
 isolate count, and more isolates than cores adds no throughput. Examples:
 
-| Node | Isolates (= cores) | Est. peak RAM | Serial warmup today |
-| --- | --: | --: | --: |
-| 4 vCPU / 8 GiB | 4 | ~2 GiB | ~6 s |
-| 8 vCPU / 16 GiB | 8 | ~3 GiB | ~11 s |
-| 16 vCPU / 32 GiB | 16 | ~5 GiB | ~22 s |
+| Node | Isolates (= cores) | Est. peak RAM | Serial warmup, no pandas snapshot | Serial warmup, pandas snapshot (est.) |
+| --- | --: | --: | --: | --: |
+| 4 vCPU / 8 GiB | 4 | ~2 GiB | ~6 s | ~1 s |
+| 8 vCPU / 16 GiB | 8 | ~3 GiB | ~11 s | ~2 s |
+| 16 vCPU / 32 GiB | 16 | ~5 GiB | ~22 s | ~4 s |
+
+The pandas-snapshot column scales the Linux measurement by the ~2.5x speed
+gap to the M4 Max. It excludes the one cold capture (~2.6 s) a worker needs
+before its first restore, unless the warm state is captured once and shipped
+to the worker. Re-measure on the production instance type (HAV-3683).
 
 So memory is not the constraint: one worker per node with one isolate per core
 fits comfortably. The two real costs are:
@@ -181,16 +218,22 @@ fits comfortably. The two real costs are:
 1. **Cold path ~2.4 s.** No request should ever see it. Pools must be pre-warmed
    at deploy time, and a crashed or recycled isolate costs ~1.4–1.7 s to
    replace.
-2. **Serial warmup.** It takes ~1.4 s × isolates before a fresh worker can take
-   its full load. Fixing native-extension snapshots, or warming isolates in
-   parallel, is the lever here.
+2. **Serial warmup.** It took ~1.4 s × isolates before a fresh worker could
+   take its full load. With pandas pre-imported into the warm snapshot
+   (HAV-3682) it drops to roughly 0.2 s × isolates on the M4 Max (measured
+   0.56 s × isolates on the slower Linux box). Warming isolates in parallel
+   would cut it further.
 
 Steady-state latency (2.5 ms for 10k rows, 18 ms for 1M rows) is fine for UDF
 calls.
 
 ## Follow-ups
 
-- Restore dynlib function-table state on warm-snapshot restore, so snapshots
-  can pre-import numpy/pandas. Then re-measure the pre-import rows above.
+- ~~Restore dynlib function-table state on warm-snapshot restore, so snapshots
+  can pre-import numpy/pandas.~~ Done in HAV-3682.
+- Find the 3–5 ms per-call overhead of persistent warm-calls on a
+  pandas-pre-imported snapshot (outside the handler; registry retained
+  handlers don't show it).
+- Cache compiled side modules across isolates to cut the ~0.56 s restore.
 - Warm pool isolates in parallel, or at least measure whether it helps.
 - Re-run these measurements on the target production instance type.

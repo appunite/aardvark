@@ -278,19 +278,39 @@ fn apply_pyodide_replacements(source: &str) -> Result<String> {
         result = result.replace(needle, &replacement);
     }
 
-    let table_needle = "var tableBase=metadata.tableSize?wasmTable.length:0;";
-    if result.contains(table_needle) {
-        result = result.replace(
-            table_needle,
-            &format!(
-                "{table_needle}\nModule.snapshotDebug && console.log('loadWebAssemblyModule', libName, memoryBase, tableBase);"
-            ),
-        );
-    } else {
-        tracing::warn!(
-            target = "aardvark::assets",
-            "optional Pyodide table-base debug patch pattern missing"
-        );
+    // Warm snapshots with native extensions (HAV-3682): the bootstrap's
+    // dylink hooks force a recorded memory/table base when it replays a side
+    // module after a restore, keep the restored heap bytes, and skip
+    // relocations and constructors that already ran before the snapshot.
+    let dylink_replacements: [(&str, &str); 5] = [
+        (
+            "var memoryBase=metadata.memorySize?alignMemory(getMemory(metadata.memorySize+memAlign),memAlign):0;var tableBase=metadata.tableSize?wasmTable.length:0;",
+            "var aardvarkPlacement=Module.__aardvarkTakeDylinkPlacement?.(libName,metadata)??null;var memoryBase=aardvarkPlacement?aardvarkPlacement.memoryBase:metadata.memorySize?alignMemory(getMemory(metadata.memorySize+memAlign),memAlign):0;var tableBase=aardvarkPlacement?aardvarkPlacement.tableBase:metadata.tableSize?wasmTable.length:0;Module.__aardvarkRecordDylinkPlacement?.(libName,metadata,memoryBase,tableBase);",
+        ),
+        (
+            "if(metadata.tableSize){wasmTable.grow(metadata.tableSize)}",
+            "if(metadata.tableSize){var aardvarkTableGrow=aardvarkPlacement?tableBase+metadata.tableSize-wasmTable.length:metadata.tableSize;if(aardvarkTableGrow>0){wasmTable.grow(aardvarkTableGrow)}}",
+        ),
+        (
+            "function postInstantiation(module,instance){",
+            "function postInstantiation(module,instance){aardvarkPlacement?.restoreMemory();",
+        ),
+        (
+            "var applyRelocs=moduleExports[\"__wasm_apply_data_relocs\"];",
+            "var applyRelocs=aardvarkPlacement?null:moduleExports[\"__wasm_apply_data_relocs\"];",
+        ),
+        (
+            "var init=moduleExports[\"__wasm_call_ctors\"];",
+            "var init=aardvarkPlacement?null:moduleExports[\"__wasm_call_ctors\"];",
+        ),
+    ];
+    for (needle, replacement) in dylink_replacements {
+        if result.matches(needle).count() != 1 {
+            return Err(PyRunnerError::Init(format!(
+                "required Pyodide dylink patch pattern must appear exactly once: {needle}"
+            )));
+        }
+        result = result.replace(needle, replacement);
     }
 
     Ok(result)
@@ -941,6 +961,42 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    // The shape of the Emscripten 5 glue that the patches anchor on.
+    const LOADER_FIXTURE: &str = concat!(
+        "async function _createPyodideModule(moduleArg){const API=Module.API;",
+        "new WebAssembly.Module(b);WebAssembly.instantiate(b);Date.now();",
+        "reportUndefinedSymbols();crypto.getRandomValues(a);",
+        "var loadWebAssemblyModule=(binary,flags,libName,localScope,handle)=>{function loadModule(){",
+        "var memoryBase=metadata.memorySize?alignMemory(getMemory(metadata.memorySize+memAlign),memAlign):0;var tableBase=metadata.tableSize?wasmTable.length:0;",
+        "if(metadata.tableSize){wasmTable.grow(metadata.tableSize)}",
+        "function postInstantiation(module,instance){",
+        "var applyRelocs=moduleExports[\"__wasm_apply_data_relocs\"];",
+        "var init=moduleExports[\"__wasm_call_ctors\"];}}}}",
+        "export default _createPyodideModule;",
+    );
+
+    #[test]
+    fn pyodide_patch_installs_dylink_snapshot_hooks() {
+        let patched = apply_pyodide_replacements(LOADER_FIXTURE).expect("patch loader");
+        for hook in [
+            "Module.__aardvarkTakeDylinkPlacement?.(libName,metadata)",
+            "Module.__aardvarkRecordDylinkPlacement?.(libName,metadata,memoryBase,tableBase)",
+            "aardvarkPlacement?.restoreMemory();",
+            "var applyRelocs=aardvarkPlacement?null:",
+            "var init=aardvarkPlacement?null:",
+        ] {
+            assert!(patched.contains(hook), "missing hook {hook}");
+        }
+        assert!(!patched.contains("if(metadata.tableSize){wasmTable.grow(metadata.tableSize)}"));
+    }
+
+    #[test]
+    fn pyodide_patch_rejects_loader_without_dylink_anchor() {
+        let source = LOADER_FIXTURE.replace("function postInstantiation(module,instance){", "");
+        let err = apply_pyodide_replacements(&source).expect_err("missing anchor must fail");
+        assert!(err.to_string().contains("postInstantiation"), "{err}");
+    }
 
     #[test]
     fn copy_archive_with_limit_rejects_oversized_download() {

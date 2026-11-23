@@ -949,6 +949,284 @@ function concatTarArchives(blobs) {
   return combined;
 }
 
+// ---------------------------------------------------------------------------
+// Side modules (.so) in warm snapshots (HAV-3682)
+//
+// A memory snapshot only holds the wasm heap. Side modules loaded with dlopen
+// (numpy, pandas, ...) also own wasm instances and indirect-function-table
+// slots, and the heap holds pointers into both: table indices for C function
+// pointers, and data addresses relative to each module's memory base.
+//
+// At capture time we record where every side module was placed, the GOT and
+// the table length. On restore we reserve the table, preset the GOT, and once
+// the overlay has put the .so files back on the filesystem we re-instantiate
+// each module at its recorded memory/table base, in the original order. The
+// patched Emscripten loader (see `apply_pyodide_replacements`) honours the
+// forced placement, keeps the restored heap bytes over the module's data
+// segments, and skips relocations and constructors, which already ran.
+// ---------------------------------------------------------------------------
+
+const DYLINK_SNAPSHOT_VERSION = 1;
+
+function installDylinkSnapshotHooks(module) {
+  module.__aardvarkDylinkPlacements = [];
+  module.__aardvarkDylinkReplay = null;
+  module.__aardvarkPendingDylinkRestore = null;
+  module.__aardvarkRecordDylinkPlacement = (libName, metadata, memoryBase, tableBase) => {
+    module.__aardvarkDylinkPlacements.push({
+      libName,
+      memoryBase,
+      memorySize: metadata.memorySize,
+      tableBase,
+      tableSize: metadata.tableSize,
+    });
+  };
+  module.__aardvarkTakeDylinkPlacement = (libName, metadata) => {
+    const replay = module.__aardvarkDylinkReplay;
+    const placement = replay ? replay.get(libName) : undefined;
+    if (!placement) {
+      return null;
+    }
+    replay.delete(libName);
+    if (
+      placement.memorySize !== metadata.memorySize ||
+      placement.tableSize !== metadata.tableSize
+    ) {
+      throw new Error(
+        `[dylink] ${libName} changed since the snapshot was taken ` +
+          `(memory ${placement.memorySize} -> ${metadata.memorySize}, ` +
+          `table ${placement.tableSize} -> ${metadata.tableSize})`
+      );
+    }
+    const { memoryBase, memorySize, tableBase } = placement;
+    // Instantiation writes the module's initial data segments over the
+    // restored heap; keep the live bytes and put them back afterwards.
+    const saved = memorySize
+      ? module.HEAP8.slice(memoryBase, memoryBase + memorySize)
+      : null;
+    return {
+      memoryBase,
+      tableBase,
+      restoreMemory() {
+        if (saved) {
+          module.HEAP8.set(saved, memoryBase);
+        }
+      },
+    };
+  };
+}
+
+// Owner "" is the main module (LDSO's "__main__" exports are wasmImports).
+function findExportOwner(module, sym, entry) {
+  const libs = module.LDSO?.loadedLibsByName ?? {};
+  if (libs.__main__?.exports?.[sym] === entry) {
+    return "";
+  }
+  for (const [name, dso] of Object.entries(libs)) {
+    if (name !== "__main__" && dso?.exports && dso.exports[sym] === entry) {
+      return name;
+    }
+  }
+  return null;
+}
+
+function collectDylinkSnapshotState(module) {
+  const ldso = module.LDSO;
+  const table = module.wasmTable;
+  const got = module.GOT;
+  if (!ldso || !table || !got) {
+    return null;
+  }
+  const libs = [];
+  for (const placement of module.__aardvarkDylinkPlacements ?? []) {
+    const dso = ldso.loadedLibsByName[placement.libName];
+    if (!dso || dso.exports === "loading") {
+      continue;
+    }
+    libs.push({ ...placement, global: Boolean(dso.global) });
+  }
+  if (libs.length === 0) {
+    return null;
+  }
+  const handles = [];
+  for (const [handle, dso] of Object.entries(ldso.loadedLibsByHandle)) {
+    const numeric = Number(handle);
+    if (numeric !== 0 && dso?.name && dso.name !== "__main__") {
+      handles.push([numeric, dso.name]);
+    }
+  }
+  // GOT entries: data addresses and function table indices that the side
+  // modules (and the heap) already captured. Function entries also record
+  // which module exports the function so the slot can be refilled.
+  const gotEntries = [];
+  const funcSlots = [];
+  for (const [sym, entry] of Object.entries(got)) {
+    const value = entry?.value;
+    if (typeof value !== "number" || value === -1) {
+      continue;
+    }
+    gotEntries.push([sym, value]);
+    if (value > 0 && value < table.length) {
+      let slot = null;
+      try {
+        slot = table.get(value);
+      } catch (_err) {
+        slot = null;
+      }
+      if (typeof slot === "function") {
+        const owner = findExportOwner(module, sym, slot);
+        if (owner !== null) {
+          funcSlots.push([value, sym, owner]);
+        }
+      }
+    }
+  }
+  return {
+    version: DYLINK_SNAPSHOT_VERSION,
+    tableLength: table.length,
+    libs,
+    handles,
+    got: gotEntries,
+    funcSlots,
+  };
+}
+
+function withDylinkSnapshotState(module, makeSnapshot) {
+  const api = module.API;
+  const state = collectDylinkSnapshotState(module);
+  if (!state || typeof api?.serializeHiwireState !== "function") {
+    return makeSnapshot();
+  }
+  // makeSnapshot JSON-encodes whatever serializeHiwireState returns into the
+  // snapshot header, and restoreSnapshot hands it back to us unchanged.
+  const original = api.serializeHiwireState;
+  api.serializeHiwireState = (...args) => ({
+    ...original.apply(api, args),
+    aardvarkDylink: state,
+  });
+  try {
+    return makeSnapshot();
+  } finally {
+    api.serializeHiwireState = original;
+  }
+}
+
+// Runs right after the heap is restored, before anything else can grow the
+// table or create GOT entries.
+function reserveDylinkSnapshotState(module, state) {
+  if (!state) {
+    return;
+  }
+  if (state.version !== DYLINK_SNAPSHOT_VERSION) {
+    throw new Error(`[dylink] unsupported snapshot dylink state version ${state.version}`);
+  }
+  const table = module.wasmTable;
+  if (table.length > state.tableLength) {
+    throw new Error(
+      `[dylink] function table already has ${table.length} slots, snapshot expects ${state.tableLength}`
+    );
+  }
+  if (table.length < state.tableLength) {
+    table.grow(state.tableLength - table.length);
+  }
+  const got = module.GOT;
+  for (const [sym, value] of state.got) {
+    const entry = got[sym];
+    if (!entry) {
+      got[sym] = new WebAssembly.Global({ value: "i32", mutable: true }, value);
+    } else if (entry.value === -1) {
+      entry.value = value;
+    } else if (entry.value !== value) {
+      throw new Error(
+        `[dylink] GOT entry ${sym} is ${entry.value} in the fresh runtime but ${value} in the snapshot`
+      );
+    }
+  }
+  module.__aardvarkPendingDylinkRestore = state;
+}
+
+function setTableSlot(module, index, fn) {
+  try {
+    module.setWasmTableEntry(index, fn);
+  } catch (err) {
+    if (!(err instanceof TypeError) || typeof fn.sig !== "string") {
+      throw err;
+    }
+    module.setWasmTableEntry(index, module.convertJsFunctionToWasm(fn, fn.sig));
+  }
+  module.updateTableMap?.(index, 1);
+}
+
+function dylinkFileExists(module, path) {
+  try {
+    return Boolean(module.FS.analyzePath(path)?.exists);
+  } catch (_err) {
+    return false;
+  }
+}
+
+// Runs once the overlay has put the .so files back, before any preload.
+// Dynlib refreshes that happen earlier (right after load) find no files yet
+// and leave the restore pending, unless `required` is set.
+function replayDylinkSnapshotState(module, required = false) {
+  const state = module.__aardvarkPendingDylinkRestore;
+  if (!state) {
+    return 0;
+  }
+  const ldso = module.LDSO;
+  const missing = state.libs
+    .map((lib) => lib.libName)
+    .filter((name) => !ldso.loadedLibsByName[name] && !dylinkFileExists(module, name));
+  if (missing.length === state.libs.length && !required) {
+    return 0;
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `[dylink] snapshot side modules are missing from the filesystem: ${missing.join(", ")}`
+    );
+  }
+  module.__aardvarkPendingDylinkRestore = null;
+  module.__aardvarkDylinkReplay = new Map(state.libs.map((lib) => [lib.libName, lib]));
+  let replayed = 0;
+  try {
+    for (const lib of state.libs) {
+      if (ldso.loadedLibsByName[lib.libName]) {
+        continue;
+      }
+      module.loadDynamicLibrary(
+        lib.libName,
+        { loadAsync: false, global: lib.global, nodelete: true, allowUndefined: true },
+        lib.global ? undefined : {}
+      );
+      replayed += 1;
+    }
+    const unplaced = [...module.__aardvarkDylinkReplay.keys()];
+    if (unplaced.length > 0) {
+      throw new Error(`[dylink] snapshot libraries were not re-placed: ${unplaced.join(", ")}`);
+    }
+  } finally {
+    module.__aardvarkDylinkReplay = null;
+  }
+  for (const [handle, name] of state.handles) {
+    const dso = ldso.loadedLibsByName[name];
+    if (dso) {
+      ldso.loadedLibsByHandle[handle] = dso;
+    }
+  }
+  for (const [index, sym, owner] of state.funcSlots) {
+    if (typeof module.wasmTable.get(index) === "function") {
+      continue;
+    }
+    const fn = ldso.loadedLibsByName[owner || "__main__"]?.exports?.[sym];
+    if (typeof fn !== "function") {
+      throw new Error(`[dylink] cannot resolve ${sym} for function table slot ${index}`);
+    }
+    setTableSlot(module, index, fn);
+  }
+  module.reportUndefinedSymbols?.();
+  return replayed;
+}
+
 function defaultSnapshotDeserializer(value) {
   if (value === null || value === undefined) {
     return value;
@@ -1915,6 +2193,7 @@ export async function loadPyRunnerPyodide(options = {}) {
   if (!api) {
     throw new Error("Pyodide module did not expose API");
   }
+  installDylinkSnapshotHooks(module);
 
   const filesystemHostHooks = Object.freeze({
     setPolicy: (policy) => setFilesystemPolicy(Module, policy || {}),
@@ -1989,6 +2268,7 @@ export async function loadPyRunnerPyodide(options = {}) {
         throw error;
       }
     }
+    reserveDylinkSnapshotState(module, snapshotConfig?.aardvarkDylink);
   }
 
   if ((!snapshotBytes || snapshotBytes.length === 0) && typeof module.callMain === "function") {
@@ -2266,7 +2546,11 @@ export async function loadPyRunnerPyodide(options = {}) {
     return newlyLoaded;
   }
 
-  function refreshDynlibs() {
+  function refreshDynlibs({ requireSnapshotDylibs = false } = {}) {
+    const replayed = replayDylinkSnapshotState(module, requireSnapshotDylibs);
+    if (replayed > 0 && globalThis.console?.info) {
+      globalThis.console.info("[dylink] restored snapshot side modules", replayed);
+    }
     const manifest = normalizeDynlibManifest(readDynlibManifest());
     const loaded = preloadDynlibs(manifest);
     if (loaded.length > 0 && globalThis.console?.info) {
@@ -3321,7 +3605,7 @@ globalThis.__aardvarkRegisterInputBuffer = function (name, buffer, metadata) {
         }
       }
       overlayEnsureMounted(module);
-      refreshDynlibs();
+      refreshDynlibs({ requireSnapshotDylibs: true });
       try {
         const sitePath = `${module.FS.sessionSitePackages}/numpy/__init__.py`;
         const stat = module.FS.analyzePath(sitePath);
@@ -3454,7 +3738,7 @@ globalThis.__aardvarkRegisterInputBuffer = function (name, buffer, metadata) {
         globalThis.console.warn("[snapshot] unable to patch expected keys", err);
       }
     }
-  return publicApi.makeMemorySnapshot({
+  return withDylinkSnapshotState(module, () => publicApi.makeMemorySnapshot({
     serializer(obj) {
       if (obj === null || obj === undefined) {
         return null;
@@ -3534,7 +3818,7 @@ globalThis.__aardvarkRegisterInputBuffer = function (name, buffer, metadata) {
       }
       return obj;
     },
-  });
+  }));
   };
 
   return publicApi;

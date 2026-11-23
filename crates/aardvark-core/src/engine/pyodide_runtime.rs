@@ -449,7 +449,19 @@ impl JsRuntime {
             let func = Local::<Function>::try_from(value).map_err(|_| {
                 PyRunnerError::Execution("__pyRunnerPrepareDynlibs is not a function".into())
             })?;
-            let _ = func.call(scope, global.into(), &[]);
+            // A failed side-module replay after a warm restore leaves the heap
+            // pointing at missing code, so it must not be swallowed.
+            v8::tc_scope!(let try_catch, scope);
+            if func.call(try_catch, global.into(), &[]).is_none() {
+                let message = try_catch
+                    .exception()
+                    .and_then(|value| value.to_string(try_catch))
+                    .map(|s| s.to_rust_string_lossy(try_catch))
+                    .unwrap_or_else(|| "unknown exception".to_owned());
+                return Err(PyRunnerError::Execution(format!(
+                    "preparing dynamic libraries failed: {message}"
+                )));
+            }
             Ok(())
         })
     }
@@ -526,23 +538,16 @@ impl JsRuntime {
                 PyRunnerError::Execution(format!("installing JSON result helper failed: {err}"))
             })?;
 
-            let run_key = v8::String::new(scope, "runPython").ok_or_else(|| {
-                PyRunnerError::Execution("failed to allocate runPython key".into())
+            super::python_entrypoint::run_python_entrypoint_script(
+                scope,
+                pyodide,
+                PYTHON_ENTRYPOINT_HELPER,
+            )
+            .map_err(|err| {
+                PyRunnerError::Execution(format!(
+                    "installing Python entrypoint helper failed: {err}"
+                ))
             })?;
-            let run_value = pyodide.get(scope, run_key.into()).ok_or_else(|| {
-                PyRunnerError::Execution("pyodide.runPython is not available".into())
-            })?;
-            let run_fn = Local::<Function>::try_from(run_value).map_err(|_| {
-                PyRunnerError::Execution("pyodide.runPython is not a function".into())
-            })?;
-            let script = v8::String::new(scope, PYTHON_ENTRYPOINT_HELPER).ok_or_else(|| {
-                PyRunnerError::Execution("failed to allocate sys.path script".into())
-            })?;
-            run_fn
-                .call(scope, pyodide.into(), &[script.into()])
-                .ok_or_else(|| {
-                    PyRunnerError::Execution("installing Python entrypoint helper failed".into())
-                })?;
 
             Ok(())
         })?;

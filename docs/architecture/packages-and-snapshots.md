@@ -59,6 +59,44 @@ flowchart TD
     SnapshotTrigger -- no --> End[Skip capture]
 ```
 
+### Native extensions (`.so` side modules)
+
+Packages such as numpy and pandas load WebAssembly side modules with `dlopen`.
+Each side module owns a wasm instance and a range of indirect-function-table
+slots, and neither is part of the heap image. The heap still holds pointers
+into both: table indices for C function pointers, and data addresses relative
+to each module's memory base. A restore that only copies the heap leaves those
+pointers dangling (`table index is out of bounds` or `null function`).
+
+So a snapshot also records the dynamic-linking state:
+
+- every side module in load order, with its memory base, table base, sizes and
+  `RTLD_GLOBAL` flag;
+- the `dlopen` handles that point at each module;
+- the GOT (resolved data addresses and function-table indices) and, for each
+  function entry, which module exports the function;
+- the function-table length.
+
+It travels inside the snapshot header next to Pyodide's own hiwire state.
+
+On restore:
+
+1. Right after the heap is copied in, the table is grown to its recorded
+   length and the recorded GOT values are preset. Nothing allocated later can
+   take a slot that the heap already points at.
+2. Once the overlay has put the `.so` files back on the filesystem, every side
+   module is re-instantiated at its recorded memory and table base, in the
+   original order. The patched Emscripten loader keeps the restored heap bytes
+   over the module's initial data, and skips relocations and constructors,
+   which already ran before the snapshot.
+3. `dlopen` handles are re-attached, and any GOT function slot that is still
+   empty is refilled from its exporting module.
+
+The loader hooks are part of the patched Pyodide glue that staging writes, so
+this requires a distribution staged with adapter version 2 or later. A replay
+that can't find a module's file, or finds a module whose size changed, fails
+the restore instead of running with a broken heap.
+
 **Limitations**
 
 - Overlay hydration currently assumes a single overlay catalog per overlay cache root. Stale entries are ignored on fingerprint mismatch, but hosts must still coordinate manual pruning when deleting blobs out of band.

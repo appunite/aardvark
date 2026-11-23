@@ -18,7 +18,7 @@ Enable `pyodide-staging` in setup tools that need to prepare runtime assets:
 
 ```toml
 [dependencies]
-aardvark-core = { version = "=0.3.0", features = ["pyodide-staging"] }
+aardvark-core = { version = "=0.3.1", features = ["pyodide-staging"] }
 ```
 
 ## Preparing [Pyodide](https://pyodide.org/) assets
