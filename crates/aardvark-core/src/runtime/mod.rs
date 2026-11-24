@@ -588,8 +588,10 @@ impl AardvarkRuntime {
     ) -> Diagnostics {
         let mut diagnostics = if let Some(out) = output {
             Diagnostics {
-                stdout: out.stdout.clone(),
-                stderr: out.stderr.clone(),
+                // Python-side capture is bounded only by the guest's memory;
+                // keep what reaches hosts to the console cap.
+                stdout: crate::engine::truncate_captured(&out.stdout),
+                stderr: crate::engine::truncate_captured(&out.stderr),
                 exception: if out.exception_type.is_some()
                     || out.exception_value.is_some()
                     || out.traceback.is_some()

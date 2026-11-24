@@ -47,7 +47,11 @@ impl AardvarkRuntime {
             Some(guard) => guard.complete(self.engine_mut().js_mut()),
             None => false,
         } | std::mem::take(&mut self.cleanup_overran);
-        self.engine_mut().js_mut().set_memory_limit(None);
+        {
+            let js = self.engine_mut().js_mut();
+            js.set_memory_limit(None);
+            js.set_array_buffer_allowance(None);
+        }
         if cleanup_overran {
             warn!(
                 target: "aardvark::budget",
@@ -120,8 +124,12 @@ impl AardvarkRuntime {
         {
             let js = self.engine_mut().js_mut();
             let _ = js.take_memory_limit_denials();
+            let _ = js.take_array_buffer_denials();
             let _ = js.take_heap_limit_hit();
             js.set_memory_limit(memory_limit_bytes);
+            // ArrayBuffers live outside both the V8 heap and WebAssembly
+            // memory: the same per-call amount caps their growth.
+            js.set_array_buffer_allowance(memory_limit_bytes);
         }
         let mut watchdog = self.arm_watchdog(limits.wall_ms);
         let cpu_start_ns = thread_cpu_time_ns();
@@ -149,11 +157,13 @@ impl AardvarkRuntime {
             if heap_limit_hit {
                 js.cancel_terminate_execution();
             }
-            (
-                js.take_memory_limit_denials(),
-                heap_limit_hit,
-                js.tracked_memory_bytes(),
-            )
+            let mut memory_denials = js.take_memory_limit_denials();
+            if js.take_array_buffer_denials() > 0 {
+                // Recorded as a denial of the cap itself; the requested size
+                // isn't reported by V8's allocator.
+                memory_denials.push(memory_limit_bytes.unwrap_or(u64::MAX));
+            }
+            (memory_denials, heap_limit_hit, js.tracked_memory_bytes())
         };
         // A refused grow fails the call even if the guest caught the
         // MemoryError; memory that got past the guard (e.g. a guest module's

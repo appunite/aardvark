@@ -48,6 +48,18 @@ def handler():
         held.append(bytearray(mib * 1024 * 1024))
     elif mode == "new_memory":
         js.eval(f"new WebAssembly.Memory({{ initial: {mib * 16} }})")
+    elif mode == "array_buffers":
+        # Host-side ArrayBuffers, outside both the JS heap and WebAssembly
+        # memory, caught one by one.
+        for _ in range(mib // 64):
+            try:
+                held.append(js.ArrayBuffer.new(64 * 1024 * 1024))
+            except Exception:
+                pass
+    elif mode == "print_flood":
+        line = "x" * 1023
+        for _ in range(mib * 1024):
+            print(line)
     elif mode == "js_heap":
         js.eval("const hoard = []; for (;;) { hoard.push(new Array(1 << 16).fill(Math.random())); }")
     return json.dumps({"caught": False, "held": len(held)})
@@ -198,4 +210,28 @@ fn a_js_heap_bomb_ends_the_call_instead_of_the_process() {
     let mut runtime = runtime(Some(256));
     let outcome = call(&mut runtime, "js_heap", 0, None);
     assert_heap_limit(&outcome, 256);
+}
+
+#[test]
+fn array_buffers_past_heap_mb_fail_the_call() {
+    let mut runtime = runtime(None);
+    let cap = cap_with_headroom(&mut runtime, 64);
+    let outcome = call(&mut runtime, "array_buffers", 2048, Some(cap));
+    assert_heap_limit(&outcome, cap);
+    let after = call(&mut runtime, "python", 16, Some(cap));
+    assert_eq!(payload(&after)["caught"], false, "the runtime still serves");
+}
+
+#[test]
+fn captured_output_is_capped() {
+    let mut runtime = runtime(None);
+    let outcome = call(&mut runtime, "print_flood", 8, None);
+    payload(&outcome);
+    let stdout = &outcome.diagnostics.stdout;
+    assert!(
+        stdout.len() <= 1024 * 1024 + 64,
+        "{} bytes of stdout",
+        stdout.len()
+    );
+    assert!(stdout.ends_with("[aardvark: output truncated]\n"));
 }

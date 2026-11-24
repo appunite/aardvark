@@ -10,8 +10,10 @@
 // with non-writable, non-configurable wrappers; every intrinsic the wrappers
 // use is captured here first, so later monkeypatching cannot steer them.
 //
-// The returned function reports the total size of every tracked memory, which
-// the host checks again after each call.
+// Memories exported by modules instantiated through `WebAssembly.Instance` or
+// `WebAssembly.instantiate` are tracked as well. The returned function reports
+// the total size of every tracked memory, which the host checks again after
+// each call.
 (function installMemoryGuard(allow) {
   "use strict";
   const PAGE_BYTES = 65536;
@@ -31,6 +33,11 @@
   const weakRefDeref = WeakRef.prototype.deref;
   const RangeErrorCtor = RangeError;
   const TypeErrorCtor = TypeError;
+  const NativeInstance = WebAssembly.Instance;
+  const nativeInstantiate = WebAssembly.instantiate;
+  const exportsGetter = Object.getOwnPropertyDescriptor(NativeInstance.prototype, "exports").get;
+  const objectValues = Object.values;
+  const promiseThen = Promise.prototype.then;
   const tracked = [];
 
   function bytesOf(memory) {
@@ -54,6 +61,64 @@
       }
     }
     return total;
+  }
+
+  // Memories a guest module exports are tracked too, so the host's
+  // after-call total sees their growth even when it happens through the
+  // `memory.grow` instruction rather than this wrapper.
+  function isMemory(value) {
+    try {
+      reflectApply(bufferGetter, value, []);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function isTracked(memory) {
+    for (let i = 0; i < tracked.length; i++) {
+      if (reflectApply(weakRefDeref, tracked[i], []) === memory) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function trackExports(instance) {
+    let exports;
+    try {
+      exports = reflectApply(exportsGetter, instance, []);
+    } catch (error) {
+      return;
+    }
+    const values = objectValues(exports);
+    for (let i = 0; i < values.length; i++) {
+      const value = values[i];
+      if (isMemory(value) && !isTracked(value)) {
+        tracked.push(new WeakRefCtor(value));
+      }
+    }
+  }
+
+  function Instance(module, imports) {
+    if (new.target === undefined) {
+      throw new TypeErrorCtor("WebAssembly.Instance must be invoked with 'new'");
+    }
+    const instance = reflectConstruct(NativeInstance, [module, imports], new.target);
+    trackExports(instance);
+    return instance;
+  }
+
+  function instantiate(source, imports) {
+    const pending = reflectApply(nativeInstantiate, WebAssembly, [source, imports]);
+    return reflectApply(promiseThen, pending, [
+      function (result) {
+        // `instantiate(module)` resolves to an Instance, `instantiate(bytes)`
+        // to `{ module, instance }`.
+        trackExports(result instanceof NativeInstance ? result : result.instance);
+        return result;
+      },
+    ]);
   }
 
   function grow(delta) {
@@ -98,6 +163,10 @@
   defineProperty(NativeMemory.prototype, "constructor", { value: Memory, ...locked });
   defineProperty(NativeMemory.prototype, "grow", { value: grow, ...locked });
   defineProperty(WebAssembly, "Memory", { value: Memory, ...locked });
+  defineProperty(Instance, "prototype", { value: NativeInstance.prototype, ...locked });
+  defineProperty(NativeInstance.prototype, "constructor", { value: Instance, ...locked });
+  defineProperty(WebAssembly, "Instance", { value: Instance, ...locked });
+  defineProperty(WebAssembly, "instantiate", { value: instantiate, ...locked });
 
   return function trackedMemoryBytes() {
     return trackedBytes(undefined);

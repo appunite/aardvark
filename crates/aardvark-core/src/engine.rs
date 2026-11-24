@@ -13,6 +13,7 @@ use crate::network::{NetworkContactRecord, NetworkDeniedRecord, NetworkDenyReaso
 use once_cell::sync::OnceCell;
 use parking_lot::RwLock;
 use v8::{self, ContextScope, Local, Module, Object, PinScope, Uint8Array, Value};
+mod array_buffer_budget;
 mod bootstrap_sources;
 mod filesystem;
 mod host_callbacks;
@@ -88,8 +89,15 @@ fn copy_typed_array(array: Local<Uint8Array>) -> Vec<u8> {
 }
 
 /// Ensure the global V8 platform is initialized exactly once.
+/// V8 flags set once, before the platform starts. `--wasm-max-mem-pages`
+/// caps every WebAssembly memory, memory64 included, at 4 GiB: wasm32's
+/// ceiling, so Pyodide's own heap is unaffected, but a guest-compiled
+/// memory64 module can't declare more.
+const V8_FLAGS: &str = "--wasm-max-mem-pages=65536";
+
 fn init_v8() {
     V8_PLATFORM.get_or_init(|| {
+        v8::V8::set_flags_from_string(V8_FLAGS);
         let platform = v8::new_default_platform(0, false);
         let shared = platform.make_shared();
         v8::V8::initialize_platform(shared.clone());
@@ -106,6 +114,8 @@ pub struct JsRuntime {
     /// Target of the isolate's near-heap-limit callback. Declared after
     /// `isolate` so it is dropped after the isolate that points at it.
     heap_guard: Option<Box<HeapGuard>>,
+    /// Live ArrayBuffer bytes of this isolate and the per-call allowance.
+    array_buffers: Arc<array_buffer_budget::ArrayBufferBudget>,
 }
 
 /// State shared with the near-heap-limit callback of an isolate created with
@@ -197,8 +207,9 @@ impl JsRuntime {
     pub fn with_heap_limit(max_heap_bytes: Option<usize>) -> Result<Self> {
         init_v8();
         let context_state = Rc::new(RuntimeContext::new());
-        let mut create_params =
-            v8::CreateParams::default().array_buffer_allocator(v8::new_default_allocator());
+        let array_buffers = array_buffer_budget::ArrayBufferBudget::new();
+        let mut create_params = v8::CreateParams::default()
+            .array_buffer_allocator(array_buffer_budget::allocator(&array_buffers));
         if let Some(max) = max_heap_bytes {
             create_params = create_params.heap_limits(0, max);
         }
@@ -227,6 +238,7 @@ impl JsRuntime {
             context: global,
             context_state,
             heap_guard,
+            array_buffers,
         };
         runtime.install_polyfills()?;
         Ok(runtime)
@@ -238,6 +250,20 @@ impl JsRuntime {
     /// and recorded for [`JsRuntime::take_memory_limit_denials`].
     pub fn set_memory_limit(&self, limit_bytes: Option<u64>) {
         self.context_state.memory_limit_bytes.set(limit_bytes);
+    }
+
+    /// Lets live ArrayBuffer bytes grow by at most `allowance_bytes` from now
+    /// (`None` lifts the cap). Allocations past it fail with a `RangeError`
+    /// and are counted for [`JsRuntime::take_array_buffer_denials`].
+    pub fn set_array_buffer_allowance(&self, allowance_bytes: Option<u64>) {
+        self.array_buffers.set_allowance(
+            allowance_bytes.map(|bytes| usize::try_from(bytes).unwrap_or(usize::MAX)),
+        );
+    }
+
+    /// ArrayBuffer allocations refused since the last call.
+    pub fn take_array_buffer_denials(&self) -> usize {
+        self.array_buffers.take_denials()
     }
 
     /// Consumes the WebAssembly memory requests refused since the last call,
@@ -504,6 +530,43 @@ impl JsRuntime {
     }
 }
 
+/// Most bytes of guest console output (stdout, stderr) kept per invocation.
+pub(crate) const MAX_CAPTURED_OUTPUT_BYTES: usize = 1024 * 1024;
+const TRUNCATION_MARKER: &str = "\n[aardvark: output truncated]\n";
+
+/// Append a console line to a capture buffer, stopping at
+/// [`MAX_CAPTURED_OUTPUT_BYTES`] with a single truncation marker.
+fn append_capped(buffer: &mut String, message: &str) {
+    if message.is_empty() || buffer.ends_with(TRUNCATION_MARKER) {
+        return;
+    }
+    let room = MAX_CAPTURED_OUTPUT_BYTES.saturating_sub(buffer.len());
+    if message.len() < room {
+        buffer.push_str(message);
+        buffer.push('\n');
+    } else {
+        let mut cut = room;
+        while cut > 0 && !message.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        buffer.push_str(&message[..cut]);
+        buffer.push_str(TRUNCATION_MARKER);
+    }
+}
+
+/// `text` cut to [`MAX_CAPTURED_OUTPUT_BYTES`] on a character boundary, with
+/// the truncation marker when anything was dropped.
+pub(crate) fn truncate_captured(text: &str) -> String {
+    if text.len() <= MAX_CAPTURED_OUTPUT_BYTES {
+        return text.to_owned();
+    }
+    let mut cut = MAX_CAPTURED_OUTPUT_BYTES;
+    while cut > 0 && !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}{TRUNCATION_MARKER}", &text[..cut])
+}
+
 /// Compile and run `source`, returning its completion value.
 fn eval_script<'s>(
     scope: &mut PinScope<'s, '_>,
@@ -628,21 +691,11 @@ impl RuntimeContext {
     }
 
     fn append_stdout(&self, message: &str) {
-        if message.is_empty() {
-            return;
-        }
-        let mut stdout = self.stdout_log.borrow_mut();
-        stdout.push_str(message);
-        stdout.push('\n');
+        append_capped(&mut self.stdout_log.borrow_mut(), message);
     }
 
     fn append_stderr(&self, message: &str) {
-        if message.is_empty() {
-            return;
-        }
-        let mut stderr = self.stderr_log.borrow_mut();
-        stderr.push_str(message);
-        stderr.push('\n');
+        append_capped(&mut self.stderr_log.borrow_mut(), message);
     }
 
     fn take_stdout(&self) -> String {
@@ -757,6 +810,31 @@ impl RuntimeContext {
 mod tests {
     use super::*;
 
+    mod captured_output {
+        use super::*;
+
+        #[test]
+        fn console_capture_stops_at_the_cap_with_one_marker() {
+            let mut buffer = String::new();
+            let line = "x".repeat(1000);
+            for _ in 0..5_000 {
+                append_capped(&mut buffer, &line);
+            }
+            assert!(buffer.len() <= MAX_CAPTURED_OUTPUT_BYTES + TRUNCATION_MARKER.len());
+            assert!(buffer.ends_with(TRUNCATION_MARKER));
+            assert_eq!(buffer.matches("output truncated").count(), 1);
+        }
+
+        #[test]
+        fn truncation_respects_character_boundaries() {
+            let text = "ą".repeat(MAX_CAPTURED_OUTPUT_BYTES);
+            let cut = truncate_captured(&text);
+            assert!(cut.ends_with(TRUNCATION_MARKER));
+            assert!(cut.len() <= MAX_CAPTURED_OUTPUT_BYTES + TRUNCATION_MARKER.len());
+            assert_eq!(truncate_captured("short"), "short");
+        }
+    }
+
     mod memory_guard {
         use super::*;
 
@@ -804,6 +882,70 @@ mod tests {
                 .expect("within the limit");
             assert!(runtime.execute_script("grow.js", "s.grow(1);").is_err());
             assert_eq!(runtime.tracked_memory_bytes(), Some(2 * PAGE));
+        }
+
+        #[test]
+        fn array_buffers_past_the_allowance_throw_and_are_counted() {
+            let mut runtime = JsRuntime::new().expect("create runtime");
+            runtime
+                .execute_script("baseline.js", "globalThis.keep = new ArrayBuffer(8 << 20);")
+                .expect("no allowance outside a call");
+            runtime.set_array_buffer_allowance(Some(4 << 20));
+            runtime
+                .execute_script("small.js", "globalThis.a = new ArrayBuffer(1 << 20);")
+                .expect("within the allowance, despite the 8 MiB baseline");
+            assert!(runtime
+                .execute_script("big.js", "globalThis.b = new ArrayBuffer(16 << 20);")
+                .is_err());
+            // V8 retries a refused allocation after collecting garbage.
+            assert!(runtime.take_array_buffer_denials() >= 1);
+            runtime.set_array_buffer_allowance(None);
+            runtime
+                .execute_script("after.js", "globalThis.c = new ArrayBuffer(16 << 20);")
+                .expect("allowance lifted");
+        }
+
+        /// A guest module that defines and exports its own memory is tracked,
+        /// so growth through the `memory.grow` instruction shows in the total.
+        #[test]
+        fn exported_memories_of_guest_modules_are_tracked() {
+            let mut runtime = JsRuntime::new().expect("create runtime");
+            // (module (memory (export "m") 1) (func (export "g") (result i32)
+            //   i32.const 3 memory.grow))
+            runtime
+                .execute_script(
+                    "module.js",
+                    "const bytes = new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,96,0,1,127,3,2,1,0,\
+                     5,3,1,0,1,7,9,2,1,109,2,0,1,103,0,0,10,8,1,6,0,65,3,64,0,11]);\
+                     globalThis.inst = new WebAssembly.Instance(new WebAssembly.Module(bytes), {});",
+                )
+                .expect("instantiate");
+            assert_eq!(runtime.tracked_memory_bytes(), Some(PAGE));
+            runtime
+                .execute_script("grow.js", "inst.exports.g();")
+                .expect("grow by instruction");
+            assert_eq!(runtime.tracked_memory_bytes(), Some(4 * PAGE));
+        }
+
+        /// memory64 modules can't declare more than wasm32's 4 GiB.
+        #[test]
+        fn memory64_is_capped_at_four_gib() {
+            let mut runtime = JsRuntime::new().expect("create runtime");
+            // Control: memory64 itself works, so the refusal below is the cap.
+            runtime
+                .execute_script(
+                    "mem64-small.js",
+                    "new WebAssembly.Instance(new WebAssembly.Module(\
+                     new Uint8Array([0,97,115,109,1,0,0,0,5,3,1,4,1])), {});",
+                )
+                .expect("a 1-page memory64 instantiates");
+            // (module (memory i64 70000)): 70000 pages is past 65536.
+            let result = runtime.execute_script(
+                "mem64.js",
+                "new WebAssembly.Instance(new WebAssembly.Module(\
+                 new Uint8Array([0,97,115,109,1,0,0,0,5,5,1,4,240,162,4])), {});",
+            );
+            assert!(result.is_err(), "a 70000-page memory64 must be refused");
         }
 
         #[test]

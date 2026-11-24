@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::asset_store::Asset;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 use v8::{self, FunctionCallbackArguments, PinScope, ReturnValue, Uint8Array, Value};
 
 use super::RuntimeContext;
@@ -153,7 +153,7 @@ pub(super) fn record_buffer_event_callback(
         }
     }
 
-    info!(
+    debug!(
         target: "aardvark::buffers",
         buffers_event = event.as_str(),
         buffers_id = buffer_id.as_str(),
@@ -242,15 +242,14 @@ pub(super) fn native_log_callback(
         }
     }
 
+    // Guest-controlled text: at `debug`, so a print loop can't flood the
+    // host's logs; the capture buffers above keep it (capped) for the host.
     if !message.is_empty() {
-        match stream {
-            ConsoleStream::Stdout => {
-                info!(target: "aardvark::js", "{}", message);
-            }
-            ConsoleStream::Stderr => {
-                warn!(target: "aardvark::js", "{}", message);
-            }
-        }
+        let stream = match stream {
+            ConsoleStream::Stdout => "stdout",
+            ConsoleStream::Stderr => "stderr",
+        };
+        debug!(target: "aardvark::js", stream, "{}", message);
     }
     rv.set(v8::undefined(scope).into());
 }
