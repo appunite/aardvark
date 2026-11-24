@@ -18,7 +18,7 @@ Enable `pyodide-staging` in setup tools that need to prepare runtime assets:
 
 ```toml
 [dependencies]
-aardvark-core = { version = "=0.3.1", features = ["pyodide-staging"] }
+aardvark-core = { version = "=0.4.0", features = ["pyodide-staging"] }
 ```
 
 ## Preparing [Pyodide](https://pyodide.org/) assets
@@ -240,6 +240,7 @@ Key knobs via `IsolateConfig` / `PyRuntimeConfig`:
 - `snapshot.load_from` / `snapshot.save_to` – warm snapshot management.
 - `cleanup` – choose between full cleanup, shared-buffer-only scrubbing, or no automatic cleanup. `IsolateConfig::default()` uses full cleanup; latency-sensitive warmed hosts should opt into `CleanupMode::SharedBuffersOnly` only when retaining Python module state between calls is acceptable for that bundle/tenant boundary.
 - `budget_override` – clamp descriptor limits globally.
+- `js_heap_limit_mb` – cap each isolate's JS heap; nearing it ends the call with `HeapLimitExceeded` instead of aborting the process. Per call, `InvocationLimits::heap_mb` caps WebAssembly memory (Pyodide's heap); see [Sandboxing](../architecture/sandboxing.md#memory).
 - `host_capabilities` – capability allowlist applied to every call unless a manifest narrows it further.
 - `pyodide_dist_dir` – override the staged Aardvark Pyodide distribution path
   without relying on process-wide environment variables.

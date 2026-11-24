@@ -125,6 +125,7 @@ struct CollectedDiagnostics {
     py_heap_kib: Option<u64>,
     rss_kib_before: Option<u64>,
     rss_kib_after: Option<u64>,
+    wasm_memory_kib: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -614,6 +615,7 @@ impl AardvarkRuntime {
         diagnostics.py_heap_kib = collected.py_heap_kib;
         diagnostics.rss_kib_before = collected.rss_kib_before;
         diagnostics.rss_kib_after = collected.rss_kib_after;
+        diagnostics.wasm_memory_kib = collected.wasm_memory_kib;
         diagnostics
     }
 

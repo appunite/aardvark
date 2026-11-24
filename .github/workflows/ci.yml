@@ -65,3 +65,32 @@ jobs:
 
       - name: Docs build
         run: cargo doc --no-deps -p aardvark-core
+
+  integration:
+    # Sandbox tests that need a staged Pyodide distribution (~370 MB): the
+    # per-call memory limits and warm snapshots with native extensions. One
+    # test at a time, since each starts its own Pyodide isolates.
+    name: Integration (staged Pyodide)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
+
+      - name: Cache cargo builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Stage the Pyodide distribution
+        run: cargo run -p aardvark-cli -- assets stage --variant full
+
+      - name: Memory limits and warm snapshots
+        run: >-
+          cargo test -p integration-tests
+          --test memory_limit --test warm_snapshot_native_extensions
+          -- --test-threads=1

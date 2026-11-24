@@ -80,6 +80,15 @@ impl AardvarkRuntime {
             js.clear_filesystem_events();
         }
 
+        // `heap_mb` also caps the context's WebAssembly memory (Pyodide's
+        // heap) while the call runs; see `js/memory_guard.js`.
+        let memory_limit_bytes = limits.heap_mb.map(|mb| mb.saturating_mul(1024 * 1024));
+        {
+            let js = self.engine_mut().js_mut();
+            let _ = js.take_memory_limit_denials();
+            let _ = js.take_heap_limit_hit();
+            js.set_memory_limit(memory_limit_bytes);
+        }
         let mut watchdog = self.arm_watchdog(limits.wall_ms);
         let cpu_start_ns = thread_cpu_time_ns();
 
@@ -97,6 +106,28 @@ impl AardvarkRuntime {
         } else {
             false
         };
+        let (memory_denials, heap_limit_hit, wasm_memory_bytes) = {
+            let js = self.engine_mut().js_mut();
+            js.set_memory_limit(None);
+            let heap_limit_hit = js.take_heap_limit_hit();
+            if heap_limit_hit {
+                js.cancel_terminate_execution();
+            }
+            (
+                js.take_memory_limit_denials(),
+                heap_limit_hit,
+                js.tracked_memory_bytes(),
+            )
+        };
+        // A refused grow fails the call even if the guest caught the
+        // MemoryError; memory that got past the guard (e.g. a guest module's
+        // own `memory.grow`) fails it after the fact.
+        let memory_limit_exceeded = heap_limit_hit
+            || !memory_denials.is_empty()
+            || matches!(
+                (memory_limit_bytes, wasm_memory_bytes),
+                (Some(limit), Some(total)) if total > limit
+            );
 
         let cpu_end_ns = thread_cpu_time_ns();
         let cpu_ms_used = match (cpu_start_ns, cpu_end_ns) {
@@ -153,6 +184,7 @@ impl AardvarkRuntime {
             prepare_ms: None,
             cleanup_ms: None,
             py_heap_kib: Some(heap_used_bytes / 1024),
+            wasm_memory_kib: wasm_memory_bytes.map(|bytes| bytes / 1024),
             rss_kib_before: None,
             rss_kib_after: None,
         };
@@ -176,6 +208,35 @@ impl AardvarkRuntime {
                 ExecutionOutcome::failure(
                     FailureKind::TimeoutExceeded {
                         requested_ms: limits.wall_ms.unwrap_or_default(),
+                    },
+                    diagnostics,
+                ),
+                cleanup_entrypoint,
+                cleanup_mode,
+            );
+        }
+        if memory_limit_exceeded {
+            warn!(
+                target: "aardvark::budget",
+                runtime_id = self.runtime_id_str(),
+                entrypoint = descriptor.entrypoint(),
+                limits.heap_mb = limits.heap_mb.unwrap_or(0),
+                memory.denials = memory_denials.len(),
+                memory.wasm_bytes = wasm_memory_bytes.unwrap_or(0),
+                heap.limit_hit = heap_limit_hit,
+                "memory limit exceeded"
+            );
+            let diagnostics = Self::make_diagnostics(
+                strategy_result.as_ref().ok().map(|res| &res.execution),
+                &collected,
+            );
+            return self.finish_with_cleanup(
+                ExecutionOutcome::failure(
+                    FailureKind::HeapLimitExceeded {
+                        requested_mb: limits
+                            .heap_mb
+                            .or(self.config.js_heap_limit_mb)
+                            .unwrap_or_default(),
                     },
                     diagnostics,
                 ),
