@@ -53,6 +53,10 @@ pub struct AardvarkRuntime {
     pending_reset_summary: Option<ResetSummary>,
     environment_ready: bool,
     current_bundle: Option<CurrentBundleState>,
+    /// Armed between a call's watchdog and the end of its cleanup.
+    cleanup_watchdog: Option<WallClockGuard>,
+    /// The cleanup deadline was missed before a post-call reset closed it.
+    cleanup_overran: bool,
 }
 
 trait LanguageEngine {

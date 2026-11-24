@@ -3114,12 +3114,15 @@ function drainSharedBuffersUnchecked() {
         buffer: entry.view,
         metadata: entry.metadata ?? null,
       });
+      // Forget the entry first: `destroy` may be guest-defined, and a
+      // destroy that never returns (and gets terminated) must not run again
+      // on the next release.
+      sharedBufferState.map.delete(id);
       try {
         entry.proxy?.destroy?.();
       } catch (error) {
         console.warn("[buffers] failed to destroy proxy for", id, error);
       }
-      sharedBufferState.map.delete(id);
     }
     return result;
   }
@@ -3133,12 +3136,15 @@ function releaseSharedBuffersUnchecked(ids) {
       if (!entry) {
         continue;
       }
+      // Forget the entry first: `destroy` may be guest-defined, and a
+      // destroy that never returns (and gets terminated) must not run again
+      // on the next release.
+      sharedBufferState.map.delete(id);
       try {
         entry.proxy?.destroy?.();
       } catch (error) {
         console.warn("[buffers] failed to destroy proxy for", id, error);
       }
-      sharedBufferState.map.delete(id);
     }
   }
 

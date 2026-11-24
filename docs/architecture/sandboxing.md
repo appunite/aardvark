@@ -32,6 +32,7 @@ flowchart TD
 - The JS shim tracks writes under `/session` via virtual `FS` hooks. Hosts can choose `read` or `readWrite` mode per manifest.
 - When writable mode is enabled, an optional quota (bytes written) can be set. Attempting to write beyond the quota raises `FilesystemPolicyError` inside Python.
 - On every invocation finish the shim enumerates new/changed files and deletes them to leave the session clean.
+- Pyodide's loader fetches distribution files through the native fetch hook (`__pyRunnerNativeFetch`), which guest code can also call. It serves a local file only if the URL's path segments contain no `.`, `..`, `%` or separators and the file canonicalizes to a regular file inside the staged distribution (no traversal, no symlink escapes, no `/proc` or device files). Any other URL goes through the network policy.
 
 ```mermaid
 flowchart LR
@@ -91,12 +92,13 @@ sequenceDiagram
 
 - Memory never shrinks. A call that grew the heap leaves it grown, and later calls run within the same total. Hosts that need a fresh baseline should recycle the isolate after a `HeapLimitExceeded`.
 - A guest that compiles its own WebAssembly module, with a memory it declares itself (not one created through `WebAssembly.Memory`), is not tracked. That memory is bounded only by the wasm32 limit of 4 GiB. Run untrusted workloads under an OS-level memory limit as the backstop.
-- `ArrayBuffer` allocations from JavaScript are not capped per call; the JS heap limit and an OS-level limit bound them.
+- `ArrayBuffer` allocations from JavaScript are not capped. Their backing stores live outside the V8 heap, so `js_heap_limit_mb` doesn't bound them either; only an OS-level limit on the process does.
 
 ## CPU and Wall Watchdogs
 
 - Wall-clock limits rely on the JS engine’s interrupt mechanism. Once triggered, the Python handler receives a `RuntimeError` and execution stops.
 - CPU budgeting is handled in Rust using per-thread CPU timers. The runtime aborts post-execution if the measured CPU milliseconds exceed the limit.
+- The work after the call (diagnostics, shared-buffer release, module cleanup) can reach guest-defined JS, such as a published object's `destroy`. It runs under its own 2 s watchdog with the memory cap still in place. Missing that deadline terminates the cleanup and returns `PyRunnerError::TimeoutExceeded { requested_ms: 2000 }`. The runtime's state is then unknown, so recycle it; `BundlePool` keeps the isolate on an error.
 
 **Limitations**
 

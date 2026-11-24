@@ -89,8 +89,9 @@ jobs:
       - name: Stage the Pyodide distribution
         run: cargo run -p aardvark-cli -- assets stage --variant full
 
-      - name: Memory limits and warm snapshots
+      - name: Memory limits, guest host hooks and warm snapshots
         run: >-
           cargo test -p integration-tests
           --test memory_limit --test warm_snapshot_native_extensions
+          --test guest_host_hooks
           -- --test-threads=1
