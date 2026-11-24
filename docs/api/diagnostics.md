@@ -42,6 +42,7 @@ Treat adapter and other failures as infrastructure incidents. Policy violations 
 - `prepare_ms`, `queue_wait_ms`, and `cleanup_ms` mark the lifecycle phases around the call (see `docs/architecture/lifecycle.md`).
 - `reset` is populated when the runtime reapplies a warm snapshot; you get the reset mode (`RecreateEngine` vs `InPlace`), duration, and engine generation.
 - `py_heap_kib`, `rss_kib_before`, and `rss_kib_after` are best-effort memory readings (heap inside the guest and host RSS).
+- `wasm_memory_kib` is the total WebAssembly memory of the context after the call (Pyodide's heap). With `InvocationLimits::heap_mb` set, it never exceeds the cap on a successful call; see `docs/architecture/sandboxing.md`.
 
 ## Telemetry helper
 

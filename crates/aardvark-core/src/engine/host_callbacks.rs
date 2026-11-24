@@ -254,3 +254,22 @@ pub(super) fn native_log_callback(
     }
     rv.set(v8::undefined(scope).into());
 }
+
+/// The memory guard's native check (see `js/memory_guard.js`): returns whether
+/// the context's WebAssembly memories may grow to `args[0]` bytes in total.
+pub(super) fn memory_guard_callback(
+    scope: &mut PinScope<'_, '_>,
+    args: FunctionCallbackArguments<'_>,
+    mut rv: ReturnValue<'_, Value>,
+) {
+    let requested = args.get(0).number_value(scope).unwrap_or(f64::INFINITY);
+    let requested = if requested.is_finite() && requested >= 0.0 {
+        requested as u64
+    } else {
+        u64::MAX
+    };
+    let allowed = scope
+        .get_slot::<Rc<RuntimeContext>>()
+        .is_none_or(|context_state| context_state.allow_memory(requested));
+    rv.set_bool(allowed);
+}

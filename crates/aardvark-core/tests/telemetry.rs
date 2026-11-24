@@ -35,6 +35,7 @@ fn diagnostics_to_telemetry_maps_fields() {
         py_heap_kib: Some(2048),
         rss_kib_before: Some(4096),
         rss_kib_after: Some(6144),
+        wasm_memory_kib: Some(204800),
     };
 
     let telemetry: SandboxTelemetry = diagnostics.to_telemetry();

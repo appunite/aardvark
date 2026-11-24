@@ -78,6 +78,10 @@ pub struct Diagnostics {
     pub rss_kib_before: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rss_kib_after: Option<u64>,
+    /// Total WebAssembly memory of the context after the call (for Python,
+    /// Pyodide's heap).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm_memory_kib: Option<u64>,
 }
 
 impl Diagnostics {

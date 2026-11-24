@@ -79,6 +79,20 @@ sequenceDiagram
 - Only the `rawctx_buffers` capability exists today. Additional host APIs must come with their own capability names and enforcement using the same mechanism.
 - Capability denial currently surfaces as `RuntimeError`. Hosts needing structured errors can wrap the invocation result and inspect diagnostics.
 
+## Memory
+
+- `InvocationLimits::heap_mb` caps the context's WebAssembly memory for the call. For Python that is Pyodide's heap: every growth goes through `WebAssembly.Memory.prototype.grow`, which Aardvark replaces at context creation (`js/memory_guard.js`) with a check against the cap. A refused grow makes `malloc` fail, so Python raises `MemoryError`. The call then fails with `FailureKind::HeapLimitExceeded`, even if the handler caught the error.
+- The wrappers for `WebAssembly.Memory` and its `grow` are non-writable and non-configurable, and they call only intrinsics captured before guest code runs. The native check is passed into the guard's closure and never published on the global object, so a guest that reaches JavaScript (`import js`) cannot switch the cap off.
+- A guest cannot create a new `WebAssembly.Memory` that would push the context past the cap either. After every call, the runtime also adds up the tracked memories and fails the call if the total exceeds the cap (`Diagnostics::wasm_memory_kib` reports it).
+- `PyRuntimeConfig::js_heap_limit_mb` caps the JS heap. Nearing it terminates the running call (`HeapLimitExceeded`) instead of letting V8 abort the process.
+- `heap_mb` keeps its earlier meaning as well: the JS heap is compared with it before and after the call.
+
+**Limitations**
+
+- Memory never shrinks. A call that grew the heap leaves it grown, and later calls run within the same total. Hosts that need a fresh baseline should recycle the isolate after a `HeapLimitExceeded`.
+- A guest that compiles its own WebAssembly module, with a memory it declares itself (not one created through `WebAssembly.Memory`), is not tracked. That memory is bounded only by the wasm32 limit of 4 GiB. Run untrusted workloads under an OS-level memory limit as the backstop.
+- `ArrayBuffer` allocations from JavaScript are not capped per call; the JS heap limit and an OS-level limit bound them.
+
 ## CPU and Wall Watchdogs
 
 - Wall-clock limits rely on the JS engine’s interrupt mechanism. Once triggered, the Python handler receives a `RuntimeError` and execution stops.

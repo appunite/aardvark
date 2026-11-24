@@ -1,6 +1,6 @@
 //! Lightweight V8 runtime utilities.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -31,8 +31,8 @@ mod shared_buffers;
 mod snippets;
 
 use host_callbacks::{
-    asset_fetch_callback, filesystem_violation_callback, native_log_callback,
-    record_buffer_event_callback,
+    asset_fetch_callback, filesystem_violation_callback, memory_guard_callback,
+    native_log_callback, record_buffer_event_callback,
 };
 use native_fetch::native_fetch_callback;
 pub use output::ExecutionOutput;
@@ -103,6 +103,33 @@ pub struct JsRuntime {
     isolate: v8::OwnedIsolate,
     context: v8::Global<v8::Context>,
     context_state: Rc<RuntimeContext>,
+    /// Target of the isolate's near-heap-limit callback. Declared after
+    /// `isolate` so it is dropped after the isolate that points at it.
+    heap_guard: Option<Box<HeapGuard>>,
+}
+
+/// State shared with the near-heap-limit callback of an isolate created with
+/// a JS heap limit.
+struct HeapGuard {
+    handle: v8::IsolateHandle,
+    fired: std::sync::atomic::AtomicBool,
+}
+
+/// Headroom granted past the JS heap limit so a terminated call can unwind.
+const HEAP_LIMIT_HEADROOM_BYTES: usize = 32 * 1024 * 1024;
+
+extern "C" fn near_heap_limit_callback(
+    data: *mut std::ffi::c_void,
+    current_heap_limit: usize,
+    _initial_heap_limit: usize,
+) -> usize {
+    // SAFETY: `data` is the `HeapGuard` boxed in the `JsRuntime` that owns
+    // this isolate. The box never moves and is dropped after the isolate, so
+    // it outlives every invocation of this callback.
+    let guard = unsafe { &*(data as *const HeapGuard) };
+    guard.fired.store(true, std::sync::atomic::Ordering::SeqCst);
+    guard.handle.terminate_execution();
+    current_heap_limit.saturating_add(HEAP_LIMIT_HEADROOM_BYTES)
 }
 
 struct IsolateEntryGuard {
@@ -150,16 +177,43 @@ struct RuntimeContext {
     network_contacts: RwLock<Vec<NetworkContactRecord>>,
     network_denied: RwLock<Vec<NetworkDeniedRecord>>,
     filesystem_violations: RwLock<Vec<FilesystemViolationRecord>>,
+    /// Cap on total WebAssembly memory for the running invocation.
+    memory_limit_bytes: Cell<Option<u64>>,
+    /// Requested totals the memory guard refused.
+    memory_denials: RefCell<Vec<u64>>,
+    /// The guard's `trackedMemoryBytes` function.
+    memory_tracker: RefCell<Option<v8::Global<v8::Function>>>,
 }
 
 impl JsRuntime {
     /// Creates a new isolate with an empty context and basic polyfills.
     pub fn new() -> Result<Self> {
+        Self::with_heap_limit(None)
+    }
+
+    /// Creates a new isolate whose JS heap is capped at `max_heap_bytes`.
+    /// Nearing the cap terminates the running call instead of aborting the
+    /// process; [`JsRuntime::take_heap_limit_hit`] reports it.
+    pub fn with_heap_limit(max_heap_bytes: Option<usize>) -> Result<Self> {
         init_v8();
         let context_state = Rc::new(RuntimeContext::new());
-        let create_params =
+        let mut create_params =
             v8::CreateParams::default().array_buffer_allocator(v8::new_default_allocator());
+        if let Some(max) = max_heap_bytes {
+            create_params = create_params.heap_limits(0, max);
+        }
         let mut isolate = v8::Isolate::new(create_params);
+        let heap_guard = max_heap_bytes.map(|_| {
+            let guard = Box::new(HeapGuard {
+                handle: isolate.thread_safe_handle(),
+                fired: std::sync::atomic::AtomicBool::new(false),
+            });
+            isolate.add_near_heap_limit_callback(
+                near_heap_limit_callback,
+                &*guard as *const HeapGuard as *mut std::ffi::c_void,
+            );
+            guard
+        });
         isolate.add_message_listener(aardvark_v8_message_listener);
         isolate.set_slot(context_state.clone());
         let global = {
@@ -172,9 +226,49 @@ impl JsRuntime {
             isolate,
             context: global,
             context_state,
+            heap_guard,
         };
         runtime.install_polyfills()?;
         Ok(runtime)
+    }
+
+    /// Sets the cap on the total size of the context's WebAssembly memories
+    /// for the next invocation; `None` lifts it. Growth past the cap is
+    /// refused (Pyodide's `malloc` then fails and Python raises MemoryError)
+    /// and recorded for [`JsRuntime::take_memory_limit_denials`].
+    pub fn set_memory_limit(&self, limit_bytes: Option<u64>) {
+        self.context_state.memory_limit_bytes.set(limit_bytes);
+    }
+
+    /// Consumes the WebAssembly memory requests refused since the last call,
+    /// as requested total bytes.
+    pub fn take_memory_limit_denials(&self) -> Vec<u64> {
+        std::mem::take(&mut *self.context_state.memory_denials.borrow_mut())
+    }
+
+    /// Total bytes of the WebAssembly memories created through
+    /// `WebAssembly.Memory` in this context (Pyodide's heap among them).
+    pub fn tracked_memory_bytes(&mut self) -> Option<u64> {
+        let tracker = self.context_state.memory_tracker.borrow().clone()?;
+        self.with_context(|scope, context| {
+            let function = Local::new(scope, &tracker);
+            let receiver = context.global(scope);
+            v8::tc_scope!(let try_catch, scope);
+            Ok(function
+                .call(try_catch, receiver.into(), &[])
+                .and_then(|value| value.number_value(try_catch))
+                .map(|bytes| bytes as u64))
+        })
+        .ok()
+        .flatten()
+    }
+
+    /// Whether the JS heap limit terminated execution since the last call.
+    /// Clears the flag.
+    pub fn take_heap_limit_hit(&self) -> bool {
+        self.heap_guard
+            .as_ref()
+            .is_some_and(|guard| guard.fired.swap(false, std::sync::atomic::Ordering::SeqCst))
     }
 
     /// Reinitializes the isolate in place, keeping the outer runtime alive.
@@ -339,6 +433,24 @@ impl JsRuntime {
                 fs_violation_name.into(),
                 fs_violation_function.into(),
             );
+
+            // The memory guard receives its native check as an argument, so
+            // the check never appears on the global object.
+            let guard_installer =
+                eval_script(scope, "memory_guard.js", include_str!("js/memory_guard.js"))
+                    .map_err(|msg| PyRunnerError::Init(format!("memory guard error: {msg}")))?;
+            let guard_installer = Local::<v8::Function>::try_from(guard_installer)
+                .map_err(|_| PyRunnerError::Init("memory guard is not a function".into()))?;
+            let allow = v8::FunctionTemplate::new(scope, memory_guard_callback)
+                .get_function(scope)
+                .ok_or_else(|| PyRunnerError::Init("failed to create memory guard hook".into()))?;
+            let tracker = guard_installer
+                .call(scope, global.into(), &[allow.into()])
+                .and_then(|value| Local::<v8::Function>::try_from(value).ok())
+                .ok_or_else(|| PyRunnerError::Init("memory guard install failed".into()))?;
+            if let Some(state) = scope.get_slot::<Rc<RuntimeContext>>() {
+                *state.memory_tracker.borrow_mut() = Some(v8::Global::new(scope, tracker));
+            }
             Ok(())
         })
     }
@@ -392,6 +504,32 @@ impl JsRuntime {
     }
 }
 
+/// Compile and run `source`, returning its completion value.
+fn eval_script<'s>(
+    scope: &mut PinScope<'s, '_>,
+    name: &str,
+    source: &str,
+) -> std::result::Result<Local<'s, Value>, String> {
+    let code = v8::String::new(scope, source).ok_or_else(|| "source too large".to_owned())?;
+    let resource_name = v8::String::new(scope, name).ok_or_else(|| "name too long".to_owned())?;
+    let origin = v8::ScriptOrigin::new(
+        scope,
+        resource_name.into(),
+        0,
+        0,
+        false,
+        0,
+        None,
+        false,
+        false,
+        false,
+        None,
+    );
+    let script = v8::Script::compile(scope, code, Some(&origin))
+        .ok_or_else(|| format!("failed to compile {name}"))?;
+    script.run(scope).ok_or_else(|| format!("{name} threw"))
+}
+
 fn exec_script(
     scope: &mut PinScope<'_, '_>,
     name: &str,
@@ -443,6 +581,21 @@ impl RuntimeContext {
             network_contacts: RwLock::new(Vec::new()),
             network_denied: RwLock::new(Vec::new()),
             filesystem_violations: RwLock::new(Vec::new()),
+            memory_limit_bytes: Cell::new(None),
+            memory_denials: RefCell::new(Vec::new()),
+            memory_tracker: RefCell::new(None),
+        }
+    }
+
+    /// The memory guard's check: may the context's WebAssembly memories grow
+    /// to `requested_bytes` in total?
+    fn allow_memory(&self, requested_bytes: u64) -> bool {
+        match self.memory_limit_bytes.get() {
+            Some(limit) if requested_bytes > limit => {
+                self.memory_denials.borrow_mut().push(requested_bytes);
+                false
+            }
+            _ => true,
         }
     }
 
@@ -603,6 +756,74 @@ impl RuntimeContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod memory_guard {
+        use super::*;
+
+        const PAGE: u64 = 65536;
+
+        #[test]
+        fn tracks_memories_and_refuses_growth_past_the_limit() {
+            let mut runtime = JsRuntime::new().expect("create runtime");
+            runtime
+                .execute_script(
+                    "setup.js",
+                    "globalThis.m = new WebAssembly.Memory({ initial: 2 });",
+                )
+                .expect("create memory");
+            assert_eq!(runtime.tracked_memory_bytes(), Some(2 * PAGE));
+
+            runtime.set_memory_limit(Some(3 * PAGE));
+            runtime
+                .execute_script("grow.js", "m.grow(1);")
+                .expect("growth within the limit");
+            let refused = runtime.execute_script("grow.js", "m.grow(1);");
+            assert!(refused.is_err(), "growth past the limit throws");
+            assert_eq!(runtime.take_memory_limit_denials(), vec![4 * PAGE]);
+            assert_eq!(runtime.tracked_memory_bytes(), Some(3 * PAGE));
+
+            runtime.set_memory_limit(None);
+            runtime
+                .execute_script("grow.js", "m.grow(1);")
+                .expect("no limit, no refusal");
+        }
+
+        #[test]
+        fn shared_memories_are_tracked_and_capped() {
+            let mut runtime = JsRuntime::new().expect("create runtime");
+            runtime
+                .execute_script(
+                    "setup.js",
+                    "globalThis.s = new WebAssembly.Memory({ initial: 1, maximum: 8, shared: true });",
+                )
+                .expect("create shared memory");
+            assert_eq!(runtime.tracked_memory_bytes(), Some(PAGE));
+            runtime.set_memory_limit(Some(2 * PAGE));
+            runtime
+                .execute_script("grow.js", "s.grow(1);")
+                .expect("within the limit");
+            assert!(runtime.execute_script("grow.js", "s.grow(1);").is_err());
+            assert_eq!(runtime.tracked_memory_bytes(), Some(2 * PAGE));
+        }
+
+        #[test]
+        fn the_guard_cannot_be_replaced() {
+            let mut runtime = JsRuntime::new().expect("create runtime");
+            runtime.set_memory_limit(Some(PAGE));
+            runtime
+                .execute_script(
+                    "unpatch.js",
+                    "WebAssembly.Memory.prototype.grow = function () { return 0; };\n\
+                     try { Object.defineProperty(WebAssembly, 'Memory', { value: function () {} }); } catch (e) {}\n\
+                     try { delete WebAssembly.Memory.prototype.grow; } catch (e) {}",
+                )
+                .expect("sloppy-mode writes fail silently");
+            assert!(runtime
+                .execute_script("create.js", "new WebAssembly.Memory({ initial: 4 });")
+                .is_err());
+            assert_eq!(runtime.take_memory_limit_denials(), vec![4 * PAGE]);
+        }
+    }
 
     mod runtime_local_package_root {
         use super::*;

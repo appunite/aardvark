@@ -13,8 +13,12 @@ pub struct JavaScriptEngine {
 }
 
 impl JavaScriptEngine {
-    pub fn new(_config: &PyRuntimeConfig) -> Result<Self> {
-        let js = JsRuntime::new()?;
+    pub fn new(config: &PyRuntimeConfig) -> Result<Self> {
+        let js = JsRuntime::with_heap_limit(
+            config
+                .js_heap_limit_mb
+                .map(|mb| (mb as usize).saturating_mul(1024 * 1024)),
+        )?;
         js.insert_text_asset("js_runtime_bootstrap.js", assets::js_runtime_bootstrap_js());
         let mut engine = Self { js };
         engine.js.ensure_module("js_runtime_bootstrap.js")?;

@@ -251,6 +251,10 @@ pub struct PyRuntimeConfig {
     pub host_capabilities: Vec<String>,
     /// Optional prebuilt warm state (snapshot + overlay).
     pub warm_state: Option<WarmState>,
+    /// Cap on each isolate's JS heap, in MiB. Nearing it terminates the
+    /// running call (`FailureKind::HeapLimitExceeded`) instead of aborting
+    /// the process. `None` keeps V8's default.
+    pub js_heap_limit_mb: Option<u64>,
 }
 
 impl Default for PyRuntimeConfig {
@@ -276,6 +280,7 @@ impl Default for PyRuntimeConfig {
             reset_policy: ResetPolicy::Manual,
             host_capabilities: vec!["rawctx_buffers".to_string()],
             warm_state: None,
+            js_heap_limit_mb: None,
         }
     }
 }

@@ -32,7 +32,11 @@ pub struct PythonEngine {
 
 impl PythonEngine {
     pub fn new(config: &PyRuntimeConfig) -> Result<Self> {
-        let js = JsRuntime::new()?;
+        let js = JsRuntime::with_heap_limit(
+            config
+                .js_heap_limit_mb
+                .map(|mb| (mb as usize).saturating_mul(1024 * 1024)),
+        )?;
         let distribution = PyodideDistribution::resolve(config)?;
         js.set_package_root(distribution.package_root());
         let warm_state = config.warm_state.clone();
