@@ -413,7 +413,8 @@ pub(super) fn native_fetch_callback(
                     "failed to read local package asset"
                 );
                 if err.kind() == io::ErrorKind::InvalidData {
-                    throw_v8_error(scope, &err.to_string());
+                    // The host path stays in the log above, out of guest view.
+                    throw_v8_error(scope, "local package asset exceeds the size limit");
                     return;
                 }
             }

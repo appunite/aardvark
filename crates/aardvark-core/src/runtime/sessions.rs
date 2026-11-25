@@ -13,6 +13,8 @@ impl AardvarkRuntime {
             pending_reset_summary: None,
             environment_ready: false,
             current_bundle: None,
+            cleanup_watchdog: None,
+            cleanup_overran: false,
         })
     }
 

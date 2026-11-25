@@ -1,5 +1,9 @@
 use super::*;
 
+/// Deadline for the work after a call's own watchdog: diagnostics, shared
+/// buffer release and module cleanup. It normally takes a few milliseconds.
+pub(crate) const CLEANUP_WALL_MS: u64 = 2_000;
+
 impl AardvarkRuntime {
     /// Runs a prepared session using the default invocation strategy for the selected language.
     pub fn run_session(&mut self, session: &PySession) -> Result<ExecutionOutcome> {
@@ -29,6 +33,40 @@ impl AardvarkRuntime {
     }
 
     pub(crate) fn run_session_with_strategy_and_cleanup<S: PyInvocationStrategy>(
+        &mut self,
+        session: &PySession,
+        strategy: &mut S,
+        cleanup_mode: RuntimeCleanupMode,
+    ) -> Result<ExecutionOutcome> {
+        let result = self.run_session_guarded(session, strategy, cleanup_mode);
+        // Everything after the call's own watchdog (diagnostics, shared-buffer
+        // release, module cleanup) can reach guest-defined JS, e.g. a guest
+        // object's `destroy`. That work ran under the cleanup watchdog and the
+        // memory cap; both end only here.
+        let cleanup_overran = match self.cleanup_watchdog.take() {
+            Some(guard) => guard.complete(self.engine_mut().js_mut()),
+            None => false,
+        } | std::mem::take(&mut self.cleanup_overran);
+        {
+            let js = self.engine_mut().js_mut();
+            js.set_memory_limit(None);
+            js.set_array_buffer_allowance(None);
+        }
+        if cleanup_overran {
+            warn!(
+                target: "aardvark::budget",
+                runtime_id = self.runtime_id_str(),
+                limits.cleanup_ms = CLEANUP_WALL_MS,
+                "post-call cleanup exceeded its deadline; recycle this runtime"
+            );
+            return Err(PyRunnerError::TimeoutExceeded {
+                requested_ms: CLEANUP_WALL_MS,
+            });
+        }
+        result
+    }
+
+    fn run_session_guarded<S: PyInvocationStrategy>(
         &mut self,
         session: &PySession,
         strategy: &mut S,
@@ -86,8 +124,12 @@ impl AardvarkRuntime {
         {
             let js = self.engine_mut().js_mut();
             let _ = js.take_memory_limit_denials();
+            let _ = js.take_array_buffer_denials();
             let _ = js.take_heap_limit_hit();
             js.set_memory_limit(memory_limit_bytes);
+            // ArrayBuffers live outside both the V8 heap and WebAssembly
+            // memory: the same per-call amount caps their growth.
+            js.set_array_buffer_allowance(memory_limit_bytes);
         }
         let mut watchdog = self.arm_watchdog(limits.wall_ms);
         let cpu_start_ns = thread_cpu_time_ns();
@@ -106,18 +148,22 @@ impl AardvarkRuntime {
         } else {
             false
         };
+        // From here until `run_session_with_strategy_and_cleanup` returns,
+        // nothing may run unbounded: see the cleanup watchdog there.
+        self.cleanup_watchdog = self.arm_watchdog(Some(CLEANUP_WALL_MS));
         let (memory_denials, heap_limit_hit, wasm_memory_bytes) = {
             let js = self.engine_mut().js_mut();
-            js.set_memory_limit(None);
             let heap_limit_hit = js.take_heap_limit_hit();
             if heap_limit_hit {
                 js.cancel_terminate_execution();
             }
-            (
-                js.take_memory_limit_denials(),
-                heap_limit_hit,
-                js.tracked_memory_bytes(),
-            )
+            let mut memory_denials = js.take_memory_limit_denials();
+            if js.take_array_buffer_denials() > 0 {
+                // Recorded as a denial of the cap itself; the requested size
+                // isn't reported by V8's allocator.
+                memory_denials.push(memory_limit_bytes.unwrap_or(u64::MAX));
+            }
+            (memory_denials, heap_limit_hit, js.tracked_memory_bytes())
         };
         // A refused grow fails the call even if the guest caught the
         // MemoryError; memory that got past the guard (e.g. a guest module's
@@ -324,6 +370,12 @@ impl AardvarkRuntime {
         };
 
         if matches!(self.config.reset_policy, ResetPolicy::AfterInvocation) {
+            // The reset below builds a fresh engine and runs no guest code,
+            // but may take longer than the cleanup deadline: close the
+            // deadline out first, remembering whether it was missed.
+            if let Some(guard) = self.cleanup_watchdog.take() {
+                self.cleanup_overran |= guard.complete(self.engine_mut().js_mut());
+            }
             let span = info_span!(
                 target: "aardvark::runtime",
                 "runtime.reset",

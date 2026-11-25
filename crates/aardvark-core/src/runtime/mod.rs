@@ -53,6 +53,10 @@ pub struct AardvarkRuntime {
     pending_reset_summary: Option<ResetSummary>,
     environment_ready: bool,
     current_bundle: Option<CurrentBundleState>,
+    /// Armed between a call's watchdog and the end of its cleanup.
+    cleanup_watchdog: Option<WallClockGuard>,
+    /// The cleanup deadline was missed before a post-call reset closed it.
+    cleanup_overran: bool,
 }
 
 trait LanguageEngine {
@@ -584,8 +588,10 @@ impl AardvarkRuntime {
     ) -> Diagnostics {
         let mut diagnostics = if let Some(out) = output {
             Diagnostics {
-                stdout: out.stdout.clone(),
-                stderr: out.stderr.clone(),
+                // Python-side capture is bounded only by the guest's memory;
+                // keep what reaches hosts to the console cap.
+                stdout: crate::engine::truncate_captured(&out.stdout),
+                stderr: crate::engine::truncate_captured(&out.stderr),
                 exception: if out.exception_type.is_some()
                     || out.exception_value.is_some()
                     || out.traceback.is_some()
